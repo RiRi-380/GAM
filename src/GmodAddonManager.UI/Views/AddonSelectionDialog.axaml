@@ -1,0 +1,118 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="500"
+        x:Class="GmodAddonManager.UI.Views.AddonSelectionDialog"
+        Title="{loc:Localize Dialog.SelectAddons}"
+        Width="600"
+        Height="500"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- タイトル -->
+        <TextBlock Grid.Row="0" 
+                   Text="{loc:Localize Dialog.SelectAddonsToAdd}" 
+                   FontSize="16" 
+                   FontWeight="Bold"
+                   Margin="0,0,0,10"/>
+        
+        <!-- 検索ボックス -->
+        <TextBox Grid.Row="1"
+                 Name="SearchTextBox"
+                 Watermark="{loc:Localize Dialog.SearchAddons}"
+                 Margin="0,0,0,10"/>
+        
+        <!-- アドオンリスト -->
+        <Border Grid.Row="2" 
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Margin="0,0,0,10">
+            <ScrollViewer>
+                <ItemsControl Name="AddonList" Margin="5">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,2" 
+                                    Padding="10,8"
+                                    Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                    CornerRadius="4">
+                                <Border.Styles>
+                                    <Style Selector="Border:pointerover">
+                                        <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
+                                    </Style>
+                                </Border.Styles>
+                                
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <CheckBox Grid.Column="0" 
+                                              IsChecked="{Binding IsSelected}"
+                                              Margin="0,0,10,0"
+                                              VerticalAlignment="Center"/>
+                                    
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" 
+                                                   FontWeight="Bold"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Id}" 
+                                                   FontSize="11" 
+                                                   Opacity="0.7"/>
+                                    </StackPanel>
+                                    
+                                    <TextBlock Grid.Column="2" 
+                                               Text="{Binding FormattedSize}"
+                                               VerticalAlignment="Center"
+                                               Opacity="0.7"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- 選択状態 -->
+        <TextBlock Grid.Row="3" 
+                   Name="SelectionText"
+                   Margin="0,0,0,10"/>
+        
+        <!-- ボタン -->
+        <StackPanel Grid.Row="4" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right" 
+                    Spacing="10">
+            <Button Name="SelectAllButton" 
+                    Content="{loc:Localize Dialog.SelectAll}" 
+                    Width="100"
+                    Click="OnSelectAllClick"/>
+            <Button Name="DeselectAllButton" 
+                    Content="{loc:Localize Dialog.DeselectAll}" 
+                    Width="100"
+                    Click="OnDeselectAllClick"/>
+            <Button Name="OkButton" 
+                    Content="{loc:Localize Dialog.Add}" 
+                    Width="80"
+                    Click="OnOkClick"
+                    IsEnabled="False"/>
+            <Button Name="CancelButton" 
+                    Content="{loc:Localize Dialog.Cancel}" 
+                    Width="80"
+                    Click="OnCancelClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

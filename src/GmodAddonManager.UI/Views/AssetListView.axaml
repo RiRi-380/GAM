@@ -1,0 +1,329 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="450"
+             x:Class="GmodAddonManager.UI.Views.AssetListView"
+             x:DataType="vm:AssetListViewModel">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- ヘッダー -->
+        <Border Grid.Row="0" 
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                Padding="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <TextBlock Grid.Column="0" 
+                           Text="{loc:Localize AssetList.Header}" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           VerticalAlignment="Center"/>
+                
+                <Button Grid.Column="1"
+                        Command="{Binding CreateAssetCommand}"
+                        ToolTip.Tip="{loc:Localize AssetList.CreateNew}"
+                        Width="24" Height="24">
+                    <PathIcon Data="{StaticResource AddIcon}" Width="12" Height="12"/>
+                </Button>
+            </Grid>
+        </Border>
+        
+        <!-- アセットリスト -->
+        <ScrollViewer Grid.Row="1">
+            <ScrollViewer.Transitions>
+                <Transitions>
+                    <VectorTransition Property="Offset" Duration="0:0:0.15" Easing="CubicEaseOut"/>
+                </Transitions>
+            </ScrollViewer.Transitions>
+            <ItemsControl ItemsSource="{Binding Assets}" Margin="5">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AssetItemViewModel">
+                        <Border Margin="0,2" 
+                                Padding="10,8"
+                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                CornerRadius="4"
+                                BorderThickness="2"
+                                BorderBrush="{Binding BorderColor}"
+                                Classes.selected="{Binding IsSelected}"
+                                Classes.dragover="False"
+                                PointerPressed="OnAssetPointerPressed"
+                                DragDrop.AllowDrop="True">
+                            
+                            <Border.Styles>
+                                <Style Selector="Border.selected">
+                                    <Setter Property="Background" Value="#3A3A3A"/>
+                                </Style>
+                                <Style Selector="Border:pointerover">
+                                    <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
+                                </Style>
+                                <Style Selector="Border.dragover">
+                                    <Setter Property="Background" Value="#4A4A4A"/>
+                                    <Setter Property="BorderThickness" Value="2"/>
+                                    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+                                </Style>
+                            </Border.Styles>
+                            
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- 上段：アセット情報とボタン -->
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <!-- 有効/無効インジケーター -->
+                                    <Ellipse Grid.Column="0" 
+                                            Width="10" 
+                                            Height="10"
+                                            Margin="0,0,8,0"
+                                            Fill="{Binding AssetStateColor}"/>
+                                    
+                                    <!-- アセット情報 -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}" 
+                                                  FontWeight="Bold"
+                                                  Classes.selected="{Binding IsSelected}">
+                                            <TextBlock.Styles>
+                                                <Style Selector="TextBlock.selected">
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                </Style>
+                                            </TextBlock.Styles>
+                                        </TextBlock>
+                                        
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock FontSize="11" 
+                                                      Opacity="0.7"
+                                                      Classes.selected="{Binding IsSelected}">
+                                                <TextBlock.Styles>
+                                                    <Style Selector="TextBlock.selected">
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="Opacity" Value="0.9"/>
+                                                    </Style>
+                                                </TextBlock.Styles>
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="アドオン: {0}">
+                                                        <Binding Path="AddonCount"/>
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    
+                                    <!-- バージョン管理スイッチ -->
+                                    <Button Grid.Column="2"
+                                            Content="{Binding VersionDisplay}"
+                                            Command="{Binding VersionManageCommand}"
+                                            Margin="4,0"
+                                            MinWidth="40"
+                                            Height="26"
+                                            FontSize="12"
+                                            Padding="8,4"
+                                            HorizontalContentAlignment="Center"
+                                            VerticalContentAlignment="Center"
+                                            ToolTip.Tip="バージョン管理"/>
+                                    
+                                    <!-- 共有ボタン -->
+                                    <Button Grid.Column="3"
+                                            Command="{Binding ShareCommand}"
+                                            Margin="4,0"
+                                            Width="24" Height="24"
+                                            ToolTip.Tip="{Binding ShareButtonText}"
+                                            IsVisible="{Binding CanShare}">
+                                        <PathIcon Width="12" Height="12"
+                                                 Data="{StaticResource cloud-upload}"/>
+                                    </Button>
+                                    
+                                    <!-- クリーンアップボタン（ジャンクション以外） -->
+                                    <Button Grid.Column="4"
+                                            Command="{Binding CleanupCommand}"
+                                            Margin="4,0"
+                                            Width="24" Height="24"
+                                            ToolTip.Tip="{loc:Localize AssetList.CleanupAddons}"
+                                            IsVisible="{Binding !IsSystem}">
+                                        <PathIcon Width="12" Height="12"
+                                                 Data="{StaticResource CleanupIcon}"/>
+                                    </Button>
+                                    
+                                    <!-- アドオン追加ボタン -->
+                                    <Button Grid.Column="5"
+                                            Command="{Binding AddAddonsCommand}"
+                                            Margin="4,0"
+                                            Width="24" Height="24"
+                                            ToolTip.Tip="{loc:Localize AssetList.AddAddons}">
+                                        <PathIcon Width="12" Height="12"
+                                                 Data="{StaticResource AddIcon}"/>
+                                    </Button>
+                                </Grid>
+                                
+                                <!-- 下段：有効/無効/除外ボタンと削除ボタン -->
+                                <Grid Grid.Row="1" Margin="18,2,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <StackPanel Grid.Column="0"
+                                               Orientation="Horizontal">
+                                    <RadioButton GroupName="AssetState{Binding Id}"
+                                                Content="{loc:Localize AssetList.Enabled}"
+                                                IsChecked="{Binding IsEnabledState}"
+                                                Command="{Binding SetEnabledCommand}"
+                                                Margin="0,0,8,0"
+                                                FontSize="11">
+                                        <RadioButton.Styles>
+                                            <Style Selector="RadioButton:checked">
+                                                <Setter Property="Foreground" Value="#4CAF50"/>
+                                            </Style>
+                                        </RadioButton.Styles>
+                                    </RadioButton>
+                                    <RadioButton GroupName="AssetState{Binding Id}"
+                                                Content="{loc:Localize AssetList.Disabled}"
+                                                IsChecked="{Binding IsDisabledState}"
+                                                Command="{Binding SetDisabledCommand}"
+                                                Margin="0,0,8,0"
+                                                FontSize="11">
+                                        <RadioButton.Styles>
+                                            <Style Selector="RadioButton:checked">
+                                                <Setter Property="Foreground" Value="#FF9800"/>
+                                            </Style>
+                                        </RadioButton.Styles>
+                                    </RadioButton>
+                                    <RadioButton GroupName="AssetState{Binding Id}"
+                                                Content="{loc:Localize AssetList.Excluded}"
+                                                IsChecked="{Binding IsExcludedState}"
+                                                Command="{Binding SetExcludedCommand}"
+                                                Margin="0,0,8,0"
+                                                FontSize="11">
+                                        <RadioButton.Styles>
+                                            <Style Selector="RadioButton:checked">
+                                                <Setter Property="Foreground" Value="#F44336"/>
+                                            </Style>
+                                        </RadioButton.Styles>
+                                    </RadioButton>
+                                    </StackPanel>
+                                    
+                                    <!-- システム以外のボタン -->
+                                    <StackPanel Grid.Column="2"
+                                               Orientation="Horizontal"
+                                               IsVisible="{Binding !IsSystem}"
+                                               Spacing="4">
+                                        <!-- 自動更新ボタン -->
+                                        <Button Command="{Binding ToggleAutoUpdateCommand}"
+                                                Width="24" Height="24"
+                                                ToolTip.Tip="自動更新の切り替え"
+                                                IsVisible="{Binding IsPublished}">
+                                            <PathIcon Width="12" Height="12"
+                                                     Data="{Binding AutoUpdateEnabled, Converter={StaticResource AutoUpdateIconConverter}}"/>
+                                        </Button>
+                                        
+                                        <!-- 削除ボタン -->
+                                        <Button Command="{Binding DeleteCommand}"
+                                                Width="24" Height="24"
+                                                ToolTip.Tip="アセットを削除"
+                                                IsVisible="{Binding CanDelete}">
+                                            <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+        
+        <!-- ジャンクションアセット（固定表示） -->
+        <Border Grid.Row="2" 
+                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}">
+            <ItemsControl ItemsSource="{Binding JunctionAsset}" Margin="5">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AssetItemViewModel">
+                        <Border Margin="0,2" 
+                                Padding="10,8"
+                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                CornerRadius="4"
+                                Classes.selected="{Binding IsSelected}"
+                                PointerPressed="OnAssetPointerPressed">
+                            
+                            <Border.Styles>
+                                <Style Selector="Border.selected">
+                                    <Setter Property="Background" Value="#3A3A3A"/>
+                                </Style>
+                                <Style Selector="Border:pointerover">
+                                    <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
+                                </Style>
+                            </Border.Styles>
+                            
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                
+                                <!-- ジャンクションアイコン -->
+                                <TextBlock Grid.Column="0" 
+                                          Text="🔗" 
+                                          FontSize="16"
+                                          Margin="0,0,8,0"
+                                          VerticalAlignment="Center"/>
+                                
+                                <!-- アセット情報 -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Name}" 
+                                              FontWeight="Bold"
+                                              Classes.selected="{Binding IsSelected}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock.selected">
+                                                <Setter Property="Foreground" Value="White"/>
+                                            </Style>
+                                        </TextBlock.Styles>
+                                    </TextBlock>
+                                    
+                                    <TextBlock FontSize="11" 
+                                              Opacity="0.7"
+                                              Classes.selected="{Binding IsSelected}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock.selected">
+                                                <Setter Property="Foreground" Value="White"/>
+                                                <Setter Property="Opacity" Value="0.9"/>
+                                            </Style>
+                                        </TextBlock.Styles>
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="無効化アドオン: {0}">
+                                                <Binding Path="AddonCount"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+    </Grid>
+</UserControl>

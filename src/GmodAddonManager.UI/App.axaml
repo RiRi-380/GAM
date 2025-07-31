@@ -1,0 +1,59 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:GmodAddonManager.UI"
+             xmlns:converters="using:GmodAddonManager.UI.Converters"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             x:Class="GmodAddonManager.UI.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="/Assets/Icons.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            
+            <converters:BoolToColorConverter x:Key="BoolToColorConverter"/>
+            <converters:FirstCharacterConverter x:Key="FirstCharacterConverter"/>
+            <converters:AssetIdToColorConverter x:Key="AssetIdToColorConverter"/>
+            <converters:BytesToKilobytesConverter x:Key="BytesToKilobytesConverter"/>
+            
+            <vm:BoolToPathDataConverter x:Key="AutoUpdateIconConverter">
+                <vm:BoolToPathDataConverter.TrueValue>
+                    <StreamGeometry>M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z</StreamGeometry>
+                </vm:BoolToPathDataConverter.TrueValue>
+                <vm:BoolToPathDataConverter.FalseValue>
+                    <StreamGeometry>M10 6.35V4.26c-.8.21-1.55.54-2.23.96l1.46 1.46c.25-.12.5-.24.77-.33zm-7.14-.94l2.36 2.36A7.925 7.925 0 004 12c0 4.42 3.58 8 8 8 1.65 0 3.19-.51 4.47-1.36l2.36 2.36 1.27-1.27L4.14 3.77 2.86 5.05zM12 18c-3.31 0-6-2.69-6-6 0-1.02.25-1.97.7-2.8l8.08 8.08c-.83.45-1.77.72-2.78.72zm0-14v3l4-4-4-4v3c-1.1 0-2.16.2-3.16.55l1.46 1.46c.56-.2 1.12-.31 1.7-.31zm7.14 2.94l-2.03 2.03c.2.57.31 1.14.31 1.7 0 3.31-2.69 6-6 6-.56 0-1.11-.11-1.7-.31L7.7 16.38A7.925 7.925 0 0012 18c4.42 0 8-3.58 8-8 0-1.52-.42-2.93-1.16-4.13l.3-.71z</StreamGeometry>
+                </vm:BoolToPathDataConverter.FalseValue>
+            </vm:BoolToPathDataConverter>
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme>
+            <FluentTheme.Palettes>
+                <ColorPaletteResources x:Key="Light" 
+                                     Accent="#FF0078D4" 
+                                     AltHigh="White" 
+                                     AltLow="#FFF8F8F8"/>
+                <ColorPaletteResources x:Key="Dark" 
+                                     Accent="#4A90E2" 
+                                     RegionColor="#1A1A1A"
+                                     BaseHigh="#FFFFFF"
+                                     BaseMediumHigh="#CCCCCC"
+                                     BaseMedium="#999999"
+                                     BaseMediumLow="#666666"
+                                     BaseLow="#333333"
+                                     AltHigh="#252525"
+                                     AltMediumHigh="#1F1F1F" 
+                                     AltMedium="#1A1A1A"
+                                     AltMediumLow="#151515"
+                                     AltLow="#0A0A0A"
+                                     ChromeHigh="#252525"
+                                     ChromeMedium="#1F1F1F"
+                                     ChromeLow="#1A1A1A"
+                                     ChromeAltLow="#0A0A0A"/>
+            </FluentTheme.Palettes>
+        </FluentTheme>
+    </Application.Styles>
+</Application>

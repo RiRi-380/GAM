@@ -1,0 +1,306 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             xmlns:i="using:Avalonia.Xaml.Interactivity"
+             xmlns:ia="using:Avalonia.Xaml.Interactions.Core"
+             xmlns:system="clr-namespace:System;assembly=mscorlib"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="GmodAddonManager.UI.Views.AddonGridView"
+             x:DataType="vm:AddonGridViewModel">
+    
+    <UserControl.Resources>
+        <!-- アイテムテンプレート -->
+        <DataTemplate x:Key="AddonItemTemplate" x:DataType="vm:AddonItemViewModel">
+            <Border Width="200" 
+                    Height="220" 
+                    Margin="8"
+                    Padding="10"
+                    Background="#1F1F1F"
+                    CornerRadius="12"
+                    BorderThickness="3"
+                    BorderBrush="{Binding BorderColor}"
+                    Classes.selected="{Binding IsSelected}"
+                    Classes.selectionMode="{Binding $parent[UserControl].DataContext.IsSelectionMode}"
+                    PointerPressed="OnAddonPointerPressed"
+                    DoubleTapped="OnAddonDoubleTapped">
+                
+                <Border.Styles>
+                    <Style Selector="Border">
+                        <Setter Property="Transitions">
+                            <Transitions>
+                                <BrushTransition Property="Background" Duration="0:0:0.08"/>
+                                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.05"/>
+                            </Transitions>
+                        </Setter>
+                        <Setter Property="BoxShadow" Value="0 4 16 0 #30000000"/>
+                        <Setter Property="ClipToBounds" Value="False"/>
+                    </Style>
+                    <Style Selector="Border:pointerover">
+                        <Setter Property="Background" Value="#252525"/>
+                        <Setter Property="RenderTransform">
+                            <Setter.Value>
+                                <TransformGroup>
+                                    <ScaleTransform ScaleX="1.02" ScaleY="1.02"/>
+                                    <TranslateTransform Y="-2"/>
+                                </TransformGroup>
+                            </Setter.Value>
+                        </Setter>
+                        <Setter Property="BoxShadow" Value="0 6 16 0 #40000000"/>
+                    </Style>
+                    <Style Selector="Border.selected">
+                        <Setter Property="BorderThickness" Value="2"/>
+                        <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}"/>
+                    </Style>
+                    <Style Selector="Border">
+                        <Setter Property="Cursor" Value="Hand"/>
+                    </Style>
+                </Border.Styles>
+                
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="140"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- サムネイル -->
+                    <Border Grid.Row="0" 
+                            Width="140"
+                            Height="140" 
+                            CornerRadius="8"
+                            Margin="0,0,0,5"
+                            ClipToBounds="True">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#1A1A1A" Offset="0"/>
+                                <GradientStop Color="#0A0A0A" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Grid>
+                            <!-- gmpublisher方式: ローディング中 -->
+                            <ProgressBar Width="30" Height="30"
+                                        IsIndeterminate="True"
+                                        IsVisible="{Binding IsThumbnailLoading}"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"/>
+                            
+                            <!-- サムネイル画像（Bitmapが存在する場合） -->
+                            <Image Source="{Binding ThumbnailBitmap}"
+                                   Stretch="UniformToFill"
+                                   IsVisible="{Binding ThumbnailBitmap, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <Image.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.3"/>
+                                    </Transitions>
+                                </Image.Transitions>
+                            </Image>
+                            
+                        </Grid>
+                    </Border>
+                    
+                    <!-- タイトル -->
+                    <TextBlock Grid.Row="1"
+                              Text="{Binding Title}"
+                              FontWeight="Bold"
+                              TextWrapping="Wrap"
+                              MaxLines="2"
+                              TextTrimming="CharacterEllipsis"
+                              VerticalAlignment="Top"
+                              ToolTip.Tip="{Binding Title}"/>
+                    
+                    <!-- ファイルサイズ -->
+                    <TextBlock Grid.Row="2"
+                              Text="{Binding FileSizeText}"
+                              FontSize="11"
+                              Opacity="0.7"/>
+                    
+                    <!-- 更新日時 -->
+                    <TextBlock Grid.Row="3"
+                              Text="{Binding LastModifiedText}"
+                              FontSize="11"
+                              Opacity="0.7"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+        
+        <!-- UniformGridLayout -->
+        <UniformGridLayout x:Key="UniformGridLayout"
+                          MinColumnSpacing="10"
+                          MinRowSpacing="10"
+                          MinItemWidth="200"
+                          MinItemHeight="220"
+                          ItemsJustification="Start"
+                          ItemsStretch="None"/>
+    </UserControl.Resources>
+    
+    <DockPanel>
+        <!-- ヘッダー -->
+        <Border DockPanel.Dock="Top" 
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                Padding="15"
+                BoxShadow="0 2 4 0 #10000000">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                    <TextBlock Text="{loc:Localize AddonGrid.Header}" 
+                              FontSize="16" 
+                              FontWeight="Bold"
+                              VerticalAlignment="Center"/>
+                    
+                    <TextBlock VerticalAlignment="Center" Opacity="0.7" Text="{Binding AddonCountDisplay}"/>
+                    
+                    <!-- Normal/Cache フィルター -->
+                    <ComboBox SelectedIndex="{Binding AddonFilterIndex}"
+                              MinWidth="100"
+                              Height="26"
+                              VerticalContentAlignment="Center"
+                              Margin="10,0,0,0">
+                        <ComboBoxItem Content="全て表示"/>
+                        <ComboBoxItem Content="通常のみ"/>
+                        <ComboBoxItem Content="キャッシュのみ"/>
+                    </ComboBox>
+                </StackPanel>
+                
+                <CheckBox Grid.Column="1"
+                          Content="{loc:Localize AddonGrid.ShowCurrentAssetOnly}"
+                          IsChecked="{Binding ShowOnlyAssetAddons}"
+                          VerticalAlignment="Center"
+                          Margin="0,0,10,0"/>
+                
+                <StackPanel Grid.Column="2" 
+                           Orientation="Horizontal" 
+                           Spacing="8"
+                           VerticalAlignment="Center">
+                    <!-- 選択モードトグル -->
+                    <ToggleButton IsChecked="{Binding IsSelectionMode}"
+                                  Width="100"
+                                  Height="32"
+                                  Classes.accent="{Binding IsSelectionMode}">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <PathIcon Data="{StaticResource EnabledIcon}" 
+                                     Width="14" Height="14"
+                                     IsVisible="{Binding IsSelectionMode}"/>
+                            <TextBlock Text="{loc:Localize AddonGrid.SelectionMode}" FontSize="12"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    
+                    <!-- 一括選択ボタン -->
+                    <Button Command="{Binding SelectAllCommand}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            Width="80"
+                            Height="32">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <PathIcon Data="{StaticResource CheckIcon}" Width="14" Height="14"/>
+                            <TextBlock Text="{loc:Localize AddonGrid.BulkSelect}" FontSize="12"/>
+                        </StackPanel>
+                    </Button>
+                    
+                    <!-- 選択したアドオンを転送 -->
+                    <Button Command="{Binding AddSelectedAddonsCommand}"
+                            IsEnabled="{Binding HasSelectedAddons}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            Width="120"
+                            Height="32"
+                            Classes="accent">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <PathIcon Data="{StaticResource MoveIcon}" Width="14" Height="14"/>
+                            <TextBlock FontSize="12">
+                                <TextBlock.Text>
+                                    <MultiBinding StringFormat="{}{1} {0} items">
+                                        <Binding Path="SelectedAddonsCount" FallbackValue="0"/>
+                                        <Binding Path="SelectionButtonText"/>
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </StackPanel>
+                    </Button>
+                    
+                    <!-- アセットから削除 -->
+                    <Button Command="{Binding RemoveSelectedAddonsCommand}"
+                            IsEnabled="{Binding CanRemoveFromAsset}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            Width="120"
+                            Height="32"
+                            Classes="danger">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <PathIcon Data="{StaticResource DeleteIcon}" Width="14" Height="14"/>
+                            <TextBlock FontSize="12">
+                                <TextBlock.Text>
+                                    <MultiBinding StringFormat="{}{0}個を削除">
+                                        <Binding Path="SelectedAddonsCount" FallbackValue="0"/>
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </StackPanel>
+                    </Button>
+                    
+                    <!-- 状態一括変更メニュー -->
+                    <ComboBox Name="StateChangeComboBox"
+                              IsVisible="{Binding IsSelectionMode}"
+                              IsEnabled="{Binding HasSelectedAddons}"
+                              Width="140"
+                              Height="32"
+                              PlaceholderText="{loc:Localize AddonGrid.StateChangePlaceholder}"
+                              SelectedIndex="-1">
+                        <ComboBoxItem Content="{loc:Localize AddonGrid.Enable}"/>
+                        <ComboBoxItem Content="{loc:Localize AddonGrid.Disable}"/>
+                        <ComboBoxItem Content="{loc:Localize AddonGrid.Exclude}"/>
+                        <ComboBoxItem Content="{loc:Localize AddonGrid.Unsubscribe}"/>
+                    </ComboBox>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- ローディング表示 -->
+        <ProgressBar DockPanel.Dock="Top"
+                    IsIndeterminate="True"
+                    Height="3"
+                    IsVisible="{Binding IsLoading}"/>
+        
+        <!-- アドオングリッド（仮想化） -->
+        <ScrollViewer Name="AddonScrollViewer"
+                     HorizontalScrollBarVisibility="Disabled"
+                     VerticalScrollBarVisibility="Auto">
+            <ScrollViewer.Styles>
+                <Style Selector="ScrollViewer">
+                    <Setter Property="AllowAutoHide" Value="False"/>
+                    <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+                    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+                </Style>
+            </ScrollViewer.Styles>
+            <ItemsRepeater Name="AddonItemsRepeater"
+                          ItemsSource="{Binding FilteredAddons}"
+                          Layout="{StaticResource UniformGridLayout}"
+                          ItemTemplate="{StaticResource AddonItemTemplate}"
+                          Margin="5">
+                <ItemsRepeater.Styles>
+                    <Style Selector="ItemsRepeater">
+                        <Setter Property="Background" Value="Transparent"/>
+                    </Style>
+                </ItemsRepeater.Styles>
+            </ItemsRepeater>
+        </ScrollViewer>
+        
+        <!-- 空の状態表示 -->
+        <TextBlock Text="{loc:Localize AddonGrid.NoAddonsFound}"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Opacity="0.5">
+            <TextBlock.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                    <Binding Path="!FilteredAddonsCount"/>
+                    <Binding Path="!IsLoading"/>
+                </MultiBinding>
+            </TextBlock.IsVisible>
+        </TextBlock>
+    </DockPanel>
+</UserControl>

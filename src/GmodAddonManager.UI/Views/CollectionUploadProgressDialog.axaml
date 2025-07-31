@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="200"
+        x:Class="GmodAddonManager.UI.Views.CollectionUploadProgressDialog"
+        Title="コレクションを作成中..."
+        Width="500"
+        Height="200"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ステータステキスト -->
+        <TextBlock Grid.Row="0" 
+                   Name="StatusText"
+                   Text="コレクションを作成中..."
+                   FontSize="14"
+                   FontWeight="Bold"
+                   Margin="0,0,0,10"/>
+
+        <!-- 全体の進捗（複数コレクションの場合） -->
+        <StackPanel Grid.Row="1" Name="TotalProgressPanel" IsVisible="False" Margin="0,0,0,10">
+            <TextBlock Name="TotalProgressText" 
+                       Text="全体: 0/0"
+                       Margin="0,0,0,5"/>
+            <ProgressBar Name="TotalProgressBar"
+                         Height="20"
+                         Minimum="0"
+                         Maximum="100"
+                         Value="0"/>
+        </StackPanel>
+
+        <!-- 現在のバッチ進捗 -->
+        <StackPanel Grid.Row="2" Margin="0,0,0,10">
+            <TextBlock Name="BatchProgressText" 
+                       Text="バッチ: 0/9"
+                       Margin="0,0,0,5"/>
+            <ProgressBar Name="BatchProgressBar"
+                         Height="20"
+                         Minimum="0"
+                         Maximum="100"
+                         Value="0"/>
+        </StackPanel>
+
+        <!-- 詳細情報 -->
+        <TextBlock Grid.Row="3" 
+                   Name="DetailText"
+                   Text=""
+                   Opacity="0.7"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,10"/>
+
+        <!-- エラー表示 -->
+        <TextBlock Grid.Row="4" 
+                   Name="ErrorText"
+                   Text=""
+                   Foreground="Red"
+                   TextWrapping="Wrap"
+                   IsVisible="False"
+                   Margin="0,0,0,10"/>
+
+        <!-- キャンセルボタン -->
+        <Button Grid.Row="5" 
+                Name="CancelButton"
+                Content="キャンセル"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Width="100"
+                Click="OnCancelClick"/>
+    </Grid>
+</Window>

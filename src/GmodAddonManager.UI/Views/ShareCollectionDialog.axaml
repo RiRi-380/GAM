@@ -1,0 +1,84 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="300"
+        x:Class="GmodAddonManager.UI.Views.ShareCollectionDialog"
+        Title="Workshopコレクションとして共有"
+        Width="450"
+        Height="300"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- タイトル入力 -->
+        <TextBlock Grid.Row="0" Text="コレクション名:" Margin="0,0,0,5"/>
+        <TextBox Grid.Row="1" 
+                 Name="TitleTextBox"
+                 Watermark="コレクションのタイトルを入力..."
+                 Margin="0,0,0,10"/>
+
+        <!-- 説明入力 -->
+        <TextBlock Grid.Row="2" Text="説明 (任意):" Margin="0,0,0,5"/>
+        <TextBox Grid.Row="2" 
+                 Name="DescriptionTextBox"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 Watermark="コレクションの説明を入力..."
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 Margin="0,25,0,10"/>
+
+        <!-- 作成後にリンクを開くオプション -->
+        <StackPanel Grid.Row="3" Spacing="5">
+            <CheckBox Name="OpenLinkCheckBox"
+                      Content="作成後にリンクを開く"
+                      IsChecked="True"/>
+            
+            <!-- 1000個以上の場合の分割表示 -->
+            <StackPanel Name="SplitInfoPanel" 
+                        Orientation="Horizontal" 
+                        Spacing="5"
+                        Margin="0,5,0,0"
+                        IsVisible="False">
+                <TextBlock Text="複数分け" 
+                           FontWeight="Bold"
+                           VerticalAlignment="Center"/>
+                <Button Name="InfoButton"
+                        Content="?"
+                        Width="20"
+                        Height="20"
+                        Padding="0"
+                        FontSize="12"
+                        Click="OnInfoButtonClick"/>
+                <TextBlock Name="SplitCountText" 
+                           VerticalAlignment="Center"
+                           Opacity="0.7"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- ボタン -->
+        <StackPanel Grid.Row="4" 
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10">
+            <Button Name="CreateButton"
+                    Content="作成"
+                    Width="80"
+                    IsDefault="True"
+                    Click="OnCreateClick"/>
+            <Button Name="CancelButton"
+                    Content="キャンセル"
+                    Width="80"
+                    IsCancel="True"
+                    Click="OnCancelClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

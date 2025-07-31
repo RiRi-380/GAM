@@ -1,0 +1,199 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+        xmlns:views="using:GmodAddonManager.UI.Views"
+        xmlns:controls="using:GmodAddonManager.UI.Controls"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
+        x:Class="GmodAddonManager.UI.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Gmod Addon Manager"
+        Width="1400" Height="800"
+        MinWidth="1000" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
+        Icon="/Assets/logo.ico">
+    
+    <DockPanel Name="MainDockPanel" Background="Transparent" Focusable="True">
+        <!-- ツールバー -->
+        <Border DockPanel.Dock="Top" Height="64" 
+                BoxShadow="0 2 8 0 #40000000">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#252525" Offset="0"/>
+                    <GradientStop Color="#1A1A1A" Offset="1"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Grid Margin="16,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="300"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- ロゴ/タイトル -->
+                <Border Grid.Column="0" 
+                        Width="48" 
+                        Height="48"
+                        VerticalAlignment="Center"
+                        Margin="0,0,12,0"
+                        CornerRadius="8"
+                        Background="#1A1A1A"
+                        BoxShadow="0 2 8 0 #40000000">
+                    <Image Source="/Assets/logo.png"
+                           Width="44" 
+                           Height="44"
+                           Margin="2"/>
+                </Border>
+                
+                <!-- 設定ボタン -->
+                <Button Grid.Column="1"
+                        Command="{Binding OpenSettingsCommand}"
+                        ToolTip.Tip="{loc:Localize MainWindow.Settings}"
+                        Width="40" Height="40"
+                        Margin="0,0,12,0"
+                        VerticalAlignment="Center">
+                    <Button.Styles>
+                        <Style Selector="Button">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                        </Style>
+                        <Style Selector="Button:pointerover">
+                            <Setter Property="Background" Value="#20FFFFFF"/>
+                        </Style>
+                    </Button.Styles>
+                    <PathIcon Data="{StaticResource SettingsIcon}" Width="20" Height="20"/>
+                </Button>
+                
+                <!-- セパレーター -->
+                <Rectangle Grid.Column="2" 
+                          Width="1" 
+                          Fill="#40FFFFFF" 
+                          Margin="0,8,12,8"/>
+                
+                <!-- 左側のボタン -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                    <Button Command="{Binding RefreshCommand}" 
+                            ToolTip.Tip="{loc:Localize MainWindow.RescanAddons}"
+                            Width="32" Height="32">
+                        <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                    </Button>
+                    
+                    <Button Command="{Binding UndoCommand}"
+                            IsEnabled="{Binding CanUndo}"
+                            ToolTip.Tip="{loc:Localize MainWindow.UndoLastAction}"
+                            Width="32" Height="32">
+                        <TextBlock Text="↩️" FontSize="16"/>
+                    </Button>
+                    
+                    <Button Command="{Binding MigrateAddonsCommand}"
+                            ToolTip.Tip="{loc:Localize MainWindow.ManualMigration}"
+                            Width="32" Height="32"
+                            Classes="danger">
+                        <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
+                    </Button>
+                    
+                    <Button Command="{Binding ResetAllStatesCommand}"
+                            ToolTip.Tip="{loc:Localize MainWindow.ResetAllStates}"
+                            Width="32" Height="32"
+                            Classes="danger">
+                        <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                    </Button>
+                </StackPanel>
+                
+                <!-- 検索ボックス -->
+                <TextBox Grid.Column="4" 
+                         Name="SearchTextBox"
+                         Text="{Binding SearchText}"
+                         Watermark="{loc:Localize MainWindow.SearchPlaceholder}"
+                         VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+        
+        <!-- ステータスバー -->
+        <Border DockPanel.Dock="Bottom" Height="36" 
+                DataContext="{Binding StatusBarViewModel}">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#252525" Offset="0"/>
+                    <GradientStop Color="#0A0A0A" Offset="1"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Grid Margin="8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- Gmod実行状態 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <Border Width="12" Height="12" CornerRadius="6">
+                        <Border.Background>
+                            <SolidColorBrush Color="{Binding GmodStatusColor}"/>
+                        </Border.Background>
+                    </Border>
+                    <TextBlock Text="{Binding GmodStatusText}" VerticalAlignment="Center"/>
+                </StackPanel>
+                
+                <!-- ステータスメッセージ -->
+                <TextBlock Grid.Column="1" 
+                          Text="{Binding StatusMessage}" 
+                          VerticalAlignment="Center"
+                          HorizontalAlignment="Center"
+                          Foreground="{Binding StatusMessageColor}"/>
+                
+                <!-- 保留中の変更 -->
+                <StackPanel Grid.Column="2" 
+                           Orientation="Horizontal"
+                           Spacing="8"
+                           IsVisible="{Binding HasPendingChanges}">
+                    <TextBlock VerticalAlignment="Center">
+                        <Run Text="{loc:Localize MainWindow.PendingChanges}"/>
+                        <Run Text="{Binding PendingChangesCount}" FontWeight="Bold"/>
+                    </TextBlock>
+                    
+                    <ProgressBar Width="16" Height="16" 
+                                IsIndeterminate="{Binding IsApplyingChanges}"/>
+                </StackPanel>
+                
+                <!-- アドオン統計情報 -->
+                <TextBlock Grid.Column="3" 
+                          Text="{Binding DataContext.AddonStatistics, RelativeSource={RelativeSource AncestorType=Window}}"
+                          VerticalAlignment="Center"
+                          Margin="16,0,0,0"
+                          Foreground="#888888"/>
+            </Grid>
+        </Border>
+        
+        <!-- メインコンテンツ -->
+        <Grid Background="Transparent">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" MinWidth="200"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="*" MinWidth="400"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- アセットリスト -->
+            <views:AssetListView Grid.Column="0" 
+                                DataContext="{Binding AssetListViewModel}"/>
+            
+            <!-- スプリッター -->
+            <GridSplitter Grid.Column="1" 
+                         ResizeDirection="Columns"
+                         Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"/>
+            
+            <!-- アドオングリッド -->
+            <views:AddonGridView Grid.Column="2"
+                               DataContext="{Binding AddonGridViewModel}"/>
+            
+            <!-- フローティング詳細パネル -->
+            <controls:AddonDetailsFloatingPanel Grid.ColumnSpan="3"/>
+        </Grid>
+    </DockPanel>
+</Window>

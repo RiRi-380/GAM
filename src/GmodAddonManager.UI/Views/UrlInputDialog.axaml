@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="400"
+        x:Class="GmodAddonManager.UI.Views.UrlInputDialog"
+        Title="{loc:Localize URLInput.Title}"
+        Width="500"
+        Height="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- タイトル -->
+        <TextBlock Grid.Row="0" 
+                   Text="{loc:Localize URLInput.Header}" 
+                   FontSize="16" 
+                   FontWeight="Bold"
+                   Margin="0,0,0,10"/>
+        
+        <!-- 説明 -->
+        <TextBlock Grid.Row="1" 
+                   Text="{loc:Localize URLInput.MultipleHint}" 
+                   Opacity="0.7"
+                   Margin="0,0,0,10"
+                   TextWrapping="Wrap"/>
+        
+        <!-- URL入力エリア -->
+        <Border Grid.Row="2" 
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Margin="0,0,0,10">
+            <ScrollViewer>
+                <TextBox Name="UrlTextBox"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         Watermark="{loc:Localize URLInput.Placeholder}"
+                         BorderThickness="0"
+                         Padding="10"/>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- 検証結果 -->
+        <TextBlock Grid.Row="3" 
+                   Name="ValidationText"
+                   Margin="0,0,0,10"
+                   TextWrapping="Wrap"/>
+        
+        <!-- ボタン -->
+        <StackPanel Grid.Row="4" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right" 
+                    Spacing="10">
+            <Button Name="OkButton" 
+                    Content="{loc:Localize URLInput.Add}" 
+                    Width="80"
+                    Click="OnOkClick"/>
+            <Button Name="CancelButton" 
+                    Content="{loc:Localize Dialog.Cancel}" 
+                    Width="80"
+                    Click="OnCancelClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

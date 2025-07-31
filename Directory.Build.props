@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <Authors>Gmod Addon Manager Team</Authors>
+    <Product>Gmod Addon Manager</Product>
+    <Copyright>Copyright © 2025</Copyright>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <InformationalVersion>1.0.0-$(SourceRevisionId)</InformationalVersion>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

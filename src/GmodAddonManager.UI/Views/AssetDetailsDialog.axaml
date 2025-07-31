@@ -1,0 +1,90 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+        xmlns:views="using:GmodAddonManager.UI.Views"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        x:Class="GmodAddonManager.UI.Views.AssetDetailsDialog"
+        Title="{loc:Localize AssetDetails.Title}"
+        Width="800"
+        Height="600"
+        WindowStartupLocation="CenterOwner">
+    
+    <DockPanel>
+        <!-- ヘッダー -->
+        <Border DockPanel.Dock="Top" 
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                Padding="20"
+                Height="100">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Binding AssetName}" 
+                               FontSize="24" 
+                               FontWeight="Bold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="{Binding AddonCountText}" 
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"/>
+                        <ComboBox SelectedIndex="{Binding AddonFilterIndex}"
+                                  MinWidth="100"
+                                  Height="26"
+                                  VerticalContentAlignment="Center">
+                            <ComboBoxItem Content="全て表示"/>
+                            <ComboBoxItem Content="通常のみ"/>
+                            <ComboBoxItem Content="キャッシュのみ"/>
+                        </ComboBox>
+                    </StackPanel>
+                </StackPanel>
+                
+                <Button Grid.Column="1"
+                        Width="100"
+                        Click="OnClose">{loc:Localize Dialog.Close}</Button>
+            </Grid>
+        </Border>
+        
+        <!-- アドオンリスト -->
+        <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Addons}" Margin="10">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,4"
+                                Padding="15"
+                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                CornerRadius="4">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="200"/>
+                                </Grid.ColumnDefinitions>
+                                
+                                <!-- アドオン情報 -->
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="{Binding Title}" 
+                                               FontWeight="Bold"
+                                               FontSize="14"/>
+                                    <TextBlock Text="{Binding AddonId}" 
+                                               FontSize="11"
+                                               Opacity="0.7"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
+                                
+                                <!-- 状態コントロール -->
+                                <views:AddonStateControl Grid.Column="1"
+                                                        State="{Binding State}"
+                                                        HorizontalAlignment="Right"
+                                                        Width="180"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

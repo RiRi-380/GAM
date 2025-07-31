@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="400"
+        x:Class="GmodAddonManager.UI.Views.UpdateDialog"
+        Title="アップデートが利用可能です"
+        Width="500" Height="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- ヘッダー -->
+        <Border Grid.Row="0" Background="{DynamicResource AccentBrush}" Padding="20">
+            <StackPanel>
+                <TextBlock Text="新しいバージョンが利用可能です！" 
+                           FontSize="18" FontWeight="Bold" 
+                           Foreground="White"/>
+                <TextBlock Text="{Binding CurrentVersion}" 
+                           Foreground="White" Opacity="0.8" 
+                           Margin="0,5,0,0"/>
+                <TextBlock Text="{Binding NewVersion}" 
+                           Foreground="White" FontWeight="Bold" 
+                           Margin="0,2,0,0"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- リリースノート -->
+        <ScrollViewer Grid.Row="1" Padding="20">
+            <StackPanel>
+                <TextBlock Text="更新内容:" FontWeight="Bold" Margin="0,0,0,10"/>
+                <TextBlock Text="{Binding ReleaseNotes}" 
+                           TextWrapping="Wrap"
+                           LineHeight="20"/>
+            </StackPanel>
+        </ScrollViewer>
+        
+        <!-- ボタン・進捗表示 -->
+        <Border Grid.Row="2" BorderThickness="0,1,0,0" 
+                BorderBrush="{DynamicResource BorderBrush}"
+                Background="{DynamicResource BackgroundBrush}">
+            <Grid>
+                <!-- 通常時のボタン -->
+                <StackPanel Orientation="Horizontal" 
+                            HorizontalAlignment="Right" 
+                            Margin="20"
+                            IsVisible="{Binding !IsUpdating}">
+                    <Button Content="後で通知" 
+                            Command="{Binding RemindLaterCommand}"
+                            Classes="secondary"
+                            Margin="0,0,10,0"/>
+                    <Button Content="今すぐ更新" 
+                            Command="{Binding UpdateCommand}"
+                            Classes="accent"/>
+                </StackPanel>
+                
+                <!-- アップデート中の表示 -->
+                <StackPanel HorizontalAlignment="Center" 
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding IsUpdating}"
+                            Margin="20">
+                    <ProgressBar IsIndeterminate="True" Width="300" Height="4"/>
+                    <TextBlock Text="{Binding UpdateProgress}" 
+                               HorizontalAlignment="Center" 
+                               Margin="0,10,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
