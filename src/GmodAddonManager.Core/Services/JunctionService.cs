@@ -377,7 +377,7 @@ namespace GmodAddonManager.Core.Services
                     // Check for UNC paths, device paths, and other special formats
                     if (path.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase) ||
                         path.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase) ||
-                        path.StartsWith(@"\\", StringComparison.OrdinalIgnoreCase) && path.StartsWith(@"\\", 1))
+                        path.StartsWith(@"\\", StringComparison.OrdinalIgnoreCase) && path.Length > 1 && path[1] == '\\')
                     {
                         throw new ArgumentException($"Special path format not allowed: {path}", paramName);
                     }

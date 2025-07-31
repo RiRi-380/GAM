@@ -140,7 +140,7 @@ namespace GmodAddonManager.Core.Services
                     if (string.IsNullOrWhiteSpace(json))
                     {
                         logs = new List<OperationLog>();
-                        return logs;
+                        return;
                     }
                     
                     try

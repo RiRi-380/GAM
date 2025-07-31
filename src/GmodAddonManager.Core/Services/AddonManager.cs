@@ -830,9 +830,7 @@ namespace GmodAddonManager.Core.Services
                 catch (Exception ex)
                 {
                     // Failed to read GMA metadata - continue with basic addon info
-                    _errorHandler?.HandleError(ErrorCategory.FileOperation, 
-                        $"Failed to read GMA metadata for addon {addon.Id}: {ex.Message}",
-                        ErrorSeverity.Warning);
+                    errorHandler?.HandleWarning($"Failed to read GMA metadata for addon {addon.Id}", "ReadGmaMetadata");
                 }
                 
                 newAddons.Add(addon);
@@ -872,9 +870,7 @@ namespace GmodAddonManager.Core.Services
                     catch (Exception ex)
                     {
                         // Failed to read from Steam cache - not critical, continue without cache data
-                        _errorHandler?.HandleError(ErrorCategory.SteamOperation,
-                            $"Failed to read Steam cache for addon {addonId}: {ex.Message}",
-                            ErrorSeverity.Info);
+                        errorHandler?.HandleInfo($"Failed to read Steam cache for addon {addonId}", "ReadSteamCache");
                     }
                     
                     newAddons.Add(addon);
@@ -1945,9 +1941,7 @@ namespace GmodAddonManager.Core.Services
                 catch (Exception cleanupEx)
                 {
                     // Failed to clean up temp file - not critical
-                    errorHandler.HandleError(ErrorCategory.FileOperation,
-                        $"Failed to clean up temp file: {cleanupEx.Message}",
-                        ErrorSeverity.Info);
+                    errorHandler.HandleInfo($"Failed to clean up temp file", "SaveConfiguration");
                 }
             }
         }
@@ -3175,9 +3169,7 @@ namespace GmodAddonManager.Core.Services
                 catch (Exception ex)
                 {
                     // Failed to create backup - log but continue validation
-                    errorHandler.HandleError(ErrorCategory.FileOperation,
-                        $"Failed to create configuration backup: {ex.Message}",
-                        ErrorSeverity.Warning);
+                    errorHandler.HandleWarning($"Failed to create configuration backup", "ValidateAndRepairConfiguration");
                 }
             }
             
