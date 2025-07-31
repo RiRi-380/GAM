@@ -22,12 +22,15 @@ jobs:
         dotnet-version: '6.0.x'
         
     - name: Restore dependencies
-      run: dotnet restore --runtime win-x64
+      run: |
+        dotnet restore
+        dotnet restore src/GmodAddonManager.Core/GmodAddonManager.Core.csproj
+        dotnet restore src/GmodAddonManager.UI/GmodAddonManager.UI.csproj
       
     - name: Build
       run: |
-        dotnet build -c Release
-        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+        dotnet build -c Release --no-restore
+        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o publish --no-restore
       
     - name: Copy steam_api64.dll
       run: |
