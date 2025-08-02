@@ -1309,6 +1309,9 @@ namespace GmodAddonManager.Core.Services
 
         public void EnableAddon(string addonId)
         {
+            // Remove any stub directory first
+            RemoveDisabledStub(workshopPath, addonId);
+            
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
             
@@ -1389,6 +1392,16 @@ namespace GmodAddonManager.Core.Services
 
         public void DisableAddon(string addonId)
         {
+            // Check if Steam is running and warn user
+            if (SteamProcessChecker.IsSteamRunningViaAPI())
+            {
+                errorHandler.HandleWarning(
+                    "Steam is running. Disabled addons may be re-downloaded when you start Garry's Mod. " +
+                    "For best results, close Steam before disabling addons.",
+                    "DisableAddon"
+                );
+            }
+            
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
             
@@ -1454,14 +1467,23 @@ namespace GmodAddonManager.Core.Services
                     MergeDirectories(workshopAddonPath, sourcePath);
                     Directory.Delete(workshopAddonPath, true);
                 }
+                
+                // Create stub to prevent Steam re-download
+                CreateDisabledStub(workshopPath, addonId);
                 return;
             }
 
             junctionService.RemoveJunction(workshopAddonPath);
+            
+            // Create stub to prevent Steam re-download
+            CreateDisabledStub(workshopPath, addonId);
         }
 
         private void EnableGmaAddon(string addonId)
         {
+            // Remove any stub directory first
+            RemoveDisabledStub(workshopPath, addonId);
+            
             if (string.IsNullOrEmpty(gmodCachePath) || string.IsNullOrEmpty(gmodCacheAddonsPath))
                 return;
 
@@ -1693,11 +1715,87 @@ namespace GmodAddonManager.Core.Services
                     {
                         errorHandler.HandleError(wsEx, $"Failed to remove workshop structure for GMA addon {addonId}", ErrorSeverity.Error);
                     }
+                    
+                    // Create stub to prevent Steam re-download
+                    CreateDisabledStub(workshopPath, addonId);
                 }
             }
             catch (Exception ex)
             {
                 errorHandler.HandleError(ex, $"Failed to disable GMA addon: {addonId}", ErrorSeverity.Error);
+            }
+        }
+        
+        /// <summary>
+        /// Create a stub directory to prevent Steam from re-downloading disabled addons
+        /// </summary>
+        private void CreateDisabledStub(string workshopPath, string addonId)
+        {
+            try
+            {
+                string stubPath = Path.Combine(workshopPath, addonId);
+                
+                // Create directory if it doesn't exist
+                if (!Directory.Exists(stubPath))
+                {
+                    Directory.CreateDirectory(stubPath);
+                }
+                
+                // Create marker file
+                string markerPath = Path.Combine(stubPath, ".gam_disabled");
+                File.WriteAllText(markerPath, 
+                    $"Disabled by GAM at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}\n" +
+                    $"This is a stub directory to prevent Steam from re-downloading the addon.\n" +
+                    $"Do not delete this directory manually.");
+                
+                // Create minimal addon.json to satisfy Steam
+                string addonJsonPath = Path.Combine(stubPath, "addon.json");
+                string addonJson = @"{
+    ""title"": ""Disabled by GAM"",
+    ""type"": ""tool"",
+    ""tags"": [],
+    ""ignore"": []
+}";
+                File.WriteAllText(addonJsonPath, addonJson);
+                
+                errorHandler.HandleInfo($"Created stub directory for disabled addon {addonId}", "CreateDisabledStub");
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to create stub for addon {addonId}: {ex.Message}", "CreateDisabledStub");
+                // Don't throw - this is a best-effort operation
+            }
+        }
+        
+        /// <summary>
+        /// Remove stub directory before enabling an addon
+        /// </summary>
+        private void RemoveDisabledStub(string workshopPath, string addonId)
+        {
+            try
+            {
+                string stubPath = Path.Combine(workshopPath, addonId);
+                string markerPath = Path.Combine(stubPath, ".gam_disabled");
+                
+                // Only remove if it's a GAM stub directory
+                if (Directory.Exists(stubPath) && File.Exists(markerPath))
+                {
+                    // Delete all files first
+                    foreach (var file in Directory.GetFiles(stubPath))
+                    {
+                        File.SetAttributes(file, FileAttributes.Normal);
+                        File.Delete(file);
+                    }
+                    
+                    // Delete the directory
+                    Directory.Delete(stubPath, true);
+                    errorHandler.HandleInfo($"Removed stub directory for addon {addonId}", "RemoveDisabledStub");
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to remove stub for addon {addonId}: {ex.Message}", "RemoveDisabledStub");
+                // Don't throw - continue with enable operation
             }
         }
 

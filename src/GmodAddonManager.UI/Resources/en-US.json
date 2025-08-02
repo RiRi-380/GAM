@@ -191,6 +191,8 @@
   "Confirm.ExcludeSubscribeAsset": "Set entire Subscribe asset to \"Excluded\".\nAll addons will be junctioned and hidden from Gmod.\n\nContinue?",
   "Confirm.ExcludeSubscribeAssetFinal": "Really exclude entire Subscribe asset?\nThis will completely hide all addons from Gmod.",
   "Warning.NoAddonsToAdd": "No addons found to add.",
+  "Warning.SteamRunningTitle": "Steam is Running",
+  "Warning.SteamRunningDisable": "Steam is currently running. Disabled addons may be re-downloaded when you start Garry's Mod.\n\nFor best results:\n1. Close Garry's Mod\n2. Close Steam completely\n3. Disable addons in GAM\n4. Restart Steam\n\nContinue anyway?",
   "Warning.NoDestinationAssets": "No destination assets available.",
   "Error.AssetDeleteFailed": "Failed to delete asset: {0}",
   "Error.DialogShowFailed": "Failed to show dialog: {0}",

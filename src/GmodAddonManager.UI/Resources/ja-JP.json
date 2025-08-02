@@ -321,6 +321,8 @@
   "Asset.OpenWorkshopPage.Message": "このコレクションのWorkshopページを開きますか？",
   
   "Warning.NoAddonsToShare": "共有するアドオンがありません",
+  "Warning.SteamRunningTitle": "Steam起動中",
+  "Warning.SteamRunningDisable": "Steamが起動中です。無効化したアドオンは、Garry's Mod起動時に再ダウンロードされる可能性があります。\n\n推奨手順：\n1. Garry's Modを終了\n2. Steamを完全に終了\n3. アドオンを無効化\n4. Steamを再起動\n\nこのまま続行しますか？",
   "Error.CollectionUpdateFailed": "コレクションの更新に失敗しました",
   "Error.CollectionCreationFailed": "コレクションの作成に失敗しました",
   "Error.SteamworksNotInitialized": "Steamworks SDKが初期化されていません",

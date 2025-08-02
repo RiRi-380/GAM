@@ -1107,6 +1107,26 @@ public class AddonGridViewModel : ViewModelBase
             else if (action == L.Get("AddonGrid.Disable"))
             {
                 newState = AddonState.Disabled;
+                
+                // Check if Steam is running before disabling addons
+                if (SteamProcessChecker.IsSteamRunningViaAPI())
+                {
+                    var dialog = new DialogService();
+                    var result = await dialog.ShowConfirmAsync(
+                        L.Get("Warning.SteamRunningTitle") ?? "Steam Running", 
+                        L.Get("Warning.SteamRunningDisable") ?? 
+                        "Steam is currently running. Disabled addons may be re-downloaded when you start Garry's Mod.\n\n" +
+                        "For best results:\n" +
+                        "1. Close Garry's Mod\n" +
+                        "2. Close Steam completely\n" +
+                        "3. Disable addons in GAM\n" +
+                        "4. Restart Steam\n\n" +
+                        "Continue anyway?"
+                    );
+                    
+                    if (!result)
+                        return;
+                }
             }
             else if (action == L.Get("AddonGrid.Exclude"))
             {
