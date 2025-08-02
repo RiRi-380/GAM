@@ -121,8 +121,33 @@ namespace GmodAddonManager.Core.Services
                     }
                     else
                     {
-                        // 通常のディレクトリが存在する場合はエラー
-                        throw new IOException($"Path already exists and is not a junction: {junctionPath}");
+                        // 通常のディレクトリが存在する場合は削除して再作成
+                        // Steamが無効化されたアドオンのディレクトリを作成することがあるため
+                        try
+                        {
+                            // ディレクトリが空かチェック
+                            if (Directory.GetFileSystemEntries(absoluteJunctionPath).Length == 0)
+                            {
+                                // 空のディレクトリなら削除
+                                Directory.Delete(absoluteJunctionPath, false);
+                            }
+                            else
+                            {
+                                // 空でない場合は移動して後で削除
+                                string backupPath = absoluteJunctionPath + "_backup_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                                Directory.Move(absoluteJunctionPath, backupPath);
+                                // 後で削除を試みる（ベストエフォート）
+                                Task.Run(async () =>
+                                {
+                                    await Task.Delay(5000);
+                                    try { Directory.Delete(backupPath, true); } catch { }
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new IOException($"Path already exists and is not a junction: {junctionPath}. Failed to remove existing directory: {ex.Message}", ex);
+                        }
                     }
                 }
 
