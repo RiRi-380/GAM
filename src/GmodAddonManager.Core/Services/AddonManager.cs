@@ -1338,6 +1338,12 @@ namespace GmodAddonManager.Core.Services
             }
             catch { }
 
+            // If we can control load state via addons.txt, avoid touching workshop files to prevent Steam validation
+            if (gmodAddonStateStore != null)
+            {
+                return;
+            }
+
             // Remove any legacy stub directory first (for backward compatibility)
             RemoveDisabledStub(workshopPath, addonId);
             
@@ -1430,6 +1436,12 @@ namespace GmodAddonManager.Core.Services
             }
             catch { }
 
+            // If we can control load state via addons.txt, avoid touching workshop files to prevent Steam validation
+            if (gmodAddonStateStore != null)
+            {
+                return;
+            }
+
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
             
@@ -1478,7 +1490,14 @@ namespace GmodAddonManager.Core.Services
 
         private void EnableGmaAddon(string addonId)
         {
-            // Remove any stub directory first
+            // Prefer logical enable without touching workshop files
+            try { gmodAddonStateStore?.SetEnabled(addonId, true); } catch { }
+            if (gmodAddonStateStore != null)
+            {
+                return;
+            }
+            
+            // Remove any legacy stub directory first (for backward compatibility)
             RemoveDisabledStub(workshopPath, addonId);
             
             if (string.IsNullOrEmpty(gmodCachePath) || string.IsNullOrEmpty(gmodCacheAddonsPath))
@@ -1509,17 +1528,7 @@ namespace GmodAddonManager.Core.Services
                     File.Move(gmaSourcePath, gmaCachePath);
                 }
                 
-                // ワークショップ構造も作成する（重要！）
-                try
-                {
-                    junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, gmaCachePath);
-                    // ログ出力を削除 - 大量処理時のパフォーマンス問題のため
-                }
-                catch (Exception wsEx)
-                {
-                    errorHandler.HandleWarning($"Failed to create workshop structure for {addonId}: {wsEx.Message}", "EnableGmaAddon");
-                    // ワークショップ構造の作成に失敗しても、キャッシュにファイルがあれば動作する
-                }
+                // 旧実装: ワークショップ構造の作成はスキップ（Steamの検証を避ける）
             }
         }
 
@@ -3723,29 +3732,7 @@ namespace GmodAddonManager.Core.Services
                     // ジャンクション履歴から削除
                     configuration.JunctionHistory.Remove(addonId);
                     
-                    // Workshopディレクトリのジャンクション/ハードリンクを削除
-                    try
-                    {
-                        string workshopPath = Path.Combine(this.workshopPath, addonId);
-                        if (Directory.Exists(workshopPath) && junctionService.IsJunction(workshopPath))
-                        {
-                            junctionService.RemoveJunction(workshopPath);
-                        }
-                        
-                        // ハードリンク構造も削除
-                        try
-                        {
-                            junctionService.RemoveWorkshopAddonStructure(this.workshopPath, addonId);
-                        }
-                        catch (Exception structEx)
-                        {
-                            errorHandler.HandleError(structEx, $"Failed to remove workshop addon structure for {addonId}", ErrorSeverity.Warning);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        errorHandler.HandleError(ex, $"Failed to cleanup workshop structures for addon {addonId}", ErrorSeverity.Warning);
-                    }
+                // Workshop配下の構造は変更しない（Steamの検証・再DL誘発を避ける）
                     
                     // 管理フォルダからアドオンファイルを削除
                     try
