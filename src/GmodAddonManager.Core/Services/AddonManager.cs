@@ -21,6 +21,8 @@ namespace GmodAddonManager.Core.Services
         private readonly string? gmodCachePath;
         private string? gmodCacheManagerPath;
         private string? gmodCacheAddonsPath;
+        private string? gmodRootPath;
+        private GmodAddonStateStore? gmodAddonStateStore;
         
         private readonly JunctionService junctionService;
         private readonly SteamPathDetector steamPathDetector;
@@ -102,6 +104,26 @@ namespace GmodAddonManager.Core.Services
             else
             {
                 errorHandler.HandleWarning("gmodCachePath is null or empty, cache addon management will be disabled", "Constructor");
+            }
+
+            // Detect Gmod root path for settings management (addons.txt)
+            try
+            {
+                var candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+                if (Directory.Exists(candidate))
+                {
+                    gmodRootPath = candidate;
+                    gmodAddonStateStore = new GmodAddonStateStore(gmodRootPath);
+                    errorHandler.HandleInfo($"Set gmodRootPath: {gmodRootPath}", "Constructor");
+                }
+                else
+                {
+                    errorHandler.HandleWarning("Garry's Mod root path not found; will not edit addons.txt state store", "Constructor");
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to resolve GMod root path: {ex.Message}", "Constructor");
             }
             
             // デバウンスタイマーの初期化
@@ -1309,7 +1331,14 @@ namespace GmodAddonManager.Core.Services
 
         public void EnableAddon(string addonId)
         {
-            // Remove any stub directory first
+            // New behavior: never break workshop structure; only toggle GMod load state if available
+            try
+            {
+                gmodAddonStateStore?.SetEnabled(addonId, true);
+            }
+            catch { }
+
+            // Remove any legacy stub directory first (for backward compatibility)
             RemoveDisabledStub(workshopPath, addonId);
             
             // Check if this is a GMA file addon - both from metadata and runtime check
@@ -1392,16 +1421,15 @@ namespace GmodAddonManager.Core.Services
 
         public void DisableAddon(string addonId)
         {
-            // Check if Steam is running and warn user
-            if (SteamProcessChecker.IsSteamRunningViaAPI())
-            {
-                errorHandler.HandleWarning(
-                    "Steam is running. Disabled addons may be re-downloaded when you start Garry's Mod. " +
-                    "For best results, close Steam before disabling addons.",
-                    "DisableAddon"
-                );
-            }
+            // New behavior: do not warn about re-download; we no longer remove files
             
+            // Update logical state only
+            try
+            {
+                gmodAddonStateStore?.SetEnabled(addonId, false);
+            }
+            catch { }
+
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
             
@@ -1435,48 +1463,17 @@ namespace GmodAddonManager.Core.Services
             string workshopGmaPath = Path.Combine(workshopAddonPath, $"{addonId}.gma");
             if (File.Exists(workshopGmaPath) && File.Exists(sourceGmaPath))
             {
-                // 新方式で管理されている場合
-                try
-                {
-                    junctionService.RemoveWorkshopAddonStructure(workshopPath, addonId);
-                    errorHandler.HandleInfo($"Removed workshop addon structure for {addonId}", "DisableAddon");
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleError(ex, $"Failed to remove workshop addon structure for {addonId}", ErrorSeverity.Error);
-                    // エラーが発生しても処理を継続
-                }
+                // Keep structure in place; do not remove hard links
                 return;
             }
 
             // 従来のジャンクション方式の処理
             if (!junctionService.IsJunction(workshopAddonPath))
             {
-                // 実体フォルダが存在する場合、管理フォルダに移動
-                errorHandler.HandleWarning($"Found real folder instead of junction for addon {addonId}. Converting to managed addon.", "DisableAddon");
-                
-                if (!Directory.Exists(sourcePath))
-                {
-                    // 管理フォルダが存在しない場合は移動
-                    Directory.CreateDirectory(Path.GetDirectoryName(sourcePath));
-                    Directory.Move(workshopAddonPath, sourcePath);
-                }
-                else
-                {
-                    // 既に管理フォルダが存在する場合はマージ
-                    MergeDirectories(workshopAddonPath, sourcePath);
-                    Directory.Delete(workshopAddonPath, true);
-                }
-                
-                // Create stub to prevent Steam re-download
-                CreateDisabledStub(workshopPath, addonId);
+                // Found a real folder; leave it as-is to avoid triggering Steam actions
                 return;
             }
-
-            junctionService.RemoveJunction(workshopAddonPath);
-            
-            // Create stub to prevent Steam re-download
-            CreateDisabledStub(workshopPath, addonId);
+            // If it is a junction, keep it. We only changed logical state.
         }
 
         private void EnableGmaAddon(string addonId)
@@ -1528,202 +1525,9 @@ namespace GmodAddonManager.Core.Services
 
         private void DisableGmaAddon(string addonId)
         {
-            if (string.IsNullOrEmpty(gmodCachePath))
-            {
-                errorHandler.HandleWarning($"Cache path not available, cannot disable GMA addon: {addonId}", "DisableGmaAddon");
-                return;
-            }
-
-            // Check for both .gma and .cache files
-            string gmaCachePath = Path.Combine(gmodCachePath, addonId + ".gma");
-            string cacheFilePath = Path.Combine(gmodCachePath, addonId + ".cache");
-            
-            bool hasGmaFile = File.Exists(gmaCachePath);
-            bool hasCacheFile = File.Exists(cacheFilePath);
-            
-            // If neither file exists, already disabled
-            if (!hasGmaFile && !hasCacheFile)
-            {
-                return;
-            }
-            
-            // Prioritize .gma file if both exist
-            string targetPath = hasGmaFile ? gmaCachePath : cacheFilePath;
-            ValidatePath(targetPath, "targetPath");
-
-            // 管理フォルダが存在しない場合は作成
-            if (!string.IsNullOrEmpty(gmodCacheAddonsPath) && !Directory.Exists(gmodCacheAddonsPath))
-            {
-                try
-                {
-                    ValidatePath(gmodCacheManagerPath, "gmodCacheManagerPath");
-                    ValidatePath(gmodCacheAddonsPath, "gmodCacheAddonsPath");
-                    Directory.CreateDirectory(gmodCacheManagerPath);
-                    Directory.CreateDirectory(gmodCacheAddonsPath);
-                    errorHandler.HandleInfo("Created cache management folders for GMA addon", "DisableGmaAddon");
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleError(ex, "Failed to create cache folders, falling back to simple deletion", ErrorSeverity.Warning);
-                    // フォルダ作成に失敗した場合は、単純にファイルを削除
-                    try
-                    {
-                        File.Delete(gmaCachePath);
-                        return;
-                    }
-                    catch (Exception deleteEx)
-                    {
-                        errorHandler.HandleError(deleteEx, "Failed to delete GMA file", ErrorSeverity.Error);
-                        return;
-                    }
-                }
-            }
-
-            string gmaSourcePath = Path.Combine(gmodCacheAddonsPath, addonId + ".gma");
-            ValidatePath(gmaSourcePath, "gmaSourcePath");
-
-            try
-            {
-                // Handle .cache files
-                if (hasCacheFile && !hasGmaFile)
-                {
-                    // If only .cache file exists, simply delete it
-                    // (Garry's Mod will regenerate if needed)
-                    File.Delete(cacheFilePath);
-                    errorHandler.HandleInfo($"Deleted cache file for addon {addonId}", "DisableGmaAddon");
-                    return;
-                }
-                
-                // Handle .gma files (original logic)
-                // ハードリンクかどうかを正確に判定
-                if (File.Exists(gmaSourcePath) && IsHardLink(targetPath, gmaSourcePath))
-                {
-                    // ハードリンクの場合：キャッシュ側のリンクを削除
-                    File.Delete(targetPath);
-                }
-                else
-                {
-                    // ハードリンクでない場合
-                    if (File.Exists(gmaSourcePath))
-                    {
-                        // 管理フォルダに既にファイルが存在する場合
-                        // 両方のファイルを比較
-                        var cacheInfo = new FileInfo(targetPath);
-                        var sourceInfo = new FileInfo(gmaSourcePath);
-                        
-                        if (cacheInfo.Length == sourceInfo.Length && 
-                            cacheInfo.LastWriteTimeUtc == sourceInfo.LastWriteTimeUtc)
-                        {
-                            // 同一ファイルと判断してキャッシュ側を削除
-                            try
-                            {
-                                File.Delete(targetPath);
-                                errorHandler.HandleInfo($"Deleted cache file for addon {addonId}", "DisableGmaAddon");
-                            }
-                            catch (Exception ex)
-                            {
-                                errorHandler.HandleWarning($"Failed to delete cache file: {ex.Message}", "DisableGmaAddon");
-                                // 削除に失敗した場合、強制的に削除を試みる
-                                try
-                                {
-                                    File.SetAttributes(targetPath, FileAttributes.Normal);
-                                    File.Delete(targetPath);
-                                }
-                                catch
-                                {
-                                    // それでも失敗した場合は諦める
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // 異なるファイルの場合は警告
-                            errorHandler.HandleWarning(
-                                $"Different versions of GMA file found for {addonId}, keeping managed version",
-                                "DisableGmaAddon"
-                            );
-                            try
-                            {
-                                File.Delete(targetPath);
-                            }
-                            catch (Exception ex)
-                            {
-                                errorHandler.HandleWarning($"Failed to delete different version cache file: {ex.Message}", "DisableGmaAddon");
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // 実ファイルを管理フォルダに移動
-                        try
-                        {
-                            File.Move(targetPath, gmaSourcePath);
-                            errorHandler.HandleInfo($"Moved GMA file to managed folder for addon {addonId}", "DisableGmaAddon");
-                        }
-                        catch (Exception ex)
-                        {
-                            errorHandler.HandleWarning($"Failed to move GMA file: {ex.Message}", "DisableGmaAddon");
-                            // 移動に失敗した場合、コピー＆削除を試みる
-                            try
-                            {
-                                File.Copy(targetPath, gmaSourcePath, true);
-                                File.Delete(targetPath);
-                                errorHandler.HandleInfo($"Copied and deleted GMA file for addon {addonId}", "DisableGmaAddon");
-                            }
-                            catch (Exception copyEx)
-                            {
-                                errorHandler.HandleError(copyEx, $"Failed to copy GMA file for addon {addonId}", ErrorSeverity.Error);
-                            }
-                        }
-                    }
-                }
-                
-                // Also delete .cache file if it exists alongside .gma
-                if (hasCacheFile && hasGmaFile)
-                {
-                    try
-                    {
-                        File.Delete(cacheFilePath);
-                        errorHandler.HandleInfo($"Also deleted accompanying cache file for addon {addonId}", "DisableGmaAddon");
-                    }
-                    catch (Exception ex)
-                    {
-                        errorHandler.HandleWarning($"Failed to delete accompanying cache file: {ex.Message}", "DisableGmaAddon");
-                        // 削除に失敗した場合、属性を変更して再試行
-                        try
-                        {
-                            File.SetAttributes(cacheFilePath, FileAttributes.Normal);
-                            File.Delete(cacheFilePath);
-                        }
-                        catch
-                        {
-                            // それでも失敗した場合は諦める
-                        }
-                    }
-                }
-                
-                // ワークショップフォルダの構造も削除する（重要！）
-                string workshopAddonPath = Path.Combine(workshopPath, addonId);
-                if (Directory.Exists(workshopAddonPath))
-                {
-                    try
-                    {
-                        junctionService.RemoveWorkshopAddonStructure(workshopPath, addonId);
-                        errorHandler.HandleInfo($"Removed workshop addon structure for GMA addon {addonId}", "DisableGmaAddon");
-                    }
-                    catch (Exception wsEx)
-                    {
-                        errorHandler.HandleError(wsEx, $"Failed to remove workshop structure for GMA addon {addonId}", ErrorSeverity.Error);
-                    }
-                    
-                    // Create stub to prevent Steam re-download
-                    CreateDisabledStub(workshopPath, addonId);
-                }
-            }
-            catch (Exception ex)
-            {
-                errorHandler.HandleError(ex, $"Failed to disable GMA addon: {addonId}", ErrorSeverity.Error);
-            }
+            // Only toggle logical state; do not move/delete cache or workshop files
+            try { gmodAddonStateStore?.SetEnabled(addonId, false); } catch { }
+            return;
         }
         
         /// <summary>
