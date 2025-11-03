@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -70,9 +71,51 @@ namespace GmodAddonManager.Core.Services
                 return;
             }
 
-
             // Steamの同期処理を待つ
             await Task.Delay(5000);
+
+            const int pollIntervalMs = 3000;
+            const int maxWaitAttempts = 40;
+            int waitAttempts = 0;
+            bool notifiedAboutSteam = false;
+
+            while (true)
+            {
+                var safe = SteamProcessChecker.IsSafeToModifyAddons(out string warning);
+                if (safe && string.IsNullOrEmpty(warning))
+                {
+                    break;
+                }
+
+                if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
+                {
+                    List<AddonChange> snapshot;
+                    lock (lockObject)
+                    {
+                        snapshot = new List<AddonChange>(pendingChanges.Changes);
+                    }
+
+                    var deferException = new InvalidOperationException(warning);
+                    foreach (var change in snapshot)
+                    {
+                        ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
+                        {
+                            Change = change,
+                            Error = deferException
+                        });
+                    }
+
+                    notifiedAboutSteam = true;
+                }
+
+                if (++waitAttempts >= maxWaitAttempts)
+                {
+                    Debug.WriteLine("PendingChangeManager: Deferring pending changes until Steam/Garry's Mod are closed.");
+                    return;
+                }
+
+                await Task.Delay(pollIntervalMs);
+            }
 
             List<AddonChange> changesToApply;
             lock (lockObject)

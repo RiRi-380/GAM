@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
@@ -10,11 +11,20 @@ namespace GmodAddonManager.Core.Services
     public class JunctionService : IJunctionService
     {
         private const uint GENERIC_READ = 0x80000000;
+        private const uint GENERIC_WRITE = 0x40000000;
         private const uint OPEN_EXISTING = 3;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint FILE_SHARE_WRITE = 0x00000002;
+        private const uint FILE_SHARE_DELETE = 0x00000004;
         private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
         private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
         private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
+        private const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
+        private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
         private const int ERROR_NOT_A_REPARSE_POINT = 4390;
+        private const int ERROR_PRIVILEGE_NOT_HELD = 1314;
+        private const int ERROR_ACCESS_DENIED = 5;
+        private const int REPARSE_DATA_BUFFER_HEADER_SIZE = 8;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr CreateFile(
@@ -40,12 +50,6 @@ namespace GmodAddonManager.Core.Services
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern bool CreateSymbolicLink(
-            string lpSymlinkFileName,
-            string lpTargetFileName,
-            int dwFlags);
-
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool RemoveDirectory(string lpPathName);
 
@@ -57,8 +61,6 @@ namespace GmodAddonManager.Core.Services
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool DeleteFile(string lpFileName);
-
-        private const int SYMBOLIC_LINK_FLAG_DIRECTORY = 1;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct REPARSE_DATA_BUFFER
@@ -152,11 +154,30 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
 
-                // Windows APIを直接使用してジャンクションを作成
-                if (!CreateSymbolicLink(absoluteJunctionPath, absoluteTargetPath, SYMBOLIC_LINK_FLAG_DIRECTORY))
+                Directory.CreateDirectory(absoluteJunctionPath);
+
+                try
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    throw new Win32Exception(error, $"Failed to create junction from '{junctionPath}' to '{absoluteTargetPath}'");
+                    ApplyJunctionReparsePoint(absoluteJunctionPath, absoluteTargetPath);
+                }
+                catch
+                {
+                    try
+                    {
+                        if (Directory.Exists(absoluteJunctionPath) && IsJunction(absoluteJunctionPath))
+                        {
+                            RemoveJunction(absoluteJunctionPath);
+                        }
+                        else if (Directory.Exists(absoluteJunctionPath))
+                        {
+                            Directory.Delete(absoluteJunctionPath, true);
+                        }
+                    }
+                    catch
+                    {
+                        // ベストエフォートのクリーンアップ
+                    }
+                    throw;
                 }
             }
         }
@@ -184,6 +205,116 @@ namespace GmodAddonManager.Core.Services
                 int error = Marshal.GetLastWin32Error();
                 throw new Win32Exception(error, $"Failed to remove junction: {junctionPath}");
             }
+        }
+
+        private void ApplyJunctionReparsePoint(string junctionPath, string targetPath)
+        {
+            string normalizedTarget = NormalizeDirectoryPath(targetPath);
+            string substituteName = @"\??\" + normalizedTarget;
+            string printName = normalizedTarget;
+
+            byte[] substituteBytes = Encoding.Unicode.GetBytes(substituteName);
+            byte[] printBytes = Encoding.Unicode.GetBytes(printName);
+
+            if (substituteBytes.Length + printBytes.Length + 4 > 0x3FF0)
+            {
+                throw new PathTooLongException($"Target path is too long for a junction: {targetPath}");
+            }
+
+            var reparseData = new REPARSE_DATA_BUFFER
+            {
+                ReparseTag = IO_REPARSE_TAG_MOUNT_POINT,
+                ReparseDataLength = (ushort)(substituteBytes.Length + printBytes.Length + 4),
+                SubstituteNameOffset = 0,
+                SubstituteNameLength = (ushort)substituteBytes.Length,
+                PrintNameOffset = (ushort)(substituteBytes.Length + 2),
+                PrintNameLength = (ushort)printBytes.Length,
+                PathBuffer = new byte[0x3FF0]
+            };
+
+            Array.Copy(substituteBytes, reparseData.PathBuffer, substituteBytes.Length);
+            Array.Copy(printBytes, 0, reparseData.PathBuffer, reparseData.PrintNameOffset, printBytes.Length);
+
+            IntPtr bufferPtr = IntPtr.Zero;
+            IntPtr handle = IntPtr.Zero;
+
+            try
+            {
+                handle = CreateFile(
+                    junctionPath,
+                    GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    IntPtr.Zero,
+                    OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                    IntPtr.Zero);
+
+                if (handle.ToInt64() == -1)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (IsPrivilegeError(error))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Failed to create junction. Enable Windows Developer Mode or run the application as administrator.",
+                            new Win32Exception(error));
+                    }
+                    throw new Win32Exception(error, $"Failed to open junction path: {junctionPath}");
+                }
+
+                int structSize = Marshal.SizeOf<REPARSE_DATA_BUFFER>();
+                bufferPtr = Marshal.AllocHGlobal(structSize);
+                Marshal.StructureToPtr(reparseData, bufferPtr, false);
+
+                uint inBufferSize = (uint)(reparseData.ReparseDataLength + REPARSE_DATA_BUFFER_HEADER_SIZE);
+                bool result = DeviceIoControl(
+                    handle,
+                    FSCTL_SET_REPARSE_POINT,
+                    bufferPtr,
+                    inBufferSize,
+                    IntPtr.Zero,
+                    0,
+                    out _,
+                    IntPtr.Zero);
+
+                if (!result)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (IsPrivilegeError(error))
+                    {
+                        throw new UnauthorizedAccessException(
+                            "Failed to create junction. Enable Windows Developer Mode or run the application as administrator.",
+                            new Win32Exception(error));
+                    }
+                    throw new Win32Exception(error, $"Failed to create junction from '{junctionPath}' to '{targetPath}'");
+                }
+            }
+            finally
+            {
+                if (bufferPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(bufferPtr);
+                }
+
+                if (handle != IntPtr.Zero && handle.ToInt64() != -1)
+                {
+                    CloseHandle(handle);
+                }
+            }
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            string absolute = Path.GetFullPath(path);
+            if (!absolute.EndsWith(Path.DirectorySeparatorChar))
+            {
+                absolute += Path.DirectorySeparatorChar;
+            }
+            return absolute;
+        }
+
+        private static bool IsPrivilegeError(int errorCode)
+        {
+            return errorCode == ERROR_PRIVILEGE_NOT_HELD || errorCode == ERROR_ACCESS_DENIED;
         }
 
         public bool IsJunction(string path)
@@ -295,13 +426,53 @@ namespace GmodAddonManager.Core.Services
                 return;
             }
 
-            var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            var principal = new System.Security.Principal.WindowsPrincipal(identity);
-            bool isAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            string tempRoot = Path.Combine(Path.GetTempPath(), "GmodAddonManager");
+            string testSuffix = Guid.NewGuid().ToString("N");
+            string targetDir = Path.Combine(tempRoot, $"junction_target_{testSuffix}");
+            string junctionDir = Path.Combine(tempRoot, $"junction_link_{testSuffix}");
 
-            if (!isAdmin)
+            try
             {
-                throw new UnauthorizedAccessException("Administrator privileges are required to create junction points.");
+                Directory.CreateDirectory(tempRoot);
+                Directory.CreateDirectory(targetDir);
+
+                CreateJunction(junctionDir, targetDir);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw new UnauthorizedAccessException(
+                    "ジャンクションを作成できません。Windowsの開発者モードを有効にするか、管理者としてアプリケーションを実行してください。");
+            }
+            catch (Win32Exception ex) when (IsPrivilegeError(ex.NativeErrorCode))
+            {
+                throw new UnauthorizedAccessException(
+                    "ジャンクションを作成できません。Windowsの開発者モードを有効にするか、管理者としてアプリケーションを実行してください。",
+                    ex);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(junctionDir))
+                    {
+                        try { RemoveJunction(junctionDir); } catch { }
+                        try { Directory.Delete(junctionDir, true); } catch { }
+                    }
+
+                    if (Directory.Exists(targetDir))
+                    {
+                        Directory.Delete(targetDir, true);
+                    }
+
+                    if (Directory.Exists(tempRoot) && Directory.GetFileSystemEntries(tempRoot).Length == 0)
+                    {
+                        Directory.Delete(tempRoot);
+                    }
+                }
+                catch
+                {
+                    // ベストエフォートのクリーンアップ
+                }
             }
         }
 
@@ -342,6 +513,12 @@ namespace GmodAddonManager.Core.Services
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);
+            }
+
+            if (!AreOnSameVolume(hardLinkPath, absoluteTargetPath))
+            {
+                throw new InvalidOperationException(
+                    $"Hard link requires same-volume paths. Link: {hardLinkPath}, Target: {absoluteTargetPath}");
             }
 
             bool result = CreateHardLink(hardLinkPath, absoluteTargetPath, IntPtr.Zero);
@@ -478,6 +655,20 @@ namespace GmodAddonManager.Core.Services
 
             // GMAファイルへのハードリンクを作成
             CreateHardLink(gmaPath, managedGmaPath);
+        }
+
+        private static bool AreOnSameVolume(string path1, string path2)
+        {
+            try
+            {
+                var root1 = Path.GetPathRoot(Path.GetFullPath(path1));
+                var root2 = Path.GetPathRoot(Path.GetFullPath(path2));
+                return string.Equals(root1, root2, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void RemoveWorkshopAddonStructure(string workshopPath, string addonId)

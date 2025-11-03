@@ -248,6 +248,20 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
                 return;
             }
 
+            if (SteamProcessChecker.IsSteamRunningViaAPI())
+            {
+                var dialogService = new DialogService();
+                pendingChangeManager.AddPendingChange(
+                    IsEnabled ? "disable" : "enable",
+                    Id
+                );
+                await dialogService.ShowWarningAsync(
+                    L.Get("Warning.SteamRunningTitle"),
+                    L.Get("Warning.SteamRunningDisable")
+                );
+                return;
+            }
+
             // 即座に切り替え
             if (IsEnabled)
             {
