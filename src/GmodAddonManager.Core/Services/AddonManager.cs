@@ -2479,7 +2479,7 @@ namespace GmodAddonManager.Core.Services
             using var sha = SHA256.Create();
             var bytes = Encoding.UTF8.GetBytes(snapshot.NormalizedState);
             var hash = sha.ComputeHash(bytes);
-            return Convert.ToHexString(hash).ToLowerInvariant();
+            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
         }
 
         private Dictionary<string, bool> BuildExpectedStates()
