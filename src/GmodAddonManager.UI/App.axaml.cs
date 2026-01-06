@@ -9,6 +9,7 @@ using GmodAddonManager.UI.Models;
 using System.IO;
 using System;
 using System.Threading.Tasks;
+using GmodAddonManager.Core.Utils;
 
 namespace GmodAddonManager.UI;
 
@@ -158,16 +159,59 @@ public partial class App : Application
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
+
+                // 無効化モード設定を適用
+                addonManager.DisableMode = settings.DisableMode;
+                addonManager.UnsubscribeOnHardDisable = settings.UnsubscribeOnHardDisable;
+                addonManager.StrictLinkMode = settings.StrictLinkMode || addonManager.StrictLinkMode;
                 
                 // WorkshopIconResolverの取得
                 workshopIconResolver = addonManager.GetWorkshopIconResolver() as WorkshopIconResolver;
             }
+            catch (UnauthorizedAccessException ex)
+            {
+#if DEBUG
+                File.AppendAllText("app_startup.log", $"AddonManager creation/init privilege error at: {DateTime.Now}\n{ex}\n");
+#endif
+                errorHandler.HandleError(ex, "AddonManager.InitializeAsync", ErrorSeverity.Critical);
+
+                await dialogService.ShowErrorAsync(
+                    L.Get("Error.Title"),
+                    "GAMはジャンクションを作成できませんでした。\n\n" +
+                    "対処方法:\n" +
+                    "1. Gmod Addon Manager を右クリックして \"管理者として実行\" を選択する\n" +
+                    "   または Windows 設定 > 更新とセキュリティ > 開発者向け機能 で「開発者モード」を有効にする\n" +
+                    "2. その後アプリを再起動してください。"
+                );
+
+                applicationLock?.Dispose();
+
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktopLifetime)
+                {
+                    desktopLifetime.Shutdown();
+                }
+                return;
+            }
             catch (Exception ex)
             {
 #if DEBUG
-                File.AppendAllText("app_startup.log", $"AddonManager creation/init error at: {DateTime.Now}\n{ex.ToString()}\n");
+                File.AppendAllText("app_startup.log", $"AddonManager creation/init error at: {DateTime.Now}\n{ex}\n");
 #endif
-                throw;
+                errorHandler.HandleError(ex, "AddonManager.InitializeAsync", ErrorSeverity.Critical);
+
+                var sanitizedMessage = PathSanitizer.SanitizeException(ex);
+                await dialogService.ShowErrorAsync(
+                    L.Get("Error.Title"),
+                    $"初期化に失敗しました。\n詳細: {sanitizedMessage}"
+                );
+
+                applicationLock?.Dispose();
+
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktopLifetime)
+                {
+                    desktopLifetime.Shutdown();
+                }
+                return;
             }
 
             try
@@ -199,11 +243,44 @@ public partial class App : Application
 #endif
                 pendingChangeManager = new PendingChangeManager(
                     addonManager, 
-                    addonManager.GetManagerPath()
+                    addonManager.GetManagerPath(),
+                    errorHandler
                 );
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"PendingChangeManager created at: {DateTime.Now}\n");
 #endif
+
+                // 起動時に保留変更があれば可能な限り適用
+                if (pendingChangeManager.HasPendingChanges())
+                {
+                    try
+                    {
+                        await pendingChangeManager.ApplyPendingChangesAsync();
+                    }
+                    catch (Exception ex)
+                    {
+#if DEBUG
+                        File.AppendAllText("app_startup.log", $"ApplyPendingChangesAsync at startup error at: {DateTime.Now}\n{ex}\n");
+#endif
+                    }
+                }
+
+                // GMod終了後に保留変更を自動適用
+                if (processWatcher != null)
+                {
+                    processWatcher.GmodStopped += async (_, __) =>
+                    {
+                        try
+                        {
+                            await pendingChangeManager.ApplyPendingChangesAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            // Best-effort; avoid crashing shutdown
+                            System.IO.File.AppendAllText("app_startup.log", $"ApplyPendingChangesAsync error at: {DateTime.Now}\n{ex}\n");
+                        }
+                    };
+                }
             }
             catch (Exception ex)
             {

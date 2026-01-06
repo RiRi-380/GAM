@@ -76,6 +76,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         ShareCommand = ReactiveCommand.CreateFromTask(ShareAsync);
         ToggleAutoUpdateCommand = ReactiveCommand.CreateFromTask(ToggleAutoUpdateAsync);
         VersionManageCommand = ReactiveCommand.CreateFromTask(VersionManageAsync);
+        ApplyExclusiveCommand = ReactiveCommand.CreateFromTask(ApplyExclusiveAsync);
         CleanupCommand = ReactiveCommand.CreateFromTask(
             ShowCleanupDialogAsync,
             this.WhenAnyValue(x => x.IsSystem, isSystem => !isSystem));
@@ -153,6 +154,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ShareCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleAutoUpdateCommand { get; }
     public ReactiveCommand<Unit, Unit> VersionManageCommand { get; }
+    public ReactiveCommand<Unit, Unit> ApplyExclusiveCommand { get; }
     public ReactiveCommand<Unit, Unit> CleanupCommand { get; }
     
     // バージョン表示
@@ -218,6 +220,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     
     // 共有可能かどうか（Junctionアセット以外）
     public bool CanShare => Name != "Junction";
+    public bool CanApplyExclusive => Id != "junction-system-asset";
     
     // 状態に応じた色
     public string AssetStateColor
@@ -248,18 +251,17 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            if (SteamProcessChecker.IsSteamRunningViaAPI())
+            // Steam起動中のHard無効化は再DLの可能性があるため確認（有効化/Soft無効化はそのまま続行）
+            if (SteamProcessChecker.IsSteamRunningViaAPI() && IsEnabled && addonManager.DisableMode == DisableMode.Hard)
             {
                 var dialogService = new DialogService();
-                pendingChangeManager.AddPendingChange(
-                    IsEnabled ? "disable" : "enable",
-                    Id
-                );
-                await dialogService.ShowWarningAsync(
+                var result = await dialogService.ShowConfirmAsync(
                     L.Get("Warning.SteamRunningTitle"),
-                    L.Get("Warning.SteamRunningDisable")
-                );
-                return;
+                    L.Get("Warning.SteamRunningDisable"));
+                if (!result)
+                {
+                    return;
+                }
             }
 
             // 即座に切り替え
@@ -279,6 +281,51 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         catch (Exception)
         {
             throw;
+        }
+    }
+
+    private async Task ApplyExclusiveAsync()
+    {
+        try
+        {
+            var dialogService = new DialogService();
+
+            if (processWatcher.IsGmodRunning)
+            {
+                await dialogService.ShowErrorAsync(
+                    L.Get("Warning.Title"),
+                    L.Get("Warning.ApplyExclusiveWhileGmodRunning"));
+                return;
+            }
+
+            if (SteamProcessChecker.IsSteamRunningViaAPI() && addonManager.DisableMode == DisableMode.Hard)
+            {
+                var confirmed = await dialogService.ShowConfirmAsync(
+                    L.Get("Warning.SteamRunningTitle"),
+                    L.Get("Warning.SteamRunningDisable"));
+                if (!confirmed)
+                {
+                    return;
+                }
+            }
+
+            var applyResult = await addonManager.ApplyAssetExclusiveAsync(Id);
+            if (!applyResult.Success)
+            {
+                await dialogService.ShowErrorAsync(
+                    L.Get("Error.Title"),
+                    L.Get("Error.ApplyExclusiveFailed"));
+            }
+
+            ViewModelLocator.AssetListViewModel?.LoadAssets();
+            await ReloadAddons();
+        }
+        catch (Exception)
+        {
+            var dialogService = new DialogService();
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Get("Error.ApplyExclusiveFailed"));
         }
     }
 

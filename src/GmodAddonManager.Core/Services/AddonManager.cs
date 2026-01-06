@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Models;
@@ -12,6 +14,12 @@ using Newtonsoft.Json;
 
 namespace GmodAddonManager.Core.Services
 {
+    public enum DisableMode
+    {
+        Soft,
+        Hard
+    }
+
     public class AddonManager : IDisposable
     {
         private readonly string workshopPath;
@@ -30,14 +38,33 @@ namespace GmodAddonManager.Core.Services
         private readonly SteamWorkshopService steamWorkshopService;
         private readonly UndoManager undoManager;
         private readonly IErrorHandler errorHandler;
+        private readonly ExperimentEventLogger eventLogger;
         
         private readonly System.Threading.Timer _saveDebounceTimer;
         private readonly object _saveLock = new object();
         private bool _saveRequested = false;
         private int _saveDebounceMilliseconds = 1000; // デフォルト1秒
+        private int _softModeNoFileOpsNoticeLogged = 0;
+        private int _sessionLogged = 0;
+
+        public DisableMode DisableMode { get; set; } = DisableMode.Soft;
+        public bool UnsubscribeOnHardDisable { get; set; } = false;
+        public bool StrictLinkMode
+        {
+            get => strictLinkMode;
+            set
+            {
+                strictLinkMode = value;
+                eventLogger.StrictLinkMode = value;
+            }
+        }
+        public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
+        public int StateMatchPollIntervalMs { get; set; } = 200;
         
         private Configuration configuration;
         private OperationLogManager operationLogManager;
+
+        private bool strictLinkMode;
 
         private const int ERROR_NOT_SAME_DEVICE = 17;
 
@@ -45,12 +72,12 @@ namespace GmodAddonManager.Core.Services
         {
         }
 
-        public AddonManager(string customWorkshopPath) : this(customWorkshopPath, null)
-        {
-        }
-
-        public AddonManager(string customWorkshopPath, IErrorHandler customErrorHandler)
-        {
+	        public AddonManager(string? customWorkshopPath) : this(customWorkshopPath, null)
+	        {
+	        }
+	
+	        public AddonManager(string? customWorkshopPath, IErrorHandler? customErrorHandler)
+	        {
             steamPathDetector = new SteamPathDetector();
             junctionService = new JunctionService();
             
@@ -67,6 +94,8 @@ namespace GmodAddonManager.Core.Services
             
             undoManager = new UndoManager();
             errorHandler = customErrorHandler ?? new DefaultErrorHandler();
+            eventLogger = ExperimentEventLogger.CreateDefault();
+            StrictLinkMode = GetStrictLinkModeFromEnvironment();
             
             if (string.IsNullOrEmpty(customWorkshopPath))
             {
@@ -144,6 +173,11 @@ namespace GmodAddonManager.Core.Services
             // Initializing Addon Manager
             try
             {
+                if (Interlocked.Exchange(ref _sessionLogged, 1) == 0)
+                {
+                    eventLogger.LogEvent("SessionStart", result: "success");
+                }
+
                 junctionService.ValidateAdminPrivileges();
 
             if (!Directory.Exists(managerPath))
@@ -343,77 +377,96 @@ namespace GmodAddonManager.Core.Services
 
                     string targetPath = Path.Combine(addonsPath, dirName);
                     ValidatePath(targetPath, "targetPath");
-                    
-                    // 実体フォルダの場合、管理フォルダに移動
-                    if (!Directory.Exists(targetPath))
-                    {
-                        // ターゲットが存在しない場合は移動
-                        ValidatePath(directory, "directory");
-                        await Task.Run(() => Directory.Move(directory, targetPath));
-                    }
-                    else
-                    {
-                        // ターゲットが既に存在する場合はマージ
-                        string tempPath = directory + "_temp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-                        ValidatePath(directory, "directory");
-                        ValidatePath(tempPath, "tempPath");
-                        await Task.Run(() => Directory.Move(directory, tempPath));
-                        
-                        try
-                        {
-                            await Task.Run(() =>
-                            {
-                                MergeDirectories(tempPath, targetPath);
-                                Directory.Delete(tempPath, true);
-                            });
-                        }
-                        catch
-                        {
-                            // 失敗した場合は元に戻す
-                            if (Directory.Exists(tempPath) && !Directory.Exists(directory))
-                            {
-                                await Task.Run(() => Directory.Move(tempPath, directory));
-                            }
-                            throw;
-                        }
-                    }
+                    bool targetAlreadyExists = Directory.Exists(targetPath);
+                    string? tempPath = null;
 
-                    // GMAファイルが存在するかチェック
-                    string gmaPath = Path.Combine(targetPath, $"{dirName}.gma");
-                    
-                    if (File.Exists(gmaPath))
+                    try
                     {
-                        // 新方式: 通常ディレクトリ + ハードリンク
-                        try
+                        // 実体フォルダの場合、管理フォルダに移動（失敗時はロールバック）
+                        if (!targetAlreadyExists)
                         {
-                            junctionService.CreateWorkshopAddonStructure(workshopPath, dirName, gmaPath);
-                            errorHandler.HandleInfo($"Migrated addon {dirName} to hard link system", "MigrateExistingAddons");
+                            ValidatePath(directory, "directory");
+                            await Task.Run(() => Directory.Move(directory, targetPath));
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            errorHandler.HandleError(ex, $"Failed to create hard link structure for addon {dirName}, falling back to junction", ErrorSeverity.Warning);
-                            // フォールバック: ジャンクション作成
+                            tempPath = directory + "_temp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                            ValidatePath(directory, "directory");
+                            ValidatePath(tempPath, "tempPath");
+                            await Task.Run(() => Directory.Move(directory, tempPath));
+                        }
+
+                        bool workshopPresenceCreated = false;
+
+                        // GMAファイルが存在するかチェック（存在する場合はハードリンク方式を優先）
+                        string gmaPath = Path.Combine(targetPath, $"{dirName}.gma");
+                        if (File.Exists(gmaPath))
+                        {
+                            try
+                            {
+                                junctionService.CreateWorkshopAddonStructure(workshopPath, dirName, gmaPath);
+                                workshopPresenceCreated = true;
+                                errorHandler.HandleInfo($"Migrated addon {dirName} to hard link system", "MigrateExistingAddons");
+                            }
+                            catch (Exception ex)
+                            {
+                                errorHandler.HandleError(ex,
+                                    $"Failed to create hard link structure for addon {dirName}, falling back to junction",
+                                    ErrorSeverity.Warning);
+                            }
+                        }
+
+                        if (!workshopPresenceCreated)
+                        {
                             try
                             {
                                 junctionService.CreateJunction(directory, targetPath);
+                                workshopPresenceCreated = true;
                             }
-                            catch (IOException ioEx) when (ioEx.Message.Contains("already exists and is not a junction"))
+                            catch (IOException ex) when (ex.Message.Contains("already exists and is not a junction"))
                             {
                                 HandleExistingDirectoryDuringMigration(directory, targetPath, dirName);
+                                workshopPresenceCreated = true;
+                            }
+                        }
+
+                        // 既に管理フォルダが存在していた場合のみ、残っている実体フォルダをマージ
+                        if (!string.IsNullOrEmpty(tempPath) && Directory.Exists(tempPath))
+                        {
+                            try
+                            {
+                                await Task.Run(() =>
+                                {
+                                    MergeDirectories(tempPath, targetPath);
+                                    Directory.Delete(tempPath, true);
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                // ロールバックは難しいので、テンポラリを残して警告に留める
+                                errorHandler.HandleError(ex,
+                                    $"Failed to merge addon {dirName} contents into managed folder. Leaving temp folder: {tempPath}",
+                                    ErrorSeverity.Warning);
                             }
                         }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        // 従来方式: ジャンクション
-                        try
+                        await RollbackFolderMigrationAsync(directory, targetPath, tempPath, targetAlreadyExists);
+
+                        if (ex is Win32Exception win32 && win32.NativeErrorCode == 4392)
                         {
-                            junctionService.CreateJunction(directory, targetPath);
+                            errorHandler.HandleError(ex,
+                                $"Failed to migrate addon {dirName} due to invalid reparse data (Win32=4392). Migration was rolled back.",
+                                ErrorSeverity.Warning);
                         }
-                        catch (IOException ex) when (ex.Message.Contains("already exists and is not a junction"))
+                        else
                         {
-                            HandleExistingDirectoryDuringMigration(directory, targetPath, dirName);
+                            errorHandler.HandleError(ex,
+                                $"Failed to migrate addon {dirName}. Migration was rolled back.",
+                                ErrorSeverity.Warning);
                         }
+                        continue;
                     }
 
                     if (!configuration.AddonMetadata.ContainsKey(dirName))
@@ -489,7 +542,7 @@ namespace GmodAddonManager.Core.Services
                         else
                         {
                             // Different drives - copy back
-                            File.Copy(targetPath, gmaFile);
+                            CopyFileForLinkFallback(fileName, targetPath, gmaFile, "MigrateExistingAddons");
                         }
                         
                         // Add or update metadata
@@ -597,6 +650,96 @@ namespace GmodAddonManager.Core.Services
             }
 
             await SaveConfigurationAsync();
+        }
+
+        private async Task RollbackFolderMigrationAsync(string workshopAddonPath, string managedAddonPath, string? tempPath, bool managedAlreadyExisted)
+        {
+            try
+            {
+                // Remove any partially created workshop presence so we can restore original content.
+                CleanupWorkshopPathForRollback(workshopAddonPath);
+
+                if (!string.IsNullOrEmpty(tempPath) && Directory.Exists(tempPath))
+                {
+                    EnsureWorkshopPathAvailableForRestore(workshopAddonPath);
+                    if (!Directory.Exists(workshopAddonPath))
+                    {
+                        await Task.Run(() => Directory.Move(tempPath, workshopAddonPath));
+                    }
+                    return;
+                }
+
+                if (!managedAlreadyExisted && Directory.Exists(managedAddonPath))
+                {
+                    EnsureWorkshopPathAvailableForRestore(workshopAddonPath);
+                    if (!Directory.Exists(workshopAddonPath))
+                    {
+                        await Task.Run(() => Directory.Move(managedAddonPath, workshopAddonPath));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Rollback failed: {ex.Message}", "MigrateExistingAddons");
+            }
+        }
+
+        private void CleanupWorkshopPathForRollback(string workshopAddonPath)
+        {
+            try
+            {
+                if (!Directory.Exists(workshopAddonPath))
+                {
+                    return;
+                }
+
+                if (junctionService.IsJunction(workshopAddonPath))
+                {
+                    junctionService.RemoveJunction(workshopAddonPath);
+                    return;
+                }
+
+                Directory.Delete(workshopAddonPath, true);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort cleanup; if this fails, restore will attempt a safe rename.
+                errorHandler.HandleWarning($"Failed to cleanup workshop path during rollback: {ex.Message}", "MigrateExistingAddons");
+            }
+        }
+
+        private void EnsureWorkshopPathAvailableForRestore(string workshopAddonPath)
+        {
+            if (!Directory.Exists(workshopAddonPath))
+            {
+                return;
+            }
+
+            try
+            {
+                if (junctionService.IsJunction(workshopAddonPath))
+                {
+                    junctionService.RemoveJunction(workshopAddonPath);
+                }
+                else
+                {
+                    // If it's empty, delete; otherwise move aside to avoid data loss.
+                    bool isEmpty = !Directory.EnumerateFileSystemEntries(workshopAddonPath).Any();
+                    if (isEmpty)
+                    {
+                        Directory.Delete(workshopAddonPath, true);
+                    }
+                    else
+                    {
+                        var backupPath = workshopAddonPath + "_rollback_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                        Directory.Move(workshopAddonPath, backupPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to make workshop path available for restore: {ex.Message}", "MigrateExistingAddons");
+            }
         }
 
         public async Task<List<WorkshopAddon>> ScanWorkshopFolderAsync()
@@ -1198,8 +1341,8 @@ namespace GmodAddonManager.Core.Services
             });
         }
         
-        public async Task UpdateCacheAddonTitlesAsync(IProgress<(int current, int total, string message)> progress = null)
-        {
+	        public async Task UpdateCacheAddonTitlesAsync(IProgress<(int current, int total, string message)>? progress = null)
+	        {
             var cacheAddons = configuration.AddonMetadata
                 .Where(kvp => kvp.Value.IsGmaFile && 
                        (kvp.Value.Title == kvp.Key || kvp.Value.Title.StartsWith("Workshop-")))
@@ -1341,36 +1484,84 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        public void EnableAddon(string addonId)
+        private static bool GetStrictLinkModeFromEnvironment()
         {
+            var value = Environment.GetEnvironmentVariable("GAM_STRICT_LINK_MODE");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            return value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+        }
+
+	        public void EnableAddon(string addonId)
+	        {
             // Always sync GMod logical state and ensure the workshop structure reflects the enabled view
             try
             {
-                gmodAddonStateStore?.SetEnabled(addonId, true);
+                if (gmodAddonStateStore == null)
+                {
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableAddon");
+                }
+                else
+                {
+                    var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
+                    if (!persisted)
+                    {
+                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableAddon");
+                    }
+                }
             }
             catch { }
 
             // Remove any legacy stub directory first (for backward compatibility)
-            RemoveDisabledStub(workshopPath, addonId);
+            bool removedStub = RemoveDisabledStub(workshopPath, addonId);
+            TryRestoreMovedAsideWorkshopFolder(addonId);
             
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
             
             // Runtime check for GMA files in cache
             bool isGmaRuntime = IsGmaAddonRuntime(addonId);
-            
-            if (isGmaRuntime || (addonInfo != null && addonInfo.IsGmaFile))
+
+            // Soft mode: only toggle addons.txt / metadata (no filesystem operations)
+            // Exception: if we removed a disabled stub, fall through to restore workshop/cache presence.
+            if (DisableMode == DisableMode.Soft && !removedStub)
             {
-                // Update metadata if mismatch detected
-                if (addonInfo != null && !addonInfo.IsGmaFile && isGmaRuntime)
+                if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
                 {
-                    errorHandler.HandleWarning($"Addon {addonId} detected as GMA at runtime but metadata says otherwise. Updating metadata.", "EnableAddon");
-                    addonInfo.IsGmaFile = true;
+                    errorHandler.HandleInfo(
+                        "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+                        "EnableAddon");
                 }
-                
-                EnableGmaAddon(addonId);
+                if (addonInfo != null)
+                {
+                    addonInfo.IsEnabled = true;
+                    if (isGmaRuntime && !addonInfo.IsGmaFile)
+                    {
+                        addonInfo.IsGmaFile = true;
+                    }
+                }
                 return;
             }
+            
+	            if (isGmaRuntime || (addonInfo != null && addonInfo.IsGmaFile))
+	            {
+	                // Update metadata if mismatch detected
+	                if (addonInfo != null && !addonInfo.IsGmaFile && isGmaRuntime)
+	                {
+	                    errorHandler.HandleWarning($"Addon {addonId} detected as GMA at runtime but metadata says otherwise. Updating metadata.", "EnableAddon");
+	                    addonInfo.IsGmaFile = true;
+	                }
+	                
+	                EnableGmaAddon(addonId);
+	                if (addonInfo != null)
+	                {
+	                    addonInfo.IsEnabled = true;
+	                }
+	                return;
+	            }
 
             string sourcePath = Path.Combine(addonsPath, addonId);
             string workshopAddonPath = Path.Combine(workshopPath, addonId);
@@ -1385,13 +1576,13 @@ namespace GmodAddonManager.Core.Services
             // 新方式: 通常のディレクトリを作成し、中のGMAファイルだけハードリンク化
             string sourceGmaPath = Path.Combine(sourcePath, $"{addonId}.gma");
             
-            if (File.Exists(sourceGmaPath))
-            {
-                // GMAファイルが存在する場合、新方式を使用
-                junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, sourceGmaPath);
-            }
-            else
-            {
+	            if (File.Exists(sourceGmaPath))
+	            {
+	                // GMAファイルが存在する場合、新方式を使用
+	                junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, sourceGmaPath);
+	            }
+	            else
+	            {
                 // GMAファイルがない場合は従来のジャンクション方式を使用
                 if (Directory.Exists(workshopAddonPath))
                 {
@@ -1420,113 +1611,169 @@ namespace GmodAddonManager.Core.Services
                             throw;
                         }
                     }
-                    else
-                    {
-                        // ジャンクションが既に存在する場合は正常終了
-                        return;
-                    }
-                }
+	                    else
+	                    {
+	                        // ジャンクションが既に存在する場合も、ターゲット整合性のためCreateJunctionに処理を委ねる
+	                    }
+	                }
 
-                junctionService.CreateJunction(workshopAddonPath, sourcePath);
-            }
-        }
+	                junctionService.CreateJunction(workshopAddonPath, sourcePath);
+	            }
+
+	            if (addonInfo != null)
+	            {
+	                addonInfo.IsEnabled = true;
+	                if (File.Exists(sourceGmaPath))
+	                {
+	                    addonInfo.IsGmaFile = true;
+	                }
+	            }
+	        }
 
         public void DisableAddon(string addonId)
         {
             try
             {
-                gmodAddonStateStore?.SetEnabled(addonId, false);
-            }
-            catch
-            {
-            }
-
-            var runtimeIsGma = IsGmaAddonRuntime(addonId);
-
-            if (configuration.AddonMetadata.ContainsKey(addonId))
-            {
-                var addonInfo = configuration.AddonMetadata[addonId];
-                addonInfo.IsEnabled = false;
-                if (runtimeIsGma && !addonInfo.IsGmaFile)
+                if (gmodAddonStateStore == null)
                 {
-                    addonInfo.IsGmaFile = true;
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "DisableAddon");
+                }
+                else
+                {
+                    var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
+                    if (!persisted)
+                    {
+                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "DisableAddon");
+                    }
                 }
             }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "DisableAddon");
+            }
 
-            // Remove legacy stub directories if they exist and ensure the workshop copy stays in place
+	            var runtimeIsGma = IsGmaAddonRuntime(addonId);
+	            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
+	            var isGmaAddon = runtimeIsGma || (addonInfo?.IsGmaFile ?? false);
+	
+	            if (addonInfo != null)
+	            {
+	                addonInfo.IsEnabled = false;
+	                if (runtimeIsGma && !addonInfo.IsGmaFile)
+	                {
+	                    addonInfo.IsGmaFile = true;
+	                    isGmaAddon = true;
+	                }
+	            }
+
+	            if (DisableMode == DisableMode.Soft)
+	            {
+	                // ソフト無効化: ファイル構造は残し、addons.txtとメタデータのみ更新
+	                return;
+	            }
+	
+	            // ハード無効化: 先にGMAの管理コピーを確保してから削除/移動する（戻らない問題の防止）
+	            if (isGmaAddon)
+	            {
+	                try
+	                {
+	                    var managedGma = EnsureManagedGmaAvailable(addonId, addonInfo);
+	                    if (managedGma == null)
+	                    {
+	                        errorHandler.HandleWarning(
+	                            $"Hard disable skipped for addon {addonId} because no GMA source could be located; performed soft disable only. {BuildGmaSourceDiagnostics(addonId, addonInfo)}",
+	                            "DisableAddon");
+	                        return;
+	                    }
+	                }
+	                catch (Exception ex)
+	                {
+	                    errorHandler.HandleWarning($"Failed to ensure managed GMA copy for addon {addonId}: {ex.Message}", "DisableAddon");
+	                    return;
+	                }
+	            }
+	
+	            if (UnsubscribeOnHardDisable)
+	            {
+	                TryUnsubscribeFromWorkshop(addonId);
+	            }
+
+            // Remove legacy stub directories if they exist
             RemoveDisabledStub(workshopPath, addonId);
-            EnsureWorkshopContentPresence(addonId);
+
+	            // Tear down workshop presence to keep state consistent while disabled
+	            RemoveWorkshopPresence(addonId, isGmaAddon);
+
+            // Leave a lightweight stub to discourage immediate Steam re-download
+            CreateDisabledStub(workshopPath, addonId);
         }
 
-        private void EnableGmaAddon(string addonId)
-        {
+	        private void EnableGmaAddon(string addonId)
+	        {
             try
             {
-                gmodAddonStateStore?.SetEnabled(addonId, true);
+                if (gmodAddonStateStore == null)
+                {
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableGmaAddon");
+                }
+                else
+                {
+                    var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
+                    if (!persisted)
+                    {
+                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableGmaAddon");
+                    }
+                }
             }
-            catch
+            catch (Exception ex)
             {
+                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableGmaAddon");
             }
             
-            // Remove any legacy stub directory first (for backward compatibility)
-            RemoveDisabledStub(workshopPath, addonId);
+		            // Remove any legacy stub directory first (for backward compatibility)
+		            RemoveDisabledStub(workshopPath, addonId);
+		            TryRestoreMovedAsideWorkshopFolder(addonId);
 
-            string? primaryGmaPath = null;
+		            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
 
-            if (!string.IsNullOrEmpty(gmodCachePath) && !string.IsNullOrEmpty(gmodCacheAddonsPath))
-            {
-                string gmaSourcePath = Path.Combine(gmodCacheAddonsPath, addonId + ".gma");
-                string gmaCachePath = Path.Combine(gmodCachePath, addonId + ".gma");
-                ValidatePath(gmaSourcePath, "gmaSourcePath");
-                ValidatePath(gmaCachePath, "gmaCachePath");
+			            // Soft mode: do not touch workshop/cache files; addons.txt is enough.
+			            if (DisableMode == DisableMode.Soft)
+			            {
+			                if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
+			                {
+			                    errorHandler.HandleInfo(
+			                        "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+			                        "EnableGmaAddon");
+			                }
+			                if (addonInfo != null)
+			                {
+			                    addonInfo.IsEnabled = true;
+			                    addonInfo.IsGmaFile = true;
+			                }
+		                return;
+		            }
+		
+		            var sourceGmaPath = ResolveGmaSourcePath(addonId, addonInfo);
+	            if (sourceGmaPath == null)
+	            {
+	                errorHandler.HandleWarning(
+	                    $"GMA file for addon {addonId} could not be located; skipping enable operation. {BuildGmaSourceDiagnostics(addonId, addonInfo)}",
+	                    "EnableGmaAddon");
+	                return;
+	            }
+	
+	            var managedGmaPath = EnsureManagedGmaAvailable(addonId, addonInfo, sourceGmaPath);
+	            var primaryGmaPath = managedGmaPath ?? sourceGmaPath;
+	
+	            EnsureWorkshopStructureForGma(addonId, primaryGmaPath);
+	            EnsureCacheStructureForGma(addonId, primaryGmaPath);
 
-                if (File.Exists(gmaSourcePath))
-                {
-                    var cacheDirectory = Path.GetDirectoryName(gmaCachePath);
-                    if (!string.IsNullOrEmpty(cacheDirectory) && !Directory.Exists(cacheDirectory))
-                    {
-                        Directory.CreateDirectory(cacheDirectory);
-                    }
-
-                    if (AreSameDrive(gmaSourcePath, gmaCachePath))
-                    {
-                        if (!CreateHardLinkSafe(gmaCachePath, gmaSourcePath))
-                        {
-                            errorHandler.HandleWarning($"Failed to create hard link for {addonId}.gma; copying file instead.", "EnableGmaAddon");
-                            File.Copy(gmaSourcePath, gmaCachePath, true);
-                        }
-                    }
-                    else
-                    {
-                        File.Copy(gmaSourcePath, gmaCachePath, true);
-                    }
-
-                    primaryGmaPath = gmaSourcePath;
-                }
-                else if (File.Exists(gmaCachePath))
-                {
-                    primaryGmaPath = gmaCachePath;
-                }
-            }
-
-            if (primaryGmaPath == null)
-            {
-                string managerGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
-                ValidatePath(managerGmaPath, "managerGmaPath");
-                if (File.Exists(managerGmaPath))
-                {
-                    primaryGmaPath = managerGmaPath;
-                }
-            }
-
-            if (primaryGmaPath == null)
-            {
-                errorHandler.HandleWarning($"GMA file for addon {addonId} could not be located; skipping enable operation.", "EnableGmaAddon");
-                return;
-            }
-
-            EnsureWorkshopStructureForGma(addonId, primaryGmaPath);
-        }
+		            if (addonInfo != null)
+		            {
+		                addonInfo.IsEnabled = true;
+		                addonInfo.IsGmaFile = true;
+		            }
+		        }
 
         private void EnsureWorkshopContentPresence(string addonId)
         {
@@ -1573,80 +1820,573 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private string? ResolveGmaSourcePath(string addonId, WorkshopAddon? addonInfo)
-        {
-            var candidates = new List<string>();
+		        private string? ResolveGmaSourcePath(string addonId, WorkshopAddon? addonInfo)
+		        {
+		            var candidates = new List<string>();
 
-            if (addonInfo != null && !string.IsNullOrEmpty(addonInfo.FolderPath) && addonInfo.FolderPath.EndsWith(".gma", StringComparison.OrdinalIgnoreCase))
-            {
-                candidates.Add(addonInfo.FolderPath);
-            }
+		            if (addonInfo != null &&
+		                !string.IsNullOrEmpty(addonInfo.FolderPath) &&
+		                addonInfo.FolderPath.EndsWith(".gma", StringComparison.OrdinalIgnoreCase))
+		            {
+		                candidates.Add(addonInfo.FolderPath);
+		            }
 
-            if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
-            {
-                candidates.Add(Path.Combine(gmodCacheAddonsPath, addonId + ".gma"));
-            }
-            if (!string.IsNullOrEmpty(gmodCachePath))
-            {
-                candidates.Add(Path.Combine(gmodCachePath, addonId + ".gma"));
-            }
+		            // Workshopの生データ（信頼できるソース）
+		            candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.gma"));
+		            candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.cache"));
 
-            candidates.Add(Path.Combine(addonsPath, addonId, $"{addonId}.gma"));
-            candidates.Add(Path.Combine(addonsPath, $"{addonId}.gma"));
+		            // 管理フォルダ（優先）
+		            if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
+		            {
+		                candidates.Add(Path.Combine(gmodCacheAddonsPath, addonId + ".gma"));
+		            }
 
-            foreach (var candidate in candidates)
-            {
-                try
+		            candidates.Add(Path.Combine(addonsPath, addonId, $"{addonId}.gma"));
+		            candidates.Add(Path.Combine(addonsPath, $"{addonId}.gma"));
+
+		            // GModキャッシュ（最後の手段）
+		            if (!string.IsNullOrEmpty(gmodCachePath))
+		            {
+		                candidates.Add(Path.Combine(gmodCachePath, addonId + ".gma"));
+		                candidates.Add(Path.Combine(gmodCachePath, addonId + ".cache"));
+		            }
+
+		            string? best = null;
+		            long bestLength = -1;
+
+		            foreach (var candidate in candidates)
+		            {
+		                try
+		                {
+		                    ValidatePath(candidate, "gmaCandidatePath");
+		                    if (!File.Exists(candidate))
+		                    {
+		                        continue;
+		                    }
+
+		                    if (!LooksLikeGmaFile(candidate))
+		                    {
+		                        continue;
+		                    }
+
+		                    var length = new FileInfo(candidate).Length;
+		                    if (length > bestLength)
+		                    {
+		                        best = candidate;
+		                        bestLength = length;
+		                    }
+		                }
+		                catch
+		                {
+		                    // Ignore invalid candidate paths
+		                }
+		            }
+
+		            return best;
+		        }
+
+                private string BuildGmaSourceDiagnostics(string addonId, WorkshopAddon? addonInfo)
                 {
-                    ValidatePath(candidate, "gmaCandidatePath");
-                    if (File.Exists(candidate))
+                    try
                     {
-                        return candidate;
+                        var candidates = new List<string>();
+
+                        if (addonInfo != null &&
+                            !string.IsNullOrEmpty(addonInfo.FolderPath) &&
+                            addonInfo.FolderPath.EndsWith(".gma", StringComparison.OrdinalIgnoreCase))
+                        {
+                            candidates.Add(addonInfo.FolderPath);
+                        }
+
+                        candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.gma"));
+                        candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.cache"));
+
+                        if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
+                        {
+                            candidates.Add(Path.Combine(gmodCacheAddonsPath, addonId + ".gma"));
+                        }
+
+                        candidates.Add(Path.Combine(addonsPath, addonId, $"{addonId}.gma"));
+                        candidates.Add(Path.Combine(addonsPath, $"{addonId}.gma"));
+
+                        if (!string.IsNullOrEmpty(gmodCachePath))
+                        {
+                            candidates.Add(Path.Combine(gmodCachePath, addonId + ".gma"));
+                            candidates.Add(Path.Combine(gmodCachePath, addonId + ".cache"));
+                        }
+
+                        var unique = candidates
+                            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        var rows = new List<string>();
+                        foreach (var candidate in unique.Take(10))
+                        {
+                            try
+                            {
+                                ValidatePath(candidate, "gmaCandidatePath");
+                                if (!File.Exists(candidate))
+                                {
+                                    rows.Add($"{candidate}: missing");
+                                    continue;
+                                }
+
+                                long length;
+                                try
+                                {
+                                    length = new FileInfo(candidate).Length;
+                                }
+                                catch
+                                {
+                                    length = -1;
+                                }
+
+                                string header = "????";
+                                try
+                                {
+                                    using var stream = File.Open(candidate, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                                    Span<byte> buf = stackalloc byte[4];
+                                    int read = stream.Read(buf);
+                                    if (read == 4)
+                                    {
+                                        header = $"{(char)buf[0]}{(char)buf[1]}{(char)buf[2]}{(char)buf[3]}";
+                                    }
+                                }
+                                catch
+                                {
+                                    header = "readfail";
+                                }
+
+                                bool looksLikeGma = length >= 8 && header == "GMAD";
+                                rows.Add($"{candidate}: len={length} header={header} gma={looksLikeGma}");
+                            }
+                            catch (Exception ex)
+                            {
+                                rows.Add($"{candidate}: invalid ({ex.GetType().Name})");
+                            }
+                        }
+
+                        return "GMA candidates: " + string.Join(" | ", rows);
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"GMA candidates: (failed to inspect: {ex.GetType().Name})";
                     }
                 }
-                catch
+
+		        private bool LooksLikeGmaFile(string path)
+		        {
+		            try
+		            {
+		                ValidatePath(path, "gmaPath");
+		                if (!File.Exists(path))
+		                {
+		                    return false;
+		                }
+
+		                var fileInfo = new FileInfo(path);
+		                if (fileInfo.Length < 8)
+		                {
+		                    return false;
+		                }
+
+		                using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+		                Span<byte> header = stackalloc byte[4];
+		                var read = stream.Read(header);
+		                if (read != 4)
+		                {
+		                    return false;
+		                }
+
+		                return header[0] == (byte)'G' &&
+		                       header[1] == (byte)'M' &&
+		                       header[2] == (byte)'A' &&
+		                       header[3] == (byte)'D';
+		            }
+		            catch
+		            {
+		                return false;
+		            }
+		        }
+		
+		        private string? EnsureManagedGmaAvailable(string addonId, WorkshopAddon? addonInfo, string? preferredSourcePath = null)
+		        {
+		            try
+		            {
+		                string managedGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
+		
+		                ValidatePath(managedGmaPath, "managedGmaPath");
+
+		                long? managedLength = null;
+		                if (File.Exists(managedGmaPath))
+		                {
+		                    if (LooksLikeGmaFile(managedGmaPath))
+		                    {
+		                        managedLength = new FileInfo(managedGmaPath).Length;
+		                    }
+		                    else
+		                    {
+		                        try { File.SetAttributes(managedGmaPath, FileAttributes.Normal); } catch { }
+		                        try { File.Delete(managedGmaPath); } catch { }
+		                    }
+		                }
+		
+		                string? source = null;
+		                if (!string.IsNullOrEmpty(preferredSourcePath))
+		                {
+		                    try
+		                    {
+		                        ValidatePath(preferredSourcePath, "preferredSourcePath");
+		                        if (LooksLikeGmaFile(preferredSourcePath))
+		                        {
+		                            source = preferredSourcePath;
+		                        }
+		                    }
+		                    catch
+		                    {
+		                        // Ignore invalid preferred path
+		                    }
+		                }
+		
+		                source ??= ResolveGmaSourcePath(addonId, addonInfo);
+
+		                // If we already have a valid managed copy and can't locate a better source, keep it.
+		                if (string.IsNullOrEmpty(source) || !LooksLikeGmaFile(source))
+		                {
+		                    return managedLength.HasValue ? managedGmaPath : null;
+		                }
+		
+		                if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(managedGmaPath), StringComparison.OrdinalIgnoreCase))
+		                {
+		                    return managedGmaPath;
+		                }
+
+		                var sourceLength = new FileInfo(source).Length;
+		                if (managedLength.HasValue && managedLength.Value >= sourceLength)
+		                {
+		                    return managedGmaPath;
+		                }
+		
+		                var managedDirectory = Path.GetDirectoryName(managedGmaPath);
+		                if (!string.IsNullOrEmpty(managedDirectory) && !Directory.Exists(managedDirectory))
+		                {
+		                    Directory.CreateDirectory(managedDirectory);
+		                }
+
+		                if (File.Exists(managedGmaPath))
+		                {
+		                    try { File.SetAttributes(managedGmaPath, FileAttributes.Normal); } catch { }
+		                    File.Delete(managedGmaPath);
+		                }
+		
+                        if (AreSameDrive(source, managedGmaPath))
+                        {
+                            if (!CreateHardLinkSafe(managedGmaPath, source))
+                            {
+                                CopyFileForLinkFallback(addonId, source, managedGmaPath, "EnsureManagedGmaAvailable");
+                            }
+                        }
+                        else
+                        {
+                            CopyFileForLinkFallback(addonId, source, managedGmaPath, "EnsureManagedGmaAvailable");
+                        }
+
+                        return managedGmaPath;
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ex is StrictLinkModeException)
+                        {
+                            throw;
+                        }
+
+                        errorHandler.HandleWarning($"Failed to ensure managed GMA for addon {addonId}: {ex.Message}", "EnsureManagedGmaAvailable");
+                        return null;
+                    }
+                }
+
+	        private void TryUnsubscribeFromWorkshop(string addonId)
+	        {
+	            try
+	            {
+                var task = UnsubscribeFromWorkshopAsync(addonId);
+                var completed = task.Wait(TimeSpan.FromSeconds(5));
+                if (!completed)
                 {
-                    // Ignore invalid candidate paths
+                    errorHandler.HandleWarning($"Unsubscribe request for addon {addonId} timed out; leaving subscription unchanged.", "DisableAddon");
                 }
             }
-
-            return null;
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to unsubscribe from workshop for addon {addonId}: {ex.Message}", "DisableAddon");
+            }
         }
 
-        private void EnsureWorkshopStructureForGma(string addonId, string sourceGmaPath)
+	        private void EnsureGmaFileLinkedOrCopied(string addonId, string destinationPath, string sourceGmaPath, string context)
+	        {
+	            try
+	            {
+	                ValidatePath(sourceGmaPath, "sourceGmaPath");
+	                ValidatePath(destinationPath, "destinationPath");
+	
+	                if (!LooksLikeGmaFile(sourceGmaPath))
+	                {
+	                    errorHandler.HandleWarning($"Source GMA for addon {addonId} is invalid or missing: {sourceGmaPath}", context);
+	                    return;
+	                }
+	
+	                var destinationDirectory = Path.GetDirectoryName(destinationPath);
+	                if (!string.IsNullOrEmpty(destinationDirectory) && !Directory.Exists(destinationDirectory))
+	                {
+	                    Directory.CreateDirectory(destinationDirectory);
+	                }
+	
+	                var sameDrive = AreSameDrive(sourceGmaPath, destinationPath);
+	
+	                if (File.Exists(destinationPath))
+	                {
+	                    bool isOk = false;
+	                    if (LooksLikeGmaFile(destinationPath))
+	                    {
+	                        if (sameDrive)
+	                        {
+	                            isOk = IsHardLink(destinationPath, sourceGmaPath);
+	                        }
+	                        else
+	                        {
+	                            isOk = new FileInfo(destinationPath).Length == new FileInfo(sourceGmaPath).Length;
+	                        }
+	                    }
+	
+	                    if (isOk)
+	                    {
+	                        return;
+	                    }
+	
+	                    try { File.SetAttributes(destinationPath, FileAttributes.Normal); } catch { }
+	                    File.Delete(destinationPath);
+	                }
+	
+                    if (sameDrive)
+                    {
+                        if (!CreateHardLinkSafe(destinationPath, sourceGmaPath))
+                        {
+                            if (!StrictLinkMode)
+                            {
+                                errorHandler.HandleWarning($"Failed to create hard link for {Path.GetFileName(destinationPath)}; copying file instead.", context);
+                            }
+                            CopyFileForLinkFallback(addonId, sourceGmaPath, destinationPath, context);
+                        }
+                    }
+                    else
+                    {
+                        CopyFileForLinkFallback(addonId, sourceGmaPath, destinationPath, context);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (ex is StrictLinkModeException)
+                    {
+                        throw;
+                    }
+
+                    errorHandler.HandleWarning($"Failed to ensure GMA file for addon {addonId}: {ex.Message}", context);
+                }
+            }
+	
+	        private void EnsureCacheStructureForGma(string addonId, string sourceGmaPath)
+	        {
+	            if (string.IsNullOrEmpty(gmodCachePath))
+	            {
+	                return;
+	            }
+	
+	            string cacheGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
+	            ValidatePath(cacheGmaPath, "cacheGmaPath");
+	
+	            EnsureGmaFileLinkedOrCopied(addonId, cacheGmaPath, sourceGmaPath, "EnableGmaAddon");
+	        }
+
+        private void RemoveWorkshopPresence(string addonId, bool isGmaAddon)
         {
-            ValidatePath(sourceGmaPath, "sourceGmaPath");
+            string workshopAddonPath = Path.Combine(workshopPath, addonId);
+            ValidatePath(workshopAddonPath, "workshopAddonPath");
 
             try
             {
-                junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, sourceGmaPath);
+                if (Directory.Exists(workshopAddonPath))
+                {
+                    if (junctionService.IsJunction(workshopAddonPath))
+                    {
+                        junctionService.RemoveJunction(workshopAddonPath);
+                    }
+                    else if (File.Exists(Path.Combine(workshopAddonPath, $"{addonId}.gma")))
+                    {
+                        // Hard link or copy case
+                        var gmaFile = Path.Combine(workshopAddonPath, $"{addonId}.gma");
+                        File.Delete(gmaFile);
+                        // Clean up empty directory
+                        if (!Directory.EnumerateFileSystemEntries(workshopAddonPath).Any())
+                        {
+                            Directory.Delete(workshopAddonPath, true);
+                        }
+                    }
+                    else if (File.Exists(Path.Combine(workshopAddonPath, ".gam_disabled")))
+                    {
+                        Directory.Delete(workshopAddonPath, true);
+                    }
+                    else
+                    {
+                        // Unknown directory type: move aside to avoid Steam seeing active content
+                        var backup = workshopAddonPath + "_disabled_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                        Directory.Move(workshopAddonPath, backup);
+                    }
+                }
             }
-            catch (Exception ex) when (
-                (ex is Win32Exception win32 && win32.NativeErrorCode == ERROR_NOT_SAME_DEVICE) ||
-                ex is InvalidOperationException)
+            catch (Exception ex)
             {
-                if (ex is InvalidOperationException)
-                {
-                    errorHandler.HandleWarning(ex.Message, "EnableGmaAddon");
+                errorHandler.HandleWarning($"Failed to remove workshop entry for {addonId}: {ex.Message}", "RemoveWorkshopPresence");
+            }
+
+	            if (isGmaAddon)
+	            {
+	                try
+	                {
+	                    if (!string.IsNullOrEmpty(gmodCachePath))
+	                    {
+	                        var cacheGma = Path.Combine(gmodCachePath, $"{addonId}.gma");
+	                        if (File.Exists(cacheGma))
+                        {
+                            File.Delete(cacheGma);
+                        }
+
+                        var cacheCache = Path.Combine(gmodCachePath, $"{addonId}.cache");
+                        if (File.Exists(cacheCache) && LooksLikeGmaFile(cacheCache))
+                        {
+                            File.Delete(cacheCache);
+                        }
+                    }
                 }
-                string addonDirectory = Path.Combine(workshopPath, addonId);
-                ValidatePath(addonDirectory, "addonDirectory");
-
-                if (!Directory.Exists(addonDirectory))
+                catch (Exception ex)
                 {
-                    Directory.CreateDirectory(addonDirectory);
+                    errorHandler.HandleWarning($"Failed to clean cache copy for {addonId}: {ex.Message}", "RemoveWorkshopPresence");
                 }
-
-                string destinationPath = Path.Combine(addonDirectory, $"{addonId}.gma");
-                ValidatePath(destinationPath, "destinationPath");
-
-                File.Copy(sourceGmaPath, destinationPath, true);
-
-                errorHandler.HandleWarning(
-                    $"Hard link unavailable across volumes for addon {addonId}; copied GMA instead.",
-                    "EnableGmaAddon");
             }
         }
+
+        private void CreateDisabledStub(string workshopRoot, string addonId)
+        {
+            try
+            {
+                var stubPath = Path.Combine(workshopRoot, addonId);
+                ValidatePath(stubPath, "stubPath");
+
+                if (!Directory.Exists(stubPath))
+                {
+                    Directory.CreateDirectory(stubPath);
+                }
+
+                var markerPath = Path.Combine(stubPath, ".gam_disabled");
+                File.WriteAllText(markerPath, "disabled by GmodAddonManager");
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to create disabled stub for addon {addonId}: {ex.Message}", "CreateDisabledStub");
+            }
+        }
+
+        private void TryRestoreMovedAsideWorkshopFolder(string addonId)
+        {
+            try
+            {
+                string workshopAddonPath = Path.Combine(workshopPath, addonId);
+                ValidatePath(workshopAddonPath, "workshopAddonPath");
+
+                if (Directory.Exists(workshopAddonPath) && !File.Exists(Path.Combine(workshopAddonPath, ".gam_disabled")))
+                {
+                    return;
+                }
+
+                var candidates = new List<string>();
+                candidates.AddRange(Directory.GetDirectories(workshopPath, addonId + "_disabled_*"));
+                candidates.AddRange(Directory.GetDirectories(workshopPath, addonId + "_backup_*"));
+
+                if (candidates.Count == 0)
+                {
+                    return;
+                }
+
+                string bestCandidate = candidates
+                    .OrderByDescending(path =>
+                    {
+                        try { return Directory.GetLastWriteTimeUtc(path); } catch { return DateTime.MinValue; }
+                    })
+                    .First();
+
+                RemoveDisabledStub(workshopPath, addonId);
+                if (Directory.Exists(workshopAddonPath))
+                {
+                    return;
+                }
+
+                Directory.Move(bestCandidate, workshopAddonPath);
+                errorHandler.HandleInfo(
+                    $"Restored workshop folder for addon {addonId} from {Path.GetFileName(bestCandidate)}",
+                    "RestoreWorkshopBackup");
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to restore workshop folder for addon {addonId}: {ex.Message}",
+                    "RestoreWorkshopBackup");
+            }
+        }
+
+	        private void EnsureWorkshopStructureForGma(string addonId, string sourceGmaPath)
+	        {
+	            ValidatePath(sourceGmaPath, "sourceGmaPath");
+
+	            try
+	            {
+	                string addonDirectory = Path.Combine(workshopPath, addonId);
+	                ValidatePath(addonDirectory, "addonDirectory");
+
+	                if (!Directory.Exists(addonDirectory))
+	                {
+	                    Directory.CreateDirectory(addonDirectory);
+	                }
+	                else if (File.GetAttributes(addonDirectory).HasFlag(FileAttributes.ReparsePoint))
+	                {
+	                    // Ensure a normal directory for GMA-style workshop layout.
+	                    try
+	                    {
+	                        if (junctionService.IsJunction(addonDirectory))
+	                        {
+	                            junctionService.RemoveJunction(addonDirectory);
+	                        }
+	                    }
+	                    catch (Exception ex)
+	                    {
+	                        errorHandler.HandleWarning($"Failed to normalize workshop directory for addon {addonId}: {ex.Message}", "EnableGmaAddon");
+	                    }
+
+	                    if (!Directory.Exists(addonDirectory))
+	                    {
+	                        Directory.CreateDirectory(addonDirectory);
+	                    }
+	                }
+
+	                string workshopGmaPath = Path.Combine(addonDirectory, $"{addonId}.gma");
+	                ValidatePath(workshopGmaPath, "workshopGmaPath");
+
+	                EnsureGmaFileLinkedOrCopied(addonId, workshopGmaPath, sourceGmaPath, "EnableGmaAddon");
+	            }
+	            catch (Exception ex)
+	            {
+	                errorHandler.HandleWarning($"Failed to ensure workshop GMA for addon {addonId}: {ex.Message}", "EnableGmaAddon");
+	            }
+	        }
         
         /// <summary>
         /// Remove stub directory before enabling an addon
@@ -1712,6 +2452,128 @@ namespace GmodAddonManager.Core.Services
             }
 
             return enabledAddons;
+        }
+
+        public AddonStateSnapshot CaptureState()
+        {
+            var enabled = new HashSet<string>(GetEnabledAddons(), StringComparer.Ordinal);
+            var states = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+            foreach (var addonId in configuration.AddonMetadata.Keys
+                         .Where(id => id != "*")
+                         .OrderBy(id => id, StringComparer.Ordinal))
+            {
+                states[addonId] = enabled.Contains(addonId);
+            }
+
+            return BuildSnapshot(states, "actual");
+        }
+
+        public AddonStateSnapshot CaptureExpectedStateSnapshot()
+        {
+            return BuildSnapshot(BuildExpectedStates(), "expected");
+        }
+
+        public string ComputeStateHash(AddonStateSnapshot snapshot)
+        {
+            using var sha = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(snapshot.NormalizedState);
+            var hash = sha.ComputeHash(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        private Dictionary<string, bool> BuildExpectedStates()
+        {
+            var states = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+            foreach (var addonId in configuration.AddonMetadata.Keys
+                         .Where(id => id != "*")
+                         .OrderBy(id => id, StringComparer.Ordinal))
+            {
+                states[addonId] = CalculateFinalAddonState(addonId);
+            }
+
+            return states;
+        }
+
+        private AddonStateSnapshot BuildSnapshot(Dictionary<string, bool> states, string? source)
+        {
+            var sb = new StringBuilder();
+            bool first = true;
+
+            foreach (var kvp in states.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
+            {
+                if (!first)
+                {
+                    sb.Append('\n');
+                }
+
+                sb.Append(kvp.Key).Append('=').Append(kvp.Value ? '1' : '0');
+                first = false;
+            }
+
+            return new AddonStateSnapshot(
+                new Dictionary<string, bool>(states, StringComparer.Ordinal),
+                sb.ToString(),
+                DateTime.UtcNow,
+                source);
+        }
+
+        private void LogLinkFallbackCopy(string addonId, string context)
+        {
+            eventLogger.LogEvent(
+                "LinkFallbackCopy",
+                targetId: addonId,
+                result: "success",
+                errorCode: $"copy_used:{context}");
+        }
+
+        private void LogStrictLinkViolation(string addonId, string context)
+        {
+            eventLogger.LogEvent(
+                "StrictLinkViolation",
+                targetId: addonId,
+                result: "fail",
+                errorCode: $"strict_link_copy_blocked:{context}");
+        }
+
+        private void CopyFileForLinkFallback(string addonId, string source, string destination, string context, bool overwrite = true)
+        {
+            if (StrictLinkMode)
+            {
+                LogStrictLinkViolation(addonId, context);
+                throw new StrictLinkModeException($"StrictLinkMode blocked File.Copy for addon {addonId} ({context}).");
+            }
+
+            LogLinkFallbackCopy(addonId, context);
+            File.Copy(source, destination, overwrite);
+        }
+
+        private static StrictLinkModeException? FindStrictLinkModeException(Exception ex)
+        {
+            if (ex is StrictLinkModeException strict)
+            {
+                return strict;
+            }
+
+            if (ex is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.Flatten().InnerExceptions)
+                {
+                    var found = FindStrictLinkModeException(inner);
+                    if (found != null)
+                    {
+                        return found;
+                    }
+                }
+            }
+
+            if (ex.InnerException != null)
+            {
+                return FindStrictLinkModeException(ex.InnerException);
+            }
+
+            return null;
         }
 
         public async Task LoadConfigurationAsync()
@@ -1989,6 +2851,11 @@ namespace GmodAddonManager.Core.Services
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset != null && !asset.ContainsAllAddons())
             {
+                var operationId = eventLogger.NewOperationId();
+                var beforeSnapshot = CaptureState();
+                var beforeHash = ComputeStateHash(beforeSnapshot);
+                var stopwatch = Stopwatch.StartNew();
+
                 // Undo記録
                 var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) 
                     ? configuration.AddonMetadata[addonId] 
@@ -2043,8 +2910,47 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
                 
-                asset.AddAddon(addonId, state);
-                UpdateAddonStates();
+                try
+                {
+                    asset.AddAddon(addonId, state);
+                    UpdateAddonStates();
+
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+
+                    eventLogger.LogEvent(
+                        "AssetAddAddon",
+                        targetId: addonId,
+                        result: "success",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        operationId: operationId,
+                        assetId: assetId);
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+                    var errorCode = FindStrictLinkModeException(ex) != null
+                        ? "strict_link_copy_blocked"
+                        : "asset_add_failed";
+
+                    eventLogger.LogEvent(
+                        "AssetAddAddon",
+                        targetId: addonId,
+                        result: "fail",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        errorCode: errorCode,
+                        operationId: operationId,
+                        assetId: assetId);
+
+                    throw;
+                }
             }
         }
 
@@ -2081,6 +2987,11 @@ namespace GmodAddonManager.Core.Services
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset != null && !asset.ContainsAllAddons())
             {
+                var operationId = eventLogger.NewOperationId();
+                var beforeSnapshot = CaptureState();
+                var beforeHash = ComputeStateHash(beforeSnapshot);
+                var stopwatch = Stopwatch.StartNew();
+
                 // 現在の状態を記録
                 var currentState = asset.GetAddonState(addonId);
                 
@@ -2101,8 +3012,47 @@ namespace GmodAddonManager.Core.Services
                     AddonState = currentState
                 });
                 
-                asset.RemoveAddon(addonId);
-                UpdateAddonStates();
+                try
+                {
+                    asset.RemoveAddon(addonId);
+                    UpdateAddonStates();
+
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+
+                    eventLogger.LogEvent(
+                        "AssetRemoveAddon",
+                        targetId: addonId,
+                        result: "success",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        operationId: operationId,
+                        assetId: assetId);
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+                    var errorCode = FindStrictLinkModeException(ex) != null
+                        ? "strict_link_copy_blocked"
+                        : "asset_remove_failed";
+
+                    eventLogger.LogEvent(
+                        "AssetRemoveAddon",
+                        targetId: addonId,
+                        result: "fail",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        errorCode: errorCode,
+                        operationId: operationId,
+                        assetId: assetId);
+
+                    throw;
+                }
             }
         }
 
@@ -2132,28 +3082,6 @@ namespace GmodAddonManager.Core.Services
                 if (asset.GetAddonState(addonId) != AddonState.Excluded)
                 {
                     asset.SetAddonState(addonId, AddonState.Enabled);
-                }
-            }
-            
-            // サブスクライブアセットの場合、GMAファイルを即座に有効化
-            if (assetId == "subscribe-system-asset")
-            {
-                foreach (var addonId in addonIds)
-                {
-                    if (addonId == "*") continue;
-                    
-                    var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
-                    if (addonInfo != null && addonInfo.IsGmaFile && asset.GetAddonState(addonId) == AddonState.Enabled)
-                    {
-                        try
-                        {
-                            EnableGmaAddon(addonId);
-                        }
-                        catch (Exception ex)
-                        {
-                            errorHandler.HandleError(ex, $"Failed to enable GMA addon {addonId} from subscribe asset", ErrorSeverity.Warning);
-                        }
-                    }
                 }
             }
             
@@ -2190,46 +3118,103 @@ namespace GmodAddonManager.Core.Services
                 }
             }
             
-            // サブスクライブアセットの場合、GMAファイルを即座に無効化
-            if (assetId == "subscribe-system-asset")
-            {
-                foreach (var addonId in addonIds)
-                {
-                    if (addonId == "*") continue;
-                    
-                    var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
-                    if (addonInfo != null && addonInfo.IsGmaFile)
-                    {
-                        // 他のアセットで有効になっていない場合のみ無効化
-                        bool isEnabledInOtherAsset = false;
-                        foreach (var otherAsset in configuration.Assets)
-                        {
-                            if (otherAsset.Id != assetId && otherAsset.Enabled && 
-                                (otherAsset.ContainsAllAddons() || otherAsset.Addons.Contains(addonId)) &&
-                                otherAsset.GetAddonState(addonId) == AddonState.Enabled)
-                            {
-                                isEnabledInOtherAsset = true;
-                                break;
-                            }
-                        }
-                        
-                        if (!isEnabledInOtherAsset)
-                        {
-                            try
-                            {
-                                DisableAddon(addonId);
-                            }
-                            catch (Exception ex)
-                            {
-                                errorHandler.HandleError(ex, $"Failed to disable GMA addon {addonId} from subscribe asset", ErrorSeverity.Warning);
-                            }
-                        }
-                    }
-                }
-            }
-            
             // アドオン状態を更新
             await UpdateAddonStatesAsync();
+        }
+
+        public async Task<AssetApplyResult> ApplyAssetExclusiveAsync(string assetId)
+        {
+            var result = new AssetApplyResult { AssetId = assetId };
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+
+            if (asset == null)
+            {
+                result.Success = false;
+                result.ErrorCode = "asset_not_found";
+                eventLogger.LogEvent(
+                    "AssetApplyExclusiveEnd",
+                    targetId: assetId,
+                    result: "fail",
+                    errorCode: result.ErrorCode);
+                return result;
+            }
+
+            var operationId = eventLogger.NewOperationId();
+            var beforeSnapshot = CaptureState();
+            var beforeHash = ComputeStateHash(beforeSnapshot);
+            result.BeforeHash = beforeHash;
+
+            eventLogger.LogEvent(
+                "AssetApplyExclusiveStart",
+                targetId: assetId,
+                result: "start",
+                beforeHash: beforeHash,
+                operationId: operationId);
+
+            var stopwatch = Stopwatch.StartNew();
+            StateMatchResult? matchResult = null;
+            StrictLinkModeException? strictFailure = null;
+            string? errorCode = null;
+
+            try
+            {
+                foreach (var item in configuration.Assets)
+                {
+                    item.Enabled = item.Id == assetId;
+                }
+
+                asset.Enabled = true;
+
+                matchResult = await UpdateAddonStatesInternalAsync(logEvents: true);
+                await SaveConfigurationAsync();
+
+                result.Success = matchResult.Matched;
+                result.AfterHash = ComputeStateHash(matchResult.Snapshot);
+                result.ExpectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
+                errorCode = matchResult.Matched ? null : "state_mismatch";
+            }
+            catch (StrictLinkModeException ex)
+            {
+                strictFailure = ex;
+                result.Success = false;
+                errorCode = "strict_link_copy_blocked";
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                errorCode = "apply_failed";
+                errorHandler.HandleError(ex, $"ApplyAssetExclusive failed for asset {assetId}", ErrorSeverity.Warning);
+            }
+            finally
+            {
+                stopwatch.Stop();
+                result.DurationMs = stopwatch.ElapsedMilliseconds;
+
+                if (matchResult == null)
+                {
+                    var afterSnapshot = CaptureState();
+                    result.AfterHash = ComputeStateHash(afterSnapshot);
+                    result.ExpectedHash = ComputeStateHash(CaptureExpectedStateSnapshot());
+                }
+
+                eventLogger.LogEvent(
+                    "AssetApplyExclusiveEnd",
+                    targetId: assetId,
+                    result: result.Success ? "success" : "fail",
+                    durationMs: result.DurationMs,
+                    beforeHash: result.BeforeHash,
+                    afterHash: result.AfterHash,
+                    expectedHash: result.ExpectedHash,
+                    errorCode: errorCode,
+                    operationId: operationId);
+            }
+
+            if (strictFailure != null)
+            {
+                throw strictFailure;
+            }
+
+            return result;
         }
 
         public string GetWorkshopPath() => workshopPath;
@@ -2260,34 +3245,170 @@ namespace GmodAddonManager.Core.Services
         /// </summary>
         public async Task UpdateAddonStatesAsync()
         {
-            var allAddonIds = configuration.AddonMetadata.Keys.ToList();
-            
-            // シンボリックリンクの処理（従来の処理）
-            var tasks = allAddonIds.Select(async addonId =>
+            await UpdateAddonStatesInternalAsync(logEvents: true);
+        }
+
+        private sealed class StateMatchResult
+        {
+            public StateMatchResult(AddonStateSnapshot snapshot, AddonStateSnapshot expectedSnapshot, bool matched, long durationMs)
+            {
+                Snapshot = snapshot;
+                ExpectedSnapshot = expectedSnapshot;
+                Matched = matched;
+                DurationMs = durationMs;
+            }
+
+            public AddonStateSnapshot Snapshot { get; }
+            public AddonStateSnapshot ExpectedSnapshot { get; }
+            public bool Matched { get; }
+            public long DurationMs { get; }
+        }
+
+        private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents)
+        {
+            var allAddonIds = configuration.AddonMetadata.Keys
+                .Where(addonId => addonId != "*")
+                .ToList();
+
+            var expectedStates = BuildExpectedStates();
+
+            string? operationId = logEvents ? eventLogger.NewOperationId() : null;
+            AddonStateSnapshot? beforeSnapshot = null;
+            string? beforeHash = null;
+
+            if (logEvents)
+            {
+                beforeSnapshot = CaptureState();
+                beforeHash = ComputeStateHash(beforeSnapshot);
+                eventLogger.LogEvent(
+                    "UpdateAddonStatesStart",
+                    targetId: "all",
+                    result: "start",
+                    beforeHash: beforeHash,
+                    operationId: operationId);
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+
+            Exception? updateError = null;
+
+            var tasks = allAddonIds.Select(addonId => Task.Run(() =>
             {
                 var finalState = CalculateFinalAddonState(addonId);
-                
                 try
                 {
-                    await Task.Run(() =>
+                    if (finalState)
                     {
-                        if (finalState)
-                        {
-                            EnableAddon(addonId);
-                        }
-                        else
-                        {
-                            DisableAddon(addonId);
-                        }
-                    });
+                        EnableAddon(addonId);
+                    }
+                    else
+                    {
+                        DisableAddon(addonId);
+                    }
                 }
                 catch (Exception ex)
                 {
+                    if (FindStrictLinkModeException(ex) != null)
+                    {
+                        throw;
+                    }
+
                     errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
                 }
-            });
-            
-            await Task.WhenAll(tasks);
+            })).ToList();
+
+            try
+            {
+                await Task.WhenAll(tasks);
+            }
+            catch (Exception ex)
+            {
+                updateError = ex;
+                if (FindStrictLinkModeException(ex) != null)
+                {
+                    var afterSnapshot = CaptureState();
+                    var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
+                    var afterHash = ComputeStateHash(afterSnapshot);
+                    var expectedHash = ComputeStateHash(expectedSnapshot);
+
+                    if (logEvents)
+                    {
+                        eventLogger.LogEvent(
+                            "UpdateAddonStatesEnd",
+                            targetId: "all",
+                            result: "fail",
+                            durationMs: stopwatch.ElapsedMilliseconds,
+                            beforeHash: beforeHash,
+                            afterHash: afterHash,
+                            expectedHash: expectedHash,
+                            errorCode: "strict_link_copy_blocked",
+                            operationId: operationId);
+                    }
+
+                    throw;
+                }
+            }
+
+            var matchResult = await WaitForExpectedStateAsync(expectedStates);
+            stopwatch.Stop();
+
+            if (eventLogger.IsExperimentContextActive)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            if (logEvents)
+            {
+                var afterHash = ComputeStateHash(matchResult.Snapshot);
+                var expectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
+                var result = updateError == null && matchResult.Matched ? "success" : "fail";
+                var errorCode = updateError != null
+                    ? "update_failed"
+                    : (matchResult.Matched ? null : "state_mismatch");
+
+                eventLogger.LogEvent(
+                    "UpdateAddonStatesEnd",
+                    targetId: "all",
+                    result: result,
+                    durationMs: stopwatch.ElapsedMilliseconds,
+                    beforeHash: beforeHash,
+                    afterHash: afterHash,
+                    expectedHash: expectedHash,
+                    errorCode: errorCode,
+                    operationId: operationId);
+            }
+
+            return matchResult;
+        }
+
+        private async Task<StateMatchResult> WaitForExpectedStateAsync(Dictionary<string, bool> expectedStates)
+        {
+            var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
+            var expectedNormalized = expectedSnapshot.NormalizedState;
+            var stopwatch = Stopwatch.StartNew();
+
+            var currentSnapshot = CaptureState();
+            var pollInterval = Math.Max(50, StateMatchPollIntervalMs);
+
+            if (StateMatchTimeout <= TimeSpan.Zero)
+            {
+                var matched = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
+                return new StateMatchResult(currentSnapshot, expectedSnapshot, matched, stopwatch.ElapsedMilliseconds);
+            }
+
+            while (stopwatch.Elapsed < StateMatchTimeout)
+            {
+                if (string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal))
+                {
+                    return new StateMatchResult(currentSnapshot, expectedSnapshot, true, stopwatch.ElapsedMilliseconds);
+                }
+
+                await Task.Delay(pollInterval);
+                currentSnapshot = CaptureState();
+            }
+
+            var finalMatch = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
+            return new StateMatchResult(currentSnapshot, expectedSnapshot, finalMatch, stopwatch.ElapsedMilliseconds);
         }
         
         /// <summary>
@@ -2320,6 +3441,11 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch (Exception ex)
                 {
+                    if (FindStrictLinkModeException(ex) != null)
+                    {
+                        throw;
+                    }
+
                     errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
                 }
             }
@@ -2404,6 +3530,11 @@ namespace GmodAddonManager.Core.Services
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset != null && (asset.Addons.Contains(addonId) || asset.ContainsAllAddons()))
             {
+                var operationId = eventLogger.NewOperationId();
+                var beforeSnapshot = CaptureState();
+                var beforeHash = ComputeStateHash(beforeSnapshot);
+                var stopwatch = Stopwatch.StartNew();
+
                 // 現在の状態を記録
                 var previousState = asset.GetAddonState(addonId);
                 
@@ -2426,8 +3557,47 @@ namespace GmodAddonManager.Core.Services
                 });
                 
                 asset.SetAddonState(addonId, state);
-                // 単一のアドオンの状態だけを更新（軽量化）
-                UpdateSingleAddonState(addonId);
+                try
+                {
+                    // 単一のアドオンの状態だけを更新（軽量化）
+                    UpdateSingleAddonState(addonId);
+
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+
+                    eventLogger.LogEvent(
+                        "AddonToggle",
+                        targetId: addonId,
+                        result: "success",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        operationId: operationId,
+                        assetId: assetId);
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    var afterSnapshot = CaptureState();
+                    var afterHash = ComputeStateHash(afterSnapshot);
+                    var errorCode = FindStrictLinkModeException(ex) != null
+                        ? "strict_link_copy_blocked"
+                        : "toggle_failed";
+
+                    eventLogger.LogEvent(
+                        "AddonToggle",
+                        targetId: addonId,
+                        result: "fail",
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        errorCode: errorCode,
+                        operationId: operationId,
+                        assetId: assetId);
+
+                    throw;
+                }
             }
         }
         
@@ -2477,6 +3647,11 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
+                if (FindStrictLinkModeException(ex) != null)
+                {
+                    throw;
+                }
+
                 errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
             }
         }
@@ -2493,7 +3668,22 @@ namespace GmodAddonManager.Core.Services
         {
             var action = undoManager.PopLastAction();
             if (action == null) return false;
-            
+
+            var operationId = eventLogger.NewOperationId();
+            var beforeSnapshot = CaptureState();
+            var beforeHash = ComputeStateHash(beforeSnapshot);
+            eventLogger.LogEvent(
+                "UndoStart",
+                targetId: action.Id,
+                result: "start",
+                beforeHash: beforeHash,
+                operationId: operationId);
+
+            var stopwatch = Stopwatch.StartNew();
+            bool success = false;
+            string? errorCode = null;
+            StrictLinkModeException? strictFailure = null;
+
             try
             {
                 switch (action.Type)
@@ -2575,11 +3765,43 @@ namespace GmodAddonManager.Core.Services
                         break;
                 }
                 
+                success = true;
                 return true;
             }
             catch (Exception ex)
             {
+                if (FindStrictLinkModeException(ex) is StrictLinkModeException strict)
+                {
+                    strictFailure = strict;
+                    errorCode = "strict_link_copy_blocked";
+                }
+                else
+                {
+                    errorCode = "undo_failed";
+                }
+
                 return false;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                var afterSnapshot = CaptureState();
+                var afterHash = ComputeStateHash(afterSnapshot);
+
+                eventLogger.LogEvent(
+                    "UndoEnd",
+                    targetId: action.Id,
+                    result: success ? "success" : "fail",
+                    durationMs: stopwatch.ElapsedMilliseconds,
+                    beforeHash: beforeHash,
+                    afterHash: afterHash,
+                    errorCode: errorCode,
+                    operationId: operationId);
+
+                if (strictFailure != null)
+                {
+                    throw strictFailure;
+                }
             }
         }
         
@@ -2796,40 +4018,68 @@ namespace GmodAddonManager.Core.Services
             
             string tempPath = directory + "_temp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
             Directory.Move(directory, tempPath);
+            bool movedToTarget = false;
             
             try
             {
-                // ターゲットが既に存在する場合はマージ
-                if (Directory.Exists(targetPath))
+                if (!Directory.Exists(targetPath))
                 {
-                    MergeDirectories(tempPath, targetPath);
-                    Directory.Delete(tempPath, true);
-                }
-                else
-                {
-                    // ターゲットが存在しない場合は移動
                     Directory.Move(tempPath, targetPath);
+                    movedToTarget = true;
                 }
-                
-                // GMAファイルの存在をチェックして適切な方式を選択
+
+                bool workshopPresenceCreated = false;
                 string gmaPath = Path.Combine(targetPath, $"{dirName}.gma");
+
                 if (File.Exists(gmaPath))
                 {
-                    // 新方式: 通常ディレクトリ + ハードリンク
-                    junctionService.CreateWorkshopAddonStructure(workshopPath, dirName, gmaPath);
+                    try
+                    {
+                        junctionService.CreateWorkshopAddonStructure(workshopPath, dirName, gmaPath);
+                        workshopPresenceCreated = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        errorHandler.HandleError(ex,
+                            $"Failed to create hard link structure for addon {dirName}, falling back to junction",
+                            ErrorSeverity.Warning);
+                    }
                 }
-                else
+
+                if (!workshopPresenceCreated)
                 {
-                    // 従来方式: ジャンクション
                     junctionService.CreateJunction(directory, targetPath);
+                    workshopPresenceCreated = true;
+                }
+
+                if (!movedToTarget && Directory.Exists(tempPath))
+                {
+                    try
+                    {
+                        MergeDirectories(tempPath, targetPath);
+                        Directory.Delete(tempPath, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        // ロールバックは難しいので、テンポラリを残して警告に留める
+                        errorHandler.HandleError(ex,
+                            $"Failed to merge addon {dirName} contents into managed folder. Leaving temp folder: {tempPath}",
+                            ErrorSeverity.Warning);
+                    }
                 }
             }
             catch
             {
                 // 失敗した場合は元に戻す
+                EnsureWorkshopPathAvailableForRestore(directory);
+
                 if (Directory.Exists(tempPath) && !Directory.Exists(directory))
                 {
                     Directory.Move(tempPath, directory);
+                }
+                else if (movedToTarget && Directory.Exists(targetPath) && !Directory.Exists(directory))
+                {
+                    Directory.Move(targetPath, directory);
                 }
                 throw;
             }
@@ -3131,9 +4381,9 @@ namespace GmodAddonManager.Core.Services
         /// <summary>
         /// システムの整合性をチェックして修復
         /// </summary>
-        private async Task ValidateSystemIntegrityAsync()
-        {
-            errorHandler.HandleInfo("Starting system integrity check...", "ValidateSystemIntegrity");
+	        private async Task ValidateSystemIntegrityAsync()
+	        {
+	            errorHandler.HandleInfo("Starting system integrity check...", "ValidateSystemIntegrity");
             
             var repairCount = 0;
             
@@ -3153,59 +4403,118 @@ namespace GmodAddonManager.Core.Services
                 }
             }
             
-            // 2. ジャンクション/ハードリンクの検証
-            foreach (var kvp in configuration.AddonMetadata.ToList())
-            {
-                var addon = kvp.Value;
-                var addonId = kvp.Key;
-                
-                try
-                {
-                    if (addon.IsGmaFile)
-                    {
-                        // GMAファイルのハードリンクチェック
-                        if (!string.IsNullOrEmpty(gmodCachePath))
-                        {
-                            var cachePath = Path.Combine(gmodCachePath, addonId + ".gma");
-                            var managedPath = Path.Combine(gmodCacheAddonsPath, addonId + ".gma");
-                            
-                            if (File.Exists(managedPath) && !File.Exists(cachePath))
-                            {
-                                // ハードリンクが切れている場合は再作成
-                                errorHandler.HandleWarning($"Repairing hard link for {addonId}", "ValidateSystemIntegrity");
-                                CreateHardLink(cachePath, managedPath, IntPtr.Zero);
-                                repairCount++;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // フォルダアドオンのジャンクションチェック
-                        var sourcePath = Path.Combine(workshopPath, addonId);
-                        var targetPath = Path.Combine(addonsPath, addonId);
-                        
-                        if (Directory.Exists(sourcePath))
-                        {
-                            if (addon.IsEnabled && !junctionService.IsJunction(targetPath))
-                            {
-                                // ジャンクションが存在しない場合は再作成
-                                errorHandler.HandleWarning($"Repairing junction for {addonId}", "ValidateSystemIntegrity");
-                                junctionService.CreateJunction(targetPath, sourcePath);
-                                repairCount++;
-                            }
-                            else if (!addon.IsEnabled && junctionService.IsJunction(targetPath))
-                            {
-                                // 無効なのにジャンクションが存在する場合は削除
-                                errorHandler.HandleWarning($"Removing unexpected junction for {addonId}", "ValidateSystemIntegrity");
-                                junctionService.RemoveJunction(targetPath);
-                                repairCount++;
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleError(ex, $"Failed to validate addon {addonId}", ErrorSeverity.Warning);
+	            // 2. ジャンクション/ハードリンクの検証
+	            foreach (var kvp in configuration.AddonMetadata.ToList())
+	            {
+	                var addon = kvp.Value;
+	                var addonId = kvp.Key;
+	                
+	                try
+	                {
+	                    if (addon.IsGmaFile)
+	                    {
+	                        // GMAファイルのハードリンクチェック
+	                        if (!string.IsNullOrEmpty(gmodCachePath))
+	                        {
+	                            var cachePath = Path.Combine(gmodCachePath, addonId + ".gma");
+	                            
+	                            // 有効化されるべきアドオンのみ、キャッシュ側のリンク欠損を修復する
+	                            var shouldBeEnabled = CalculateFinalAddonState(addonId);
+	                            if (shouldBeEnabled && !File.Exists(cachePath))
+	                            {
+	                                var sourcePath = ResolveGmaSourcePath(addonId, addon);
+	                                if (sourcePath != null)
+	                                {
+	                                    errorHandler.HandleWarning($"Repairing missing cache GMA for {addonId}", "ValidateSystemIntegrity");
+	                                    EnsureCacheStructureForGma(addonId, sourcePath);
+	                                    if (File.Exists(cachePath))
+	                                    {
+	                                        repairCount++;
+	                                    }
+	                                }
+	                            }
+	                        }
+	                    }
+	                    else
+	                    {
+	                        // フォルダアドオンのジャンクションチェック（Workshop側にリンクがあるのが正）
+	                        var workshopAddonPath = Path.Combine(workshopPath, addonId);
+	                        var managedAddonPath = Path.Combine(addonsPath, addonId);
+
+	                        // 期待される最終状態に基づいて修復（起動直後にUpdateAddonStatesAsyncも走るため、ここは安全側に寄せる）
+	                        var shouldBeEnabled = CalculateFinalAddonState(addonId);
+
+	                        if (shouldBeEnabled)
+	                        {
+	                            // 管理フォルダ実体がある場合のみ、Workshop側の欠損を補う
+	                            if (Directory.Exists(managedAddonPath))
+	                            {
+	                                if (!Directory.Exists(workshopAddonPath))
+	                                {
+	                                    errorHandler.HandleWarning($"Repairing missing workshop junction for {addonId}", "ValidateSystemIntegrity");
+	                                    junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                    repairCount++;
+	                                }
+	                                else if (junctionService.IsJunction(workshopAddonPath))
+	                                {
+	                                    // 既にジャンクションなら、CreateJunctionの同一ターゲット判定に任せて整合性を取る
+	                                    junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                }
+	                                else
+	                                {
+	                                    // まずGAMのスタブ(.gam_disabled)なら安全に差し替え可能
+	                                    if (RemoveDisabledStub(workshopPath, addonId))
+	                                    {
+	                                        errorHandler.HandleWarning($"Repairing workshop stub for {addonId}", "ValidateSystemIntegrity");
+	                                        junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                        repairCount++;
+	                                    }
+	                                    else
+	                                    {
+	                                        // 空ディレクトリ（移行失敗などで残ることがある）なら安全に差し替える
+	                                        bool isEmpty = false;
+	                                        try
+	                                        {
+	                                            isEmpty = !Directory.EnumerateFileSystemEntries(workshopAddonPath).Any();
+	                                        }
+	                                        catch
+	                                        {
+	                                            isEmpty = false;
+	                                        }
+
+	                                        if (isEmpty)
+	                                        {
+	                                            errorHandler.HandleWarning($"Repairing empty workshop folder for {addonId}", "ValidateSystemIntegrity");
+	                                            Directory.Delete(workshopAddonPath, true);
+	                                            junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                            repairCount++;
+	                                        }
+	                                        else
+	                                        {
+	                                            // 実体フォルダ（Steamが生成/再DL等）の場合は自動で移動・削除せず警告のみ
+	                                            errorHandler.HandleWarning(
+	                                                $"Workshop path for addon {addonId} exists but is not a junction; skipping automatic repair to avoid data loss.",
+	                                                "ValidateSystemIntegrity");
+	                                        }
+	                                    }
+	                                }
+	                            }
+	                        }
+	                        else
+	                        {
+	                            // 無効なのにWorkshop側にジャンクションが残っている場合は削除（実体フォルダは触らない）
+	                            if (Directory.Exists(workshopAddonPath) && junctionService.IsJunction(workshopAddonPath))
+	                            {
+	                                errorHandler.HandleWarning($"Removing unexpected workshop junction for {addonId}", "ValidateSystemIntegrity");
+	                                junctionService.RemoveJunction(workshopAddonPath);
+	                                repairCount++;
+	                            }
+	                        }
+	                    }
+	                }
+	                catch (Exception ex)
+	                {
+	                    errorHandler.HandleError(ex, $"Failed to validate addon {addonId}", ErrorSeverity.Warning);
                 }
             }
             
@@ -3223,6 +4532,11 @@ namespace GmodAddonManager.Core.Services
         
         public void Dispose()
         {
+            if (_sessionLogged != 0)
+            {
+                eventLogger.LogEvent("SessionEnd", result: "success");
+            }
+
             // 未保存データを即座に保存
             _saveDebounceTimer?.Change(Timeout.Infinite, Timeout.Infinite);
             if (_saveRequested)
@@ -4081,19 +5395,24 @@ namespace GmodAddonManager.Core.Services
                                 }
                                 else
                                 {
-                                    File.Copy(targetPath, gmaFile);
+                                    CopyFileForLinkFallback(fileName, targetPath, gmaFile, "RepairCacheManagement");
                                     errorHandler.HandleInfo($"Copied {fileName}.gma back to cache", "RepairCacheManagement");
                                 }
                             }
                             else
                             {
-                                File.Copy(targetPath, gmaFile);
+                                CopyFileForLinkFallback(fileName, targetPath, gmaFile, "RepairCacheManagement");
                                 errorHandler.HandleInfo($"Copied {fileName}.gma back to cache (different drive)", "RepairCacheManagement");
                             }
                         }
                     }
                     catch (Exception ex)
                     {
+                        if (ex is StrictLinkModeException)
+                        {
+                            throw;
+                        }
+
                         errorHandler.HandleError(ex, $"Failed to repair GMA file: {Path.GetFileName(gmaFile)}", ErrorSeverity.Warning);
                     }
                 }
@@ -4123,7 +5442,7 @@ namespace GmodAddonManager.Core.Services
                 
             // Check cache directory for .cache file (Garry's Mod sometimes uses .cache extension)
             string cacheCachePath = Path.Combine(gmodCachePath, $"{addonId}.cache");
-            if (File.Exists(cacheCachePath))
+            if (File.Exists(cacheCachePath) && LooksLikeGmaFile(cacheCachePath))
                 return true;
                 
             // Check managed cache directory for GMA file
@@ -4133,6 +5452,16 @@ namespace GmodAddonManager.Core.Services
                 if (File.Exists(managedGmaPath))
                     return true;
             }
+
+            // Check workshop manager directory for GMA file
+            string managedWorkshopGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
+            if (File.Exists(managedWorkshopGmaPath))
+                return true;
+            
+            // Legacy managed GMA location
+            string legacyManagedWorkshopGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
+            if (File.Exists(legacyManagedWorkshopGmaPath))
+                return true;
             
             // Check workshop directory for GMA file structure
             string workshopAddonPath = Path.Combine(workshopPath, addonId);

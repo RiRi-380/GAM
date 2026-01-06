@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using GmodAddonManager.Core.Services;
 
 namespace GmodAddonManager.UI.Models
 {
@@ -7,6 +8,9 @@ namespace GmodAddonManager.UI.Models
     {
         public string Language { get; set; } = "ja-JP";
         public bool ShowConsoleOnStartup { get; set; } = false;
+        public DisableMode DisableMode { get; set; } = DisableMode.Soft;
+        public bool UnsubscribeOnHardDisable { get; set; } = false;
+        public bool StrictLinkMode { get; set; } = false;
         
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
