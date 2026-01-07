@@ -30,7 +30,7 @@ namespace GmodAddonManager.Core.Services
             var overridePath = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_LOG_PATH");
             if (!string.IsNullOrWhiteSpace(overridePath))
             {
-                return new ExperimentEventLogger(overridePath);
+                return new ExperimentEventLogger(ResolveLogFilePath(overridePath));
             }
 
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -97,6 +97,34 @@ namespace GmodAddonManager.Core.Services
             WriteEvent(evt);
         }
 
+        public bool EnsureLogFileReady()
+        {
+            if (!Enabled)
+            {
+                return false;
+            }
+
+            try
+            {
+                var dir = Path.GetDirectoryName(LogFilePath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                if (!File.Exists(LogFilePath))
+                {
+                    File.WriteAllText(LogFilePath, string.Empty);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public void WriteEvent(ExperimentEvent evt)
         {
             if (!Enabled)
@@ -116,6 +144,26 @@ namespace GmodAddonManager.Core.Services
 
                 File.AppendAllText(LogFilePath, json + Environment.NewLine);
             }
+        }
+
+        private static string ResolveLogFilePath(string path)
+        {
+            var trimmed = path.Trim();
+
+            if (File.Exists(trimmed))
+            {
+                return trimmed;
+            }
+
+            if (trimmed.EndsWith(Path.DirectorySeparatorChar) ||
+                trimmed.EndsWith(Path.AltDirectorySeparatorChar) ||
+                Directory.Exists(trimmed) ||
+                !Path.HasExtension(trimmed))
+            {
+                return Path.Combine(trimmed, "experiment_events.jsonl");
+            }
+
+            return trimmed;
         }
     }
 }

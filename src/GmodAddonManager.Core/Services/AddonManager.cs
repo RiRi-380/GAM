@@ -173,6 +173,13 @@ namespace GmodAddonManager.Core.Services
             // Initializing Addon Manager
             try
             {
+                if (eventLogger.IsExperimentContextActive && !eventLogger.Enabled)
+                {
+                    eventLogger.Enabled = true;
+                }
+
+                eventLogger.EnsureLogFileReady();
+
                 if (Interlocked.Exchange(ref _sessionLogged, 1) == 0)
                 {
                     eventLogger.LogEvent("SessionStart", result: "success");
