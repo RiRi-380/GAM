@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using GmodAddonManager.Core.Models;
 using Newtonsoft.Json;
@@ -8,6 +9,7 @@ namespace GmodAddonManager.Core.Services
     public sealed class ExperimentEventLogger
     {
         private readonly object lockObject = new object();
+        private readonly Stopwatch monotonicStopwatch = Stopwatch.StartNew();
 
         public ExperimentEventLogger(string logFilePath)
         {
@@ -19,6 +21,17 @@ namespace GmodAddonManager.Core.Services
             ExperimentId = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_ID") ?? string.Empty;
             Condition = Environment.GetEnvironmentVariable("GAM_CONDITION") ?? string.Empty;
             TaskId = Environment.GetEnvironmentVariable("GAM_TASK_ID") ?? string.Empty;
+
+            if (int.TryParse(Environment.GetEnvironmentVariable("GAM_TRIAL_INDEX"), out var trialIndex))
+            {
+                TrialIndex = trialIndex;
+            }
+
+            PerfTraceId = Environment.GetEnvironmentVariable("GAM_PERF_TRACE_ID");
+            PerfmonCsvPath = Environment.GetEnvironmentVariable("GAM_PERFMON_CSV_PATH");
+            WprEtlPath = Environment.GetEnvironmentVariable("GAM_WPR_ETL_PATH");
+            SteamLogSnapshotPath = Environment.GetEnvironmentVariable("GAM_STEAM_LOG_SNAPSHOT_PATH");
+            ExternalMetricsId = Environment.GetEnvironmentVariable("GAM_EXTERNAL_METRICS_ID");
 
             var enabled = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_LOG");
             Enabled = !(string.Equals(enabled, "0", StringComparison.OrdinalIgnoreCase) ||
@@ -44,6 +57,12 @@ namespace GmodAddonManager.Core.Services
         public string Condition { get; set; }
         public string TaskId { get; set; }
         public bool? StrictLinkMode { get; set; }
+        public int? TrialIndex { get; }
+        public string? PerfTraceId { get; set; }
+        public string? PerfmonCsvPath { get; set; }
+        public string? WprEtlPath { get; set; }
+        public string? SteamLogSnapshotPath { get; set; }
+        public string? ExternalMetricsId { get; set; }
         public bool Enabled { get; set; }
         public string LogFilePath { get; }
 
@@ -59,6 +78,7 @@ namespace GmodAddonManager.Core.Services
 
         public void LogEvent(
             string actionType,
+            string? eventScope = "system",
             string? targetId = null,
             string? result = null,
             long? durationMs = null,
@@ -67,7 +87,16 @@ namespace GmodAddonManager.Core.Services
             string? expectedHash = null,
             string? errorCode = null,
             string? operationId = null,
-            string? assetId = null)
+            string? assetId = null,
+            bool? taskSuccess = null,
+            string? finalHash = null,
+            string? blMethod = null,
+            string? note = null,
+            ExperimentEventMetrics? metrics = null,
+            bool? gmodRunning = null,
+            bool? pendingChangeQueued = null,
+            int? pendingQueueLength = null,
+            string? taskIdOverride = null)
         {
             if (!Enabled)
             {
@@ -80,7 +109,10 @@ namespace GmodAddonManager.Core.Services
                 SessionId = SessionId,
                 ExperimentId = ExperimentId,
                 Condition = Condition,
-                TaskId = TaskId,
+                TaskId = taskIdOverride ?? TaskId,
+                EventScope = string.IsNullOrWhiteSpace(eventScope) ? "system" : eventScope,
+                MonotonicMs = monotonicStopwatch.ElapsedMilliseconds,
+                TrialIndex = TrialIndex,
                 StrictLinkMode = StrictLinkMode,
                 ActionType = actionType,
                 TargetId = targetId,
@@ -89,9 +121,22 @@ namespace GmodAddonManager.Core.Services
                 BeforeHash = beforeHash,
                 AfterHash = afterHash,
                 ExpectedHash = expectedHash,
+                TaskSuccess = taskSuccess,
+                FinalHash = finalHash,
                 ErrorCode = errorCode,
                 OperationId = operationId,
-                AssetId = assetId
+                AssetId = assetId,
+                GmodRunning = gmodRunning,
+                PendingChangeQueued = pendingChangeQueued,
+                PendingQueueLength = pendingQueueLength,
+                BlMethod = blMethod,
+                Note = note,
+                PerfTraceId = PerfTraceId,
+                PerfmonCsvPath = PerfmonCsvPath,
+                WprEtlPath = WprEtlPath,
+                SteamLogSnapshotPath = SteamLogSnapshotPath,
+                ExternalMetricsId = ExternalMetricsId,
+                Metrics = metrics
             };
 
             WriteEvent(evt);

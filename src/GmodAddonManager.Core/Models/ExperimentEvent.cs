@@ -5,10 +5,19 @@ namespace GmodAddonManager.Core.Models
     public class ExperimentEvent
     {
         [JsonProperty("schema_version")]
-        public string SchemaVersion { get; set; } = "1";
+        public string SchemaVersion { get; set; } = "2";
 
         [JsonProperty("strict_link_mode")]
         public bool? StrictLinkMode { get; set; }
+
+        [JsonProperty("event_scope")]
+        public string EventScope { get; set; } = "system";
+
+        [JsonProperty("monotonic_ms")]
+        public long? MonotonicMs { get; set; }
+
+        [JsonProperty("trial_index")]
+        public int? TrialIndex { get; set; }
 
         [JsonProperty("timestamp")]
         public string Timestamp { get; set; } = string.Empty;
@@ -46,6 +55,12 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("expected_hash")]
         public string? ExpectedHash { get; set; }
 
+        [JsonProperty("task_success")]
+        public bool? TaskSuccess { get; set; }
+
+        [JsonProperty("final_hash")]
+        public string? FinalHash { get; set; }
+
         [JsonProperty("error_code")]
         public string? ErrorCode { get; set; }
 
@@ -54,5 +69,38 @@ namespace GmodAddonManager.Core.Models
 
         [JsonProperty("asset_id")]
         public string? AssetId { get; set; }
+
+        [JsonProperty("gmod_running")]
+        public bool? GmodRunning { get; set; }
+
+        [JsonProperty("pending_change_queued")]
+        public bool? PendingChangeQueued { get; set; }
+
+        [JsonProperty("pending_queue_length")]
+        public int? PendingQueueLength { get; set; }
+
+        [JsonProperty("bl_method")]
+        public string? BlMethod { get; set; }
+
+        [JsonProperty("note")]
+        public string? Note { get; set; }
+
+        [JsonProperty("perf_trace_id")]
+        public string? PerfTraceId { get; set; }
+
+        [JsonProperty("perfmon_csv_path")]
+        public string? PerfmonCsvPath { get; set; }
+
+        [JsonProperty("wpr_etl_path")]
+        public string? WprEtlPath { get; set; }
+
+        [JsonProperty("steam_log_snapshot_path")]
+        public string? SteamLogSnapshotPath { get; set; }
+
+        [JsonProperty("external_metrics_id")]
+        public string? ExternalMetricsId { get; set; }
+
+        [JsonProperty("metrics")]
+        public ExperimentEventMetrics? Metrics { get; set; }
     }
 }

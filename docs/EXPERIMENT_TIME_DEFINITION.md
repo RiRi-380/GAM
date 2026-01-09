@@ -18,7 +18,8 @@ Completion is defined when the post-operation state snapshot matches the expecte
 
 ## Duration
 - Use `duration_ms` from the end event if present.
-- Otherwise compute `timestamp` difference between Start and End events with the same `operation_id`.
+- Otherwise compute `monotonic_ms` difference between Start and End events with the same `operation_id`.
+- If `monotonic_ms` is missing, fall back to `timestamp` difference.
 
 ## Notes
 - `expected_hash` is derived from the configuration after the apply/update action.

@@ -39,6 +39,7 @@ namespace GmodAddonManager.Core.Services
         private readonly UndoManager undoManager;
         private readonly IErrorHandler errorHandler;
         private readonly ExperimentEventLogger eventLogger;
+        private readonly AsyncLocal<LinkOperationMetrics?> linkMetricsContext = new AsyncLocal<LinkOperationMetrics?>();
         
         private readonly System.Threading.Timer _saveDebounceTimer;
         private readonly object _saveLock = new object();
@@ -58,6 +59,8 @@ namespace GmodAddonManager.Core.Services
                 eventLogger.StrictLinkMode = value;
             }
         }
+        public Func<bool?>? GmodRunningProvider { get; set; }
+        public Func<int?>? PendingChangeCountProvider { get; set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int StateMatchPollIntervalMs { get; set; } = 200;
         
@@ -182,7 +185,7 @@ namespace GmodAddonManager.Core.Services
 
                 if (Interlocked.Exchange(ref _sessionLogged, 1) == 0)
                 {
-                    eventLogger.LogEvent("SessionStart", result: "success");
+                    LogExperimentEvent("SessionStart", eventScope: "system", result: "success");
                 }
 
                 junctionService.ValidateAdminPrivileges();
@@ -427,7 +430,7 @@ namespace GmodAddonManager.Core.Services
                         {
                             try
                             {
-                                junctionService.CreateJunction(directory, targetPath);
+                                CreateJunctionWithMetrics(directory, targetPath);
                                 workshopPresenceCreated = true;
                             }
                             catch (IOException ex) when (ex.Message.Contains("already exists and is not a junction"))
@@ -1624,7 +1627,7 @@ namespace GmodAddonManager.Core.Services
 	                    }
 	                }
 
-	                junctionService.CreateJunction(workshopAddonPath, sourcePath);
+	                CreateJunctionWithMetrics(workshopAddonPath, sourcePath);
 	            }
 
 	            if (addonInfo != null)
@@ -1818,7 +1821,7 @@ namespace GmodAddonManager.Core.Services
             {
                 try
                 {
-                    junctionService.CreateJunction(workshopAddonPath, managedPath);
+                    CreateJunctionWithMetrics(workshopAddonPath, managedPath);
                 }
                 catch (Exception ex)
                 {
@@ -2526,10 +2529,66 @@ namespace GmodAddonManager.Core.Services
                 source);
         }
 
+        private bool? GetGmodRunning()
+        {
+            return GmodRunningProvider?.Invoke();
+        }
+
+        private int? GetPendingChangeCount()
+        {
+            return PendingChangeCountProvider?.Invoke();
+        }
+
+        private void LogExperimentEvent(
+            string actionType,
+            string eventScope = "system",
+            string? targetId = null,
+            string? result = null,
+            long? durationMs = null,
+            string? beforeHash = null,
+            string? afterHash = null,
+            string? expectedHash = null,
+            string? errorCode = null,
+            string? operationId = null,
+            string? assetId = null,
+            bool? taskSuccess = null,
+            string? finalHash = null,
+            string? blMethod = null,
+            string? note = null,
+            ExperimentEventMetrics? metrics = null,
+            string? taskIdOverride = null)
+        {
+            var pendingCount = GetPendingChangeCount();
+            var pendingQueued = pendingCount.HasValue ? pendingCount.Value > 0 : (bool?)null;
+
+            eventLogger.LogEvent(
+                actionType,
+                eventScope: eventScope,
+                targetId: targetId,
+                result: result,
+                durationMs: durationMs,
+                beforeHash: beforeHash,
+                afterHash: afterHash,
+                expectedHash: expectedHash,
+                errorCode: errorCode,
+                operationId: operationId,
+                assetId: assetId,
+                taskSuccess: taskSuccess,
+                finalHash: finalHash,
+                blMethod: blMethod,
+                note: note,
+                metrics: metrics,
+                gmodRunning: GetGmodRunning(),
+                pendingChangeQueued: pendingQueued,
+                pendingQueueLength: pendingCount,
+                taskIdOverride: taskIdOverride);
+        }
+
         private void LogLinkFallbackCopy(string addonId, string context)
         {
-            eventLogger.LogEvent(
+            LogExperimentEvent(
                 "LinkFallbackCopy",
+                eventScope: "system",
                 targetId: addonId,
                 result: "success",
                 errorCode: $"copy_used:{context}");
@@ -2537,11 +2596,35 @@ namespace GmodAddonManager.Core.Services
 
         private void LogStrictLinkViolation(string addonId, string context)
         {
-            eventLogger.LogEvent(
+            LogExperimentEvent(
                 "StrictLinkViolation",
+                eventScope: "system",
                 targetId: addonId,
                 result: "fail",
                 errorCode: $"strict_link_copy_blocked:{context}");
+        }
+
+        private void CreateJunctionWithMetrics(string junctionPath, string targetPath)
+        {
+            try
+            {
+                if (Directory.Exists(junctionPath) && junctionService.IsJunction(junctionPath))
+                {
+                    var existingTarget = junctionService.GetJunctionTarget(junctionPath);
+                    var normalizedTarget = Path.GetFullPath(targetPath);
+                    if (string.Equals(existingTarget, normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+                // Fall through and attempt creation; metrics will be recorded on success.
+            }
+
+            junctionService.CreateJunction(junctionPath, targetPath);
+            linkMetricsContext.Value?.RecordJunction();
         }
 
         private void CopyFileForLinkFallback(string addonId, string source, string destination, string context, bool overwrite = true)
@@ -2553,7 +2636,21 @@ namespace GmodAddonManager.Core.Services
             }
 
             LogLinkFallbackCopy(addonId, context);
+            long bytes = 0;
+            try
+            {
+                if (File.Exists(source))
+                {
+                    bytes = new FileInfo(source).Length;
+                }
+            }
+            catch
+            {
+                bytes = 0;
+            }
+
             File.Copy(source, destination, overwrite);
+            linkMetricsContext.Value?.RecordCopy(bytes);
         }
 
         private static StrictLinkModeException? FindStrictLinkModeException(Exception ex)
@@ -2926,8 +3023,9 @@ namespace GmodAddonManager.Core.Services
                     var afterSnapshot = CaptureState();
                     var afterHash = ComputeStateHash(afterSnapshot);
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AssetAddAddon",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "success",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -2945,8 +3043,9 @@ namespace GmodAddonManager.Core.Services
                         ? "strict_link_copy_blocked"
                         : "asset_add_failed";
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AssetAddAddon",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "fail",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -3028,8 +3127,9 @@ namespace GmodAddonManager.Core.Services
                     var afterSnapshot = CaptureState();
                     var afterHash = ComputeStateHash(afterSnapshot);
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AssetRemoveAddon",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "success",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -3047,8 +3147,9 @@ namespace GmodAddonManager.Core.Services
                         ? "strict_link_copy_blocked"
                         : "asset_remove_failed";
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AssetRemoveAddon",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "fail",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -3132,31 +3233,39 @@ namespace GmodAddonManager.Core.Services
         public async Task<AssetApplyResult> ApplyAssetExclusiveAsync(string assetId)
         {
             var result = new AssetApplyResult { AssetId = assetId };
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
-
-            if (asset == null)
-            {
-                result.Success = false;
-                result.ErrorCode = "asset_not_found";
-                eventLogger.LogEvent(
-                    "AssetApplyExclusiveEnd",
-                    targetId: assetId,
-                    result: "fail",
-                    errorCode: result.ErrorCode);
-                return result;
-            }
-
             var operationId = eventLogger.NewOperationId();
             var beforeSnapshot = CaptureState();
             var beforeHash = ComputeStateHash(beforeSnapshot);
             result.BeforeHash = beforeHash;
 
-            eventLogger.LogEvent(
+            LogExperimentEvent(
                 "AssetApplyExclusiveStart",
+                eventScope: "user",
                 targetId: assetId,
                 result: "start",
                 beforeHash: beforeHash,
                 operationId: operationId);
+
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset == null)
+            {
+                result.Success = false;
+                result.ErrorCode = "asset_not_found";
+                result.AfterHash = beforeHash;
+                result.ExpectedHash = beforeHash;
+                LogExperimentEvent(
+                    "AssetApplyExclusiveEnd",
+                    eventScope: "system",
+                    targetId: assetId,
+                    result: "fail",
+                    durationMs: 0,
+                    beforeHash: result.BeforeHash,
+                    afterHash: result.AfterHash,
+                    expectedHash: result.ExpectedHash,
+                    errorCode: result.ErrorCode,
+                    operationId: operationId);
+                return result;
+            }
 
             var stopwatch = Stopwatch.StartNew();
             StateMatchResult? matchResult = null;
@@ -3204,8 +3313,9 @@ namespace GmodAddonManager.Core.Services
                     result.ExpectedHash = ComputeStateHash(CaptureExpectedStateSnapshot());
                 }
 
-                eventLogger.LogEvent(
+                LogExperimentEvent(
                     "AssetApplyExclusiveEnd",
+                    eventScope: "system",
                     targetId: assetId,
                     result: result.Success ? "success" : "fail",
                     durationMs: result.DurationMs,
@@ -3213,7 +3323,8 @@ namespace GmodAddonManager.Core.Services
                     afterHash: result.AfterHash,
                     expectedHash: result.ExpectedHash,
                     errorCode: errorCode,
-                    operationId: operationId);
+                    operationId: operationId,
+                    metrics: matchResult?.Metrics);
             }
 
             if (strictFailure != null)
@@ -3255,20 +3366,165 @@ namespace GmodAddonManager.Core.Services
             await UpdateAddonStatesInternalAsync(logEvents: true);
         }
 
+        public void LogTaskStart(string taskId, string? note = null)
+        {
+            if (string.IsNullOrWhiteSpace(taskId))
+            {
+                return;
+            }
+
+            var snapshot = CaptureState();
+            var beforeHash = ComputeStateHash(snapshot);
+
+            LogExperimentEvent(
+                "TaskStart",
+                eventScope: "user",
+                targetId: taskId,
+                result: "start",
+                beforeHash: beforeHash,
+                note: note,
+                taskIdOverride: taskId);
+        }
+
+        public void LogTaskEnd(string taskId, string? expectedHash = null, bool? taskSuccess = null, string? note = null)
+        {
+            if (string.IsNullOrWhiteSpace(taskId))
+            {
+                return;
+            }
+
+            var snapshot = CaptureState();
+            var finalHash = ComputeStateHash(snapshot);
+            var success = taskSuccess;
+
+            if (!string.IsNullOrWhiteSpace(expectedHash) && !success.HasValue)
+            {
+                success = string.Equals(finalHash, expectedHash, StringComparison.Ordinal);
+            }
+
+            var result = success.HasValue ? (success.Value ? "success" : "fail") : "end";
+
+            LogExperimentEvent(
+                "TaskEnd",
+                eventScope: "user",
+                targetId: taskId,
+                result: result,
+                afterHash: finalHash,
+                expectedHash: expectedHash,
+                taskSuccess: success,
+                finalHash: finalHash,
+                note: note,
+                taskIdOverride: taskId);
+        }
+
+        public void LogBlSwitchStart(string? blMethod = null, string? note = null)
+        {
+            var snapshot = CaptureState();
+            var beforeHash = ComputeStateHash(snapshot);
+
+            LogExperimentEvent(
+                "BlSwitchStart",
+                eventScope: "external",
+                targetId: blMethod ?? "bl",
+                result: "start",
+                beforeHash: beforeHash,
+                blMethod: blMethod,
+                note: note);
+        }
+
+        public void LogBlSwitchEnd(string? blMethod = null, string? expectedHash = null, bool? success = null, string? note = null)
+        {
+            var snapshot = CaptureState();
+            var finalHash = ComputeStateHash(snapshot);
+            var resolved = success;
+
+            if (!string.IsNullOrWhiteSpace(expectedHash) && !resolved.HasValue)
+            {
+                resolved = string.Equals(finalHash, expectedHash, StringComparison.Ordinal);
+            }
+
+            var result = resolved.HasValue ? (resolved.Value ? "success" : "fail") : "end";
+
+            LogExperimentEvent(
+                "BlSwitchEnd",
+                eventScope: "external",
+                targetId: blMethod ?? "bl",
+                result: result,
+                afterHash: finalHash,
+                expectedHash: expectedHash,
+                finalHash: finalHash,
+                blMethod: blMethod,
+                note: note);
+        }
+
         private sealed class StateMatchResult
         {
-            public StateMatchResult(AddonStateSnapshot snapshot, AddonStateSnapshot expectedSnapshot, bool matched, long durationMs)
+            public StateMatchResult(
+                AddonStateSnapshot snapshot,
+                AddonStateSnapshot expectedSnapshot,
+                bool matched,
+                long durationMs,
+                ExperimentEventMetrics? metrics)
             {
                 Snapshot = snapshot;
                 ExpectedSnapshot = expectedSnapshot;
                 Matched = matched;
                 DurationMs = durationMs;
+                Metrics = metrics;
             }
 
             public AddonStateSnapshot Snapshot { get; }
             public AddonStateSnapshot ExpectedSnapshot { get; }
             public bool Matched { get; }
             public long DurationMs { get; }
+            public ExperimentEventMetrics? Metrics { get; }
+        }
+
+        private sealed class LinkOperationMetrics
+        {
+            private long hardlinkCount;
+            private long junctionCount;
+            private long copyBytes;
+            private long filesTouched;
+
+            public void RecordHardlink()
+            {
+                Interlocked.Increment(ref hardlinkCount);
+                Interlocked.Increment(ref filesTouched);
+            }
+
+            public void RecordJunction()
+            {
+                Interlocked.Increment(ref junctionCount);
+                Interlocked.Increment(ref filesTouched);
+            }
+
+            public void RecordCopy(long bytes)
+            {
+                Interlocked.Add(ref copyBytes, bytes);
+                Interlocked.Increment(ref filesTouched);
+            }
+
+            public ExperimentEventMetrics? ToEventMetrics()
+            {
+                var hardlinks = (int)Interlocked.Read(ref hardlinkCount);
+                var junctions = (int)Interlocked.Read(ref junctionCount);
+                var copies = Interlocked.Read(ref copyBytes);
+                var files = (int)Interlocked.Read(ref filesTouched);
+
+                if (hardlinks == 0 && junctions == 0 && copies == 0 && files == 0)
+                {
+                    return null;
+                }
+
+                return new ExperimentEventMetrics
+                {
+                    LinkCreatedHardlinkCount = hardlinks,
+                    LinkCreatedJunctionCount = junctions,
+                    CopyBytes = copies,
+                    FilesTouchedCount = files
+                };
+            }
         }
 
         private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents)
@@ -3278,6 +3534,8 @@ namespace GmodAddonManager.Core.Services
                 .ToList();
 
             var expectedStates = BuildExpectedStates();
+            var linkMetrics = logEvents ? new LinkOperationMetrics() : null;
+            linkMetricsContext.Value = linkMetrics;
 
             string? operationId = logEvents ? eventLogger.NewOperationId() : null;
             AddonStateSnapshot? beforeSnapshot = null;
@@ -3287,8 +3545,9 @@ namespace GmodAddonManager.Core.Services
             {
                 beforeSnapshot = CaptureState();
                 beforeHash = ComputeStateHash(beforeSnapshot);
-                eventLogger.LogEvent(
+                LogExperimentEvent(
                     "UpdateAddonStatesStart",
+                    eventScope: "system",
                     targetId: "all",
                     result: "start",
                     beforeHash: beforeHash,
@@ -3299,96 +3558,111 @@ namespace GmodAddonManager.Core.Services
 
             Exception? updateError = null;
 
-            var tasks = allAddonIds.Select(addonId => Task.Run(() =>
+            try
             {
-                var finalState = CalculateFinalAddonState(addonId);
+                var tasks = allAddonIds.Select(addonId => Task.Run(() =>
+                {
+                    var finalState = CalculateFinalAddonState(addonId);
+                    try
+                    {
+                        if (finalState)
+                        {
+                            EnableAddon(addonId);
+                        }
+                        else
+                        {
+                            DisableAddon(addonId);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        if (FindStrictLinkModeException(ex) != null)
+                        {
+                            throw;
+                        }
+
+                        errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
+                    }
+                })).ToList();
+
                 try
                 {
-                    if (finalState)
-                    {
-                        EnableAddon(addonId);
-                    }
-                    else
-                    {
-                        DisableAddon(addonId);
-                    }
+                    await Task.WhenAll(tasks);
                 }
                 catch (Exception ex)
                 {
+                    updateError = ex;
                     if (FindStrictLinkModeException(ex) != null)
                     {
+                        var afterSnapshot = CaptureState();
+                        var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
+                        var afterHash = ComputeStateHash(afterSnapshot);
+                        var expectedHash = ComputeStateHash(expectedSnapshot);
+                        var metricsSnapshot = linkMetrics?.ToEventMetrics();
+
+                        if (logEvents)
+                        {
+                            LogExperimentEvent(
+                                "UpdateAddonStatesEnd",
+                                eventScope: "system",
+                                targetId: "all",
+                                result: "fail",
+                                durationMs: stopwatch.ElapsedMilliseconds,
+                                beforeHash: beforeHash,
+                                afterHash: afterHash,
+                                expectedHash: expectedHash,
+                                errorCode: "strict_link_copy_blocked",
+                                operationId: operationId,
+                                metrics: metricsSnapshot);
+                        }
+
                         throw;
                     }
-
-                    errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
                 }
-            })).ToList();
 
-            try
-            {
-                await Task.WhenAll(tasks);
-            }
-            catch (Exception ex)
-            {
-                updateError = ex;
-                if (FindStrictLinkModeException(ex) != null)
+                var metrics = linkMetrics?.ToEventMetrics();
+                var matchResult = await WaitForExpectedStateAsync(expectedStates, metrics);
+                stopwatch.Stop();
+
+                if (eventLogger.IsExperimentContextActive)
                 {
-                    var afterSnapshot = CaptureState();
-                    var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
-                    var afterHash = ComputeStateHash(afterSnapshot);
-                    var expectedHash = ComputeStateHash(expectedSnapshot);
-
-                    if (logEvents)
-                    {
-                        eventLogger.LogEvent(
-                            "UpdateAddonStatesEnd",
-                            targetId: "all",
-                            result: "fail",
-                            durationMs: stopwatch.ElapsedMilliseconds,
-                            beforeHash: beforeHash,
-                            afterHash: afterHash,
-                            expectedHash: expectedHash,
-                            errorCode: "strict_link_copy_blocked",
-                            operationId: operationId);
-                    }
-
-                    throw;
+                    await SaveConfigurationImmediatelyAsync();
                 }
+
+                if (logEvents)
+                {
+                    var afterHash = ComputeStateHash(matchResult.Snapshot);
+                    var expectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
+                    var result = updateError == null && matchResult.Matched ? "success" : "fail";
+                    var errorCode = updateError != null
+                        ? "update_failed"
+                        : (matchResult.Matched ? null : "state_mismatch");
+
+                    LogExperimentEvent(
+                        "UpdateAddonStatesEnd",
+                        eventScope: "system",
+                        targetId: "all",
+                        result: result,
+                        durationMs: stopwatch.ElapsedMilliseconds,
+                        beforeHash: beforeHash,
+                        afterHash: afterHash,
+                        expectedHash: expectedHash,
+                        errorCode: errorCode,
+                        operationId: operationId,
+                        metrics: matchResult.Metrics);
+                }
+
+                return matchResult;
             }
-
-            var matchResult = await WaitForExpectedStateAsync(expectedStates);
-            stopwatch.Stop();
-
-            if (eventLogger.IsExperimentContextActive)
+            finally
             {
-                await SaveConfigurationImmediatelyAsync();
+                linkMetricsContext.Value = null;
             }
-
-            if (logEvents)
-            {
-                var afterHash = ComputeStateHash(matchResult.Snapshot);
-                var expectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
-                var result = updateError == null && matchResult.Matched ? "success" : "fail";
-                var errorCode = updateError != null
-                    ? "update_failed"
-                    : (matchResult.Matched ? null : "state_mismatch");
-
-                eventLogger.LogEvent(
-                    "UpdateAddonStatesEnd",
-                    targetId: "all",
-                    result: result,
-                    durationMs: stopwatch.ElapsedMilliseconds,
-                    beforeHash: beforeHash,
-                    afterHash: afterHash,
-                    expectedHash: expectedHash,
-                    errorCode: errorCode,
-                    operationId: operationId);
-            }
-
-            return matchResult;
         }
 
-        private async Task<StateMatchResult> WaitForExpectedStateAsync(Dictionary<string, bool> expectedStates)
+        private async Task<StateMatchResult> WaitForExpectedStateAsync(
+            Dictionary<string, bool> expectedStates,
+            ExperimentEventMetrics? metrics)
         {
             var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
             var expectedNormalized = expectedSnapshot.NormalizedState;
@@ -3400,14 +3674,14 @@ namespace GmodAddonManager.Core.Services
             if (StateMatchTimeout <= TimeSpan.Zero)
             {
                 var matched = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
-                return new StateMatchResult(currentSnapshot, expectedSnapshot, matched, stopwatch.ElapsedMilliseconds);
+                return new StateMatchResult(currentSnapshot, expectedSnapshot, matched, stopwatch.ElapsedMilliseconds, metrics);
             }
 
             while (stopwatch.Elapsed < StateMatchTimeout)
             {
                 if (string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal))
                 {
-                    return new StateMatchResult(currentSnapshot, expectedSnapshot, true, stopwatch.ElapsedMilliseconds);
+                    return new StateMatchResult(currentSnapshot, expectedSnapshot, true, stopwatch.ElapsedMilliseconds, metrics);
                 }
 
                 await Task.Delay(pollInterval);
@@ -3415,7 +3689,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             var finalMatch = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
-            return new StateMatchResult(currentSnapshot, expectedSnapshot, finalMatch, stopwatch.ElapsedMilliseconds);
+            return new StateMatchResult(currentSnapshot, expectedSnapshot, finalMatch, stopwatch.ElapsedMilliseconds, metrics);
         }
         
         /// <summary>
@@ -3573,8 +3847,9 @@ namespace GmodAddonManager.Core.Services
                     var afterSnapshot = CaptureState();
                     var afterHash = ComputeStateHash(afterSnapshot);
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AddonToggle",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "success",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -3592,8 +3867,9 @@ namespace GmodAddonManager.Core.Services
                         ? "strict_link_copy_blocked"
                         : "toggle_failed";
 
-                    eventLogger.LogEvent(
+                    LogExperimentEvent(
                         "AddonToggle",
+                        eventScope: "user",
                         targetId: addonId,
                         result: "fail",
                         durationMs: stopwatch.ElapsedMilliseconds,
@@ -3679,8 +3955,9 @@ namespace GmodAddonManager.Core.Services
             var operationId = eventLogger.NewOperationId();
             var beforeSnapshot = CaptureState();
             var beforeHash = ComputeStateHash(beforeSnapshot);
-            eventLogger.LogEvent(
+            LogExperimentEvent(
                 "UndoStart",
+                eventScope: "user",
                 targetId: action.Id,
                 result: "start",
                 beforeHash: beforeHash,
@@ -3795,8 +4072,9 @@ namespace GmodAddonManager.Core.Services
                 var afterSnapshot = CaptureState();
                 var afterHash = ComputeStateHash(afterSnapshot);
 
-                eventLogger.LogEvent(
+                LogExperimentEvent(
                     "UndoEnd",
+                    eventScope: "system",
                     targetId: action.Id,
                     result: success ? "success" : "fail",
                     durationMs: stopwatch.ElapsedMilliseconds,
@@ -4055,7 +4333,7 @@ namespace GmodAddonManager.Core.Services
 
                 if (!workshopPresenceCreated)
                 {
-                    junctionService.CreateJunction(directory, targetPath);
+                    CreateJunctionWithMetrics(directory, targetPath);
                     workshopPresenceCreated = true;
                 }
 
@@ -4459,13 +4737,13 @@ namespace GmodAddonManager.Core.Services
 	                                if (!Directory.Exists(workshopAddonPath))
 	                                {
 	                                    errorHandler.HandleWarning($"Repairing missing workshop junction for {addonId}", "ValidateSystemIntegrity");
-	                                    junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                    CreateJunctionWithMetrics(workshopAddonPath, managedAddonPath);
 	                                    repairCount++;
 	                                }
 	                                else if (junctionService.IsJunction(workshopAddonPath))
 	                                {
 	                                    // 既にジャンクションなら、CreateJunctionの同一ターゲット判定に任せて整合性を取る
-	                                    junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                    CreateJunctionWithMetrics(workshopAddonPath, managedAddonPath);
 	                                }
 	                                else
 	                                {
@@ -4473,7 +4751,7 @@ namespace GmodAddonManager.Core.Services
 	                                    if (RemoveDisabledStub(workshopPath, addonId))
 	                                    {
 	                                        errorHandler.HandleWarning($"Repairing workshop stub for {addonId}", "ValidateSystemIntegrity");
-	                                        junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                        CreateJunctionWithMetrics(workshopAddonPath, managedAddonPath);
 	                                        repairCount++;
 	                                    }
 	                                    else
@@ -4493,7 +4771,7 @@ namespace GmodAddonManager.Core.Services
 	                                        {
 	                                            errorHandler.HandleWarning($"Repairing empty workshop folder for {addonId}", "ValidateSystemIntegrity");
 	                                            Directory.Delete(workshopAddonPath, true);
-	                                            junctionService.CreateJunction(workshopAddonPath, managedAddonPath);
+	                                            CreateJunctionWithMetrics(workshopAddonPath, managedAddonPath);
 	                                            repairCount++;
 	                                        }
 	                                        else
@@ -4541,7 +4819,7 @@ namespace GmodAddonManager.Core.Services
         {
             if (_sessionLogged != 0)
             {
-                eventLogger.LogEvent("SessionEnd", result: "success");
+                LogExperimentEvent("SessionEnd", eventScope: "system", result: "success");
             }
 
             // 未保存データを即座に保存
@@ -4626,7 +4904,12 @@ namespace GmodAddonManager.Core.Services
                 }
                 
                 // Create hard link
-                return CreateHardLink(linkPath, targetPath, IntPtr.Zero);
+                var created = CreateHardLink(linkPath, targetPath, IntPtr.Zero);
+                if (created)
+                {
+                    linkMetricsContext.Value?.RecordHardlink();
+                }
+                return created;
             }
             catch (Exception ex)
             {
@@ -4999,7 +5282,7 @@ namespace GmodAddonManager.Core.Services
                         {
                             if (!Directory.Exists(workshopAddonPath))
                             {
-                                junctionService.CreateJunction(workshopAddonPath, sourcePath);
+                                CreateJunctionWithMetrics(workshopAddonPath, sourcePath);
                             }
                         }
                         catch (Exception restoreEx)

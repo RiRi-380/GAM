@@ -290,6 +290,12 @@ public partial class App : Application
                 throw;
             }
 
+            if (addonManager != null)
+            {
+                addonManager.GmodRunningProvider = () => processWatcher?.IsGmodRunning;
+                addonManager.PendingChangeCountProvider = () => pendingChangeManager?.GetPendingChangeCount();
+            }
+
             try
             {
 #if DEBUG

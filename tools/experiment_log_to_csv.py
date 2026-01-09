@@ -11,13 +11,14 @@ APPLY_START = "AssetApplyExclusiveStart"
 APPLY_END = "AssetApplyExclusiveEnd"
 UPDATE_END = "UpdateAddonStatesEnd"
 
-OP_TYPES = {
-    APPLY_END,
-    UPDATE_END,
+USER_ACTION_TYPES = {
+    "AssetApplyExclusiveStart",
     "AddonToggle",
     "AssetAddAddon",
     "AssetRemoveAddon",
-    "UndoEnd",
+    "UndoStart",
+    "TaskStart",
+    "TaskEnd",
 }
 
 
@@ -75,26 +76,38 @@ def main() -> int:
             operation_id = event.get("operation_id")
 
             if action_type == APPLY_START and operation_id:
+                monotonic_ms = event.get("monotonic_ms")
                 timestamp = parse_timestamp(event.get("timestamp", ""))
-                if timestamp:
-                    start_times[(key, operation_id)] = timestamp
+                start_times[(key, operation_id)] = monotonic_ms if monotonic_ms is not None else timestamp
 
             if action_type == APPLY_END:
                 entry["has_apply"] = True
                 duration = event.get("duration_ms")
                 if duration is None and operation_id:
                     started_at = start_times.get((key, operation_id))
-                    ended_at = parse_timestamp(event.get("timestamp", ""))
-                    if started_at and ended_at:
-                        duration = int((ended_at - started_at).total_seconds() * 1000)
+                    monotonic_ms = event.get("monotonic_ms")
+                    ended_at = monotonic_ms if monotonic_ms is not None else parse_timestamp(event.get("timestamp", ""))
+                    if started_at is not None and ended_at is not None:
+                        if isinstance(started_at, datetime) and isinstance(ended_at, datetime):
+                            duration = int((ended_at - started_at).total_seconds() * 1000)
+                        elif isinstance(started_at, (int, float)) and isinstance(ended_at, (int, float)):
+                            duration = int(ended_at - started_at)
                 if duration is not None:
                     entry["apply_durations"].append(int(duration))
 
-            if action_type in OP_TYPES:
+            event_scope = event.get("event_scope")
+            if event_scope == "user" or (event_scope is None and action_type in USER_ACTION_TYPES):
                 entry["operation_count"] += 1
 
-            if action_type == "UndoEnd":
+            if action_type == "UndoStart":
                 entry["undo_count"] += 1
+
+            if action_type == "TaskEnd":
+                task_success = event.get("task_success")
+                if isinstance(task_success, bool):
+                    entry["success"] = task_success
+                elif result in {"success", "fail"}:
+                    entry["success"] = result == "success"
 
             if action_type in {APPLY_END, UPDATE_END} and result == "fail":
                 entry["success"] = False

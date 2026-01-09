@@ -10,8 +10,14 @@ Set before launching the app:
 - `GAM_CONDITION=LM` (or BL)
 - `GAM_TASK_ID=T1`
 - `GAM_SESSION_ID=<unique_id>` (optional)
+- `GAM_TRIAL_INDEX=1` (optional)
 - `GAM_STRICT_LINK_MODE=1` (recommended for LM)
 - `GAM_EXPERIMENT_LOG_PATH=<path>` (optional)
+- `GAM_PERF_TRACE_ID=<id>` (optional)
+- `GAM_PERFMON_CSV_PATH=<path>` (optional)
+- `GAM_WPR_ETL_PATH=<path>` (optional)
+- `GAM_STEAM_LOG_SNAPSHOT_PATH=<path>` (optional)
+- `GAM_EXTERNAL_METRICS_ID=<id>` (optional)
 
 ## Steps
 1. Launch the app normally.
@@ -25,3 +31,7 @@ Set before launching the app:
 
 ## Output
 Use `duration_ms` from end events (or timestamps) to compute switch time.
+
+## Optional Markers
+- `TaskStart`/`TaskEnd` and `BlSwitchStart`/`BlSwitchEnd` are supported in the schema.
+- If you want UI/CLI wiring for these markers, request it and we will add it.
