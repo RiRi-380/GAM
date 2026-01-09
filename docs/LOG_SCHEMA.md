@@ -66,5 +66,6 @@ External (BL):
 - `BlSwitchStart`, `BlSwitchEnd`
 
 ## Notes
+- `TaskStart`/`TaskEnd` and `BlSwitchStart`/`BlSwitchEnd` are logged with `event_scope=external` by default.
 - State hashing follows `docs/STATE_HASH.md`.
 - Time definitions follow `docs/EXPERIMENT_TIME_DEFINITION.md`.

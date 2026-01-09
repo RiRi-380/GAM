@@ -22,6 +22,7 @@ public partial class App : Application
     private HybridWorkshopService? hybridWorkshopService;
     private WorkshopIconResolver? workshopIconResolver;
     private ApplicationLock? applicationLock;
+    private ExperimentIpcServer? experimentIpcServer;
     
     public AddonManager? AddonManager => addonManager;
     public SteamworksManager? SteamworksManager => steamworksManager;
@@ -296,6 +297,18 @@ public partial class App : Application
                 addonManager.PendingChangeCountProvider = () => pendingChangeManager?.GetPendingChangeCount();
             }
 
+            if (addonManager != null && ShouldEnableExperimentIpc(addonManager))
+            {
+                var pipeName = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_PIPE_NAME");
+                experimentIpcServer = new ExperimentIpcServer(addonManager, pipeName ?? "GAMExperiment");
+                experimentIpcServer.Start();
+
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime ipcLifetime)
+                {
+                    ipcLifetime.Exit += (_, __) => experimentIpcServer.Dispose();
+                }
+            }
+
             try
             {
 #if DEBUG
@@ -493,5 +506,29 @@ public partial class App : Application
         processWatcher?.Dispose();
         steamworksManager?.Dispose();
         applicationLock?.Dispose();
+    }
+
+    private static bool ShouldEnableExperimentIpc(AddonManager addonManager)
+    {
+        var enable = Environment.GetEnvironmentVariable("GAM_ENABLE_IPC");
+        if (IsEnvTrue(enable))
+        {
+            return true;
+        }
+
+        var logPath = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_LOG_PATH");
+        if (!string.IsNullOrWhiteSpace(logPath))
+        {
+            return true;
+        }
+
+        return addonManager.IsExperimentContextActive;
+    }
+
+    private static bool IsEnvTrue(string? value)
+    {
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
     }
 }

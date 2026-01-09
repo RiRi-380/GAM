@@ -59,6 +59,7 @@ namespace GmodAddonManager.Core.Services
                 eventLogger.StrictLinkMode = value;
             }
         }
+        public bool IsExperimentContextActive => eventLogger.IsExperimentContextActive;
         public Func<bool?>? GmodRunningProvider { get; set; }
         public Func<int?>? PendingChangeCountProvider { get; set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
@@ -3378,7 +3379,7 @@ namespace GmodAddonManager.Core.Services
 
             LogExperimentEvent(
                 "TaskStart",
-                eventScope: "user",
+                eventScope: "external",
                 targetId: taskId,
                 result: "start",
                 beforeHash: beforeHash,
@@ -3406,7 +3407,7 @@ namespace GmodAddonManager.Core.Services
 
             LogExperimentEvent(
                 "TaskEnd",
-                eventScope: "user",
+                eventScope: "external",
                 targetId: taskId,
                 result: result,
                 afterHash: finalHash,
