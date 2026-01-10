@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -34,21 +35,25 @@ namespace GmodAddonManager.ExperimentCli
             {
                 using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
                 client.Connect(2000);
-                using var writer = new StreamWriter(client) { AutoFlush = true };
-                using var reader = new StreamReader(client);
+                using var reader = new StreamReader(client, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true);
 
                 var payload = JsonSerializer.Serialize(command);
-                writer.WriteLine(payload);
+                var payloadBytes = Encoding.UTF8.GetBytes(payload + "\n");
+                client.Write(payloadBytes, 0, payloadBytes.Length);
+                client.Flush();
 
                 var responseRaw = reader.ReadLine();
-                if (!string.IsNullOrWhiteSpace(responseRaw))
+                if (string.IsNullOrWhiteSpace(responseRaw))
                 {
-                    var response = JsonSerializer.Deserialize<IpcResponse>(responseRaw);
-                    if (response != null && !response.Ok)
-                    {
-                        Console.Error.WriteLine($"IPC error: {response.Error ?? "unknown"}");
-                        return 1;
-                    }
+                    Console.Error.WriteLine("IPC error: no response from server.");
+                    return 1;
+                }
+
+                var response = JsonSerializer.Deserialize<IpcResponse>(responseRaw);
+                if (response != null && !response.Ok)
+                {
+                    Console.Error.WriteLine($"IPC error: {response.Error ?? "unknown"}");
+                    return 1;
                 }
 
                 return 0;
