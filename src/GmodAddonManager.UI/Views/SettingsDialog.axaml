@@ -52,6 +52,32 @@
                     </StackPanel>
                 </Border>
                 
+                <!-- 無効化モード設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.DisableModeHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.DisableModeDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <StackPanel Spacing="10">
+                            <RadioButton Name="SoftDisableRadio"
+                                         Content="{loc:Localize Settings.SoftDisableTitle}"
+                                         GroupName="DisableModeGroup"/>
+                            <TextBlock Text="{loc:Localize Settings.SoftDisableDescription}" Opacity="0.7" FontSize="12" Margin="20,0,0,10"/>
+                            
+                            <RadioButton Name="HardDisableRadio"
+                                         Content="{loc:Localize Settings.HardDisableTitle}"
+                                         GroupName="DisableModeGroup"/>
+                            <TextBlock Text="{loc:Localize Settings.HardDisableDescription}" Opacity="0.7" FontSize="12" Margin="20,0,0,0"/>
+                        </StackPanel>
+
+                        <CheckBox Name="UnsubscribeCheckBox"
+                                  Content="{loc:Localize Settings.UnsubscribeOnHardDisable}"
+                                  Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+                
                 <!-- ログ設定 -->
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">

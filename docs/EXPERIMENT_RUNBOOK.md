@@ -12,6 +12,7 @@ Set before launching the app:
 - `GAM_SESSION_ID=<unique_id>` (optional)
 - `GAM_TRIAL_INDEX=1` (optional)
 - `GAM_STRICT_LINK_MODE=1` (recommended for LM)
+- `GAM_EXPERIMENT_FORCE_HARD_DISABLE=1` (recommended for LM; overrides UI setting)
 - `GAM_EXPERIMENT_LOG_PATH=<path>` (optional)
 - `GAM_ENABLE_IPC=1` (optional, starts named pipe server)
 - `GAM_EXPERIMENT_PIPE_NAME=GAMExperiment` (optional)

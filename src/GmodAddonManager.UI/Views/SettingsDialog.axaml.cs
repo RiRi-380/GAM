@@ -54,6 +54,11 @@ public partial class SettingsDialog : Window
         
         // コンソール表示設定を反映
         ShowConsoleCheckBox.IsChecked = currentSettings.ShowConsoleOnStartup;
+
+        // 無効化モード設定を反映
+        SoftDisableRadio.IsChecked = currentSettings.DisableMode == DisableMode.Soft;
+        HardDisableRadio.IsChecked = currentSettings.DisableMode == DisableMode.Hard;
+        UnsubscribeCheckBox.IsChecked = currentSettings.UnsubscribeOnHardDisable;
         
         // ComboBoxの選択変更イベントを設定
         LanguageComboBox.SelectionChanged += OnLanguageSelectionChanged;
@@ -82,6 +87,10 @@ public partial class SettingsDialog : Window
         
         // 設定を更新
         currentSettings.Language = newLanguage;
+
+        // 無効化モード設定を更新
+        currentSettings.DisableMode = SoftDisableRadio.IsChecked == true ? DisableMode.Soft : DisableMode.Hard;
+        currentSettings.UnsubscribeOnHardDisable = UnsubscribeCheckBox.IsChecked ?? false;
         
         // コンソール表示設定を更新
         var newShowConsole = ShowConsoleCheckBox.IsChecked ?? false;

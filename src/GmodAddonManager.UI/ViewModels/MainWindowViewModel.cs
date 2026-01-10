@@ -12,6 +12,7 @@ using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Views;
 using System.Reflection;
 using System.Timers;
+using GmodAddonManager.UI.Models;
 
 namespace GmodAddonManager.UI.ViewModels;
 
@@ -42,7 +43,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
         // ViewModelの初期化
         assetListViewModel = new AssetListViewModel(
             addonManager, pendingChangeManager, processWatcher);
-        addonGridViewModel = new AddonGridViewModel(addonManager);
+        addonGridViewModel = new AddonGridViewModel(addonManager, pendingChangeManager, processWatcher);
         statusBarViewModel = new StatusBarViewModel(
             processWatcher, pendingChangeManager);
         
@@ -717,6 +718,11 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
             }
             
             await dialog.ShowDialog(mainWindow);
+
+            // 設定変更を反映
+            var updatedSettings = AppSettings.Load();
+            addonManager.DisableMode = updatedSettings.DisableMode;
+            addonManager.UnsubscribeOnHardDisable = updatedSettings.UnsubscribeOnHardDisable;
         }
         catch (Exception ex)
         {

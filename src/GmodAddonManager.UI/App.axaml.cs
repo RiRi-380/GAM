@@ -165,6 +165,10 @@ public partial class App : Application
                 addonManager.DisableMode = settings.DisableMode;
                 addonManager.UnsubscribeOnHardDisable = settings.UnsubscribeOnHardDisable;
                 addonManager.StrictLinkMode = settings.StrictLinkMode || addonManager.StrictLinkMode;
+                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
+                {
+                    addonManager.DisableMode = DisableMode.Hard;
+                }
                 
                 // WorkshopIconResolverの取得
                 workshopIconResolver = addonManager.GetWorkshopIconResolver() as WorkshopIconResolver;

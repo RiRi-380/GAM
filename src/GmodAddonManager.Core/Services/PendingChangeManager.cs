@@ -13,16 +13,18 @@ namespace GmodAddonManager.Core.Services
     {
         private readonly string pendingPath;
         private readonly AddonManager addonManager;
+        private readonly IErrorHandler? errorHandler;
         private readonly object lockObject = new object();
-        private PendingChanges pendingChanges;
+        private PendingChanges pendingChanges = new PendingChanges();
 
-        public event EventHandler<ChangeAppliedEventArgs> ChangeApplied;
-        public event EventHandler<ChangeFailedEventArgs> ChangeFailed;
+        public event EventHandler<ChangeAppliedEventArgs>? ChangeApplied;
+        public event EventHandler<ChangeFailedEventArgs>? ChangeFailed;
 
-        public PendingChangeManager(AddonManager addonManager, string managerPath)
+        public PendingChangeManager(AddonManager addonManager, string managerPath, IErrorHandler? errorHandler = null)
         {
             this.addonManager = addonManager;
             this.pendingPath = Path.Combine(managerPath, "pending.json");
+            this.errorHandler = errorHandler;
             LoadPendingChanges();
         }
 
@@ -64,12 +66,12 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        public async Task ApplyPendingChangesAsync()
-        {
-            if (!HasPendingChanges())
-            {
-                return;
-            }
+	        public async Task ApplyPendingChangesAsync()
+	        {
+	            if (!HasPendingChanges())
+	            {
+	                return;
+	            }
 
             // Steamの同期処理を待つ
             await Task.Delay(5000);
@@ -77,42 +79,54 @@ namespace GmodAddonManager.Core.Services
             const int pollIntervalMs = 3000;
             const int maxWaitAttempts = 40;
             int waitAttempts = 0;
-            bool notifiedAboutSteam = false;
-
-            while (true)
-            {
-                var safe = SteamProcessChecker.IsSafeToModifyAddons(out string warning);
-                if (safe && string.IsNullOrEmpty(warning))
-                {
-                    break;
-                }
-
-                if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
-                {
-                    List<AddonChange> snapshot;
-                    lock (lockObject)
-                    {
-                        snapshot = new List<AddonChange>(pendingChanges.Changes);
-                    }
-
-                    var deferException = new InvalidOperationException(warning);
-                    foreach (var change in snapshot)
-                    {
-                        ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
-                        {
-                            Change = change,
-                            Error = deferException
-                        });
-                    }
-
-                    notifiedAboutSteam = true;
-                }
-
-                if (++waitAttempts >= maxWaitAttempts)
-                {
-                    Debug.WriteLine("PendingChangeManager: Deferring pending changes until Steam/Garry's Mod are closed.");
-                    return;
-                }
+	            bool notifiedAboutSteam = false;
+	
+	            while (true)
+	            {
+	                var safe = SteamProcessChecker.IsSafeToModifyAddons(out string warning);
+	                if (safe)
+	                {
+	                    if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
+	                    {
+	                        // Steam 起動中は警告のみ（適用は続行する）
+	                        errorHandler?.HandleWarning(warning, "PendingChangeManager.ApplyPendingChangesAsync");
+	                        notifiedAboutSteam = true;
+	                    }
+	                    break;
+	                }
+	
+	                if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
+	                {
+	                    // Garry's Mod 起動中は保留にする
+	                    errorHandler?.HandleWarning(warning, "PendingChangeManager.ApplyPendingChangesAsync");
+	
+	                    List<AddonChange> snapshot;
+	                    lock (lockObject)
+	                    {
+	                        snapshot = new List<AddonChange>(pendingChanges.Changes);
+	                    }
+	
+	                    var deferException = new InvalidOperationException(warning);
+	                    foreach (var change in snapshot)
+	                    {
+	                        ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
+	                        {
+	                            Change = change,
+	                            Error = deferException
+	                        });
+	                    }
+	
+	                    notifiedAboutSteam = true;
+	                }
+	
+	                if (++waitAttempts >= maxWaitAttempts)
+	                {
+	                    Debug.WriteLine("PendingChangeManager: Deferring pending changes until Garry's Mod is closed.");
+	                    errorHandler?.HandleWarning(
+	                        "Garry's Mod が起動中のため、保留中のアドオン変更を後で適用します。ゲーム終了後に再試行してください。",
+	                        "PendingChangeManager.ApplyPendingChangesAsync");
+	                    return;
+	                }
 
                 await Task.Delay(pollIntervalMs);
             }
@@ -139,6 +153,12 @@ namespace GmodAddonManager.Core.Services
                             break;
                         case "disable":
                             addonManager.DisableAddon(change.AddonId);
+                            break;
+                        case "enable_asset":
+                            await addonManager.EnableAssetAsync(change.AddonId);
+                            break;
+                        case "disable_asset":
+                            await addonManager.DisableAssetAsync(change.AddonId);
                             break;
                         default:
                             continue;
@@ -287,12 +307,12 @@ namespace GmodAddonManager.Core.Services
 
     public class ChangeAppliedEventArgs : EventArgs
     {
-        public AddonChange Change { get; set; }
+        public AddonChange Change { get; set; } = null!;
     }
 
     public class ChangeFailedEventArgs : EventArgs
     {
-        public AddonChange Change { get; set; }
-        public Exception Error { get; set; }
+        public AddonChange Change { get; set; } = null!;
+        public Exception Error { get; set; } = null!;
     }
 }

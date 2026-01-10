@@ -22,6 +22,8 @@ namespace GmodAddonManager.UI.ViewModels;
 public class AddonGridViewModel : ViewModelBase
 {
     private readonly AddonManager addonManager;
+    private readonly PendingChangeManager pendingChangeManager;
+    private readonly GmodProcessWatcher processWatcher;
     
     private ObservableCollection<AddonItemViewModel> allAddons;
     private ObservableCollection<AddonItemViewModel> filteredAddons;
@@ -37,9 +39,11 @@ public class AddonGridViewModel : ViewModelBase
     private int addonFilterIndex = 0; // 0=全て, 1=通常のみ, 2=キャッシュのみ
     private DashboardViewModel? dashboardViewModel;
 
-    public AddonGridViewModel(AddonManager addonManager)
+    public AddonGridViewModel(AddonManager addonManager, PendingChangeManager pendingChangeManager, GmodProcessWatcher processWatcher)
     {
         this.addonManager = addonManager;
+        this.pendingChangeManager = pendingChangeManager;
+        this.processWatcher = processWatcher;
 
         allAddons = new ObservableCollection<AddonItemViewModel>();
         filteredAddons = new ObservableCollection<AddonItemViewModel>();
@@ -1076,30 +1080,30 @@ public class AddonGridViewModel : ViewModelBase
         }
     }
     
-    private async Task ChangeSelectedAddonStateAsync(string action)
-    {
-        try
+        private async Task ChangeSelectedAddonStateAsync(string action)
         {
-            if (string.IsNullOrWhiteSpace(action))
-                return;
-                
-            var selectedAddons = GetSelectedAddons();
-            if (selectedAddons.Count == 0)
-                return;
-                
-            // サブスクライブ解除の処理
-            if (action == L.Get("AddonGrid.Unsubscribe"))
+            try
             {
-                await UnsubscribeSelectedAddonsAsync();
-                return;
-            }
-            
-            // アセットが選択されていない場合は状態変更不可
-            if (currentAsset == null)
-                return;
+                if (string.IsNullOrWhiteSpace(action))
+                    return;
                 
-            AddonState newState;
-            // Check against localized values
+                var selectedAddons = GetSelectedAddons();
+                if (selectedAddons.Count == 0)
+                    return;
+                
+                // サブスクライブ解除の処理
+                if (action == L.Get("AddonGrid.Unsubscribe"))
+                {
+                    await UnsubscribeSelectedAddonsAsync();
+                    return;
+                }
+                
+                // アセットが選択されていない場合は状態変更不可
+                if (currentAsset == null)
+                    return;
+                
+                AddonState newState;
+                // Check against localized values
             if (action == L.Get("AddonGrid.Enable"))
             {
                 newState = AddonState.Enabled;
@@ -1134,6 +1138,31 @@ public class AddonGridViewModel : ViewModelBase
             }
             else
             {
+                return;
+            }
+
+            // GMod稼働中は即時適用せず、状態だけ保存して後で反映する
+            if (processWatcher.IsGmodRunning)
+            {
+                var config = addonManager.GetConfiguration();
+                var asset = config.Assets.FirstOrDefault(a => a.Id == currentAsset.Id);
+                if (asset != null)
+                {
+                    foreach (var addon in selectedAddons)
+                    {
+                        asset.SetAddonState(addon.AddonId, newState);
+                    }
+                    await addonManager.SaveConfigurationAsync();
+                }
+
+                // 後でUpdateAddonStatesAsyncを走らせるためのトリガー
+                pendingChangeManager.QueueChange(new AddonChange("apply_states", "*"));
+
+                var dialog = new DialogService();
+                await dialog.ShowInfoAsync(
+                    L.Get("Info.Title"),
+                    L.Get("Info.PendingAfterGmodExit") ?? "変更はGarry's Mod/Steam終了後に適用されます。"
+                );
                 return;
             }
             

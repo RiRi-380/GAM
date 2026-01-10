@@ -25,6 +25,12 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
+                var lockDir = Path.GetDirectoryName(lockFilePath);
+                if (!string.IsNullOrEmpty(lockDir) && !Directory.Exists(lockDir))
+                {
+                    Directory.CreateDirectory(lockDir);
+                }
+
                 // ロックファイルを排他的に開く
                 lockFileStream = new FileStream(
                     lockFilePath, 

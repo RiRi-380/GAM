@@ -30,26 +30,30 @@ namespace GmodAddonManager.Core.Services
         }
 
         /// <summary>
-        /// Set enable state for a single workshop addon id.
+        /// Set enable state for a single workshop addon id. Returns true if the state was persisted.
         /// </summary>
-        public void SetEnabled(string workshopId, bool enabled)
+        public bool SetEnabled(string workshopId, bool enabled)
         {
-            if (string.IsNullOrWhiteSpace(workshopId)) return;
+            if (string.IsNullOrWhiteSpace(workshopId)) return false;
 
             lock (fileLock)
             {
                 var states = LoadAllStatesNoLock();
                 states[workshopId] = enabled;
                 SaveAllStatesNoLock(states);
+
+                // Read back to confirm (SaveAllStatesNoLock is best-effort and may fail silently)
+                var persistedStates = LoadAllStatesNoLock();
+                return persistedStates.TryGetValue(workshopId, out var stored) && stored == enabled;
             }
         }
 
         /// <summary>
-        /// Bulk set multiple states atomically.
+        /// Bulk set multiple states atomically. Returns true if all requested states were persisted.
         /// </summary>
-        public void SetEnabledBulk(Dictionary<string, bool> statesToApply)
+        public bool SetEnabledBulk(Dictionary<string, bool> statesToApply)
         {
-            if (statesToApply == null || statesToApply.Count == 0) return;
+            if (statesToApply == null || statesToApply.Count == 0) return true;
             lock (fileLock)
             {
                 var states = LoadAllStatesNoLock();
@@ -61,6 +65,17 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
                 SaveAllStatesNoLock(states);
+
+                // Read back to confirm
+                var persistedStates = LoadAllStatesNoLock();
+                foreach (var kvp in statesToApply)
+                {
+                    if (!persistedStates.TryGetValue(kvp.Key, out var stored) || stored != kvp.Value)
+                    {
+                        return false;
+                    }
+                }
+                return true;
             }
         }
 

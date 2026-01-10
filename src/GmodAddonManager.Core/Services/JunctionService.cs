@@ -224,7 +224,9 @@ namespace GmodAddonManager.Core.Services
             var reparseData = new REPARSE_DATA_BUFFER
             {
                 ReparseTag = IO_REPARSE_TAG_MOUNT_POINT,
-                ReparseDataLength = (ushort)(substituteBytes.Length + printBytes.Length + 4),
+                // ReparseDataLength is the size of the mount point reparse buffer (excluding the 8-byte tag/length/reserved header).
+                // It must include the 8 bytes of offset/length fields plus the path buffer (substitute + null + print + null).
+                ReparseDataLength = (ushort)(substituteBytes.Length + printBytes.Length + 12),
                 SubstituteNameOffset = 0,
                 SubstituteNameLength = (ushort)substituteBytes.Length,
                 PrintNameOffset = (ushort)(substituteBytes.Length + 2),
@@ -258,7 +260,7 @@ namespace GmodAddonManager.Core.Services
                             "Failed to create junction. Enable Windows Developer Mode or run the application as administrator.",
                             new Win32Exception(error));
                     }
-                    throw new Win32Exception(error, $"Failed to open junction path: {junctionPath}");
+                    throw new Win32Exception(error, $"Failed to open junction path: {junctionPath} (Win32={error})");
                 }
 
                 int structSize = Marshal.SizeOf<REPARSE_DATA_BUFFER>();
@@ -285,7 +287,7 @@ namespace GmodAddonManager.Core.Services
                             "Failed to create junction. Enable Windows Developer Mode or run the application as administrator.",
                             new Win32Exception(error));
                     }
-                    throw new Win32Exception(error, $"Failed to create junction from '{junctionPath}' to '{targetPath}'");
+                    throw new Win32Exception(error, $"Failed to create junction from '{junctionPath}' to '{targetPath}' (Win32={error})");
                 }
             }
             finally
@@ -438,16 +440,18 @@ namespace GmodAddonManager.Core.Services
 
                 CreateJunction(junctionDir, targetDir);
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                throw new UnauthorizedAccessException(
-                    "ジャンクションを作成できません。Windowsの開発者モードを有効にするか、管理者としてアプリケーションを実行してください。");
+                System.Diagnostics.Debug.WriteLine($"[JunctionService] Junction self-test failed: {ex.Message}");
             }
             catch (Win32Exception ex) when (IsPrivilegeError(ex.NativeErrorCode))
             {
-                throw new UnauthorizedAccessException(
-                    "ジャンクションを作成できません。Windowsの開発者モードを有効にするか、管理者としてアプリケーションを実行してください。",
-                    ex);
+                System.Diagnostics.Debug.WriteLine($"[JunctionService] Junction self-test failed with privilege error: {ex.Message} (Win32={ex.NativeErrorCode})");
+            }
+            catch (Exception ex)
+            {
+                // 権限以外のエラーは初期化を止めず警告に留める
+                System.Diagnostics.Debug.WriteLine($"[JunctionService] Junction self-test failed (non-privilege): {ex.Message}");
             }
             finally
             {
