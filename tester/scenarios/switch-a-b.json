@@ -1,0 +1,14 @@
+{
+  "name": "switch-a-to-b",
+  "condition": "LM",
+  "initial_enabled_groups": ["A"],
+  "expected_enabled_groups": ["B"],
+  "actions": [
+    { "op": "create_asset", "asset": "A" },
+    { "op": "add_group_to_asset", "asset": "A", "group": "A" },
+    { "op": "create_asset", "asset": "B" },
+    { "op": "add_group_to_asset", "asset": "B", "group": "B" },
+    { "op": "disable_asset", "asset": "A" },
+    { "op": "enable_asset", "asset": "B" }
+  ]
+}

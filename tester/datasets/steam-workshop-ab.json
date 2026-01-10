@@ -1,0 +1,25 @@
+{
+  "name": "steam-workshop-ab",
+  "addons": [
+    { "id": "104603895", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "160250458", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "106753243", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "111412589", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "151324826", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "162581348", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "132720207", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "109624495", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "107382720", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "120725570", "group": "A", "type": "gma", "sizeBytes": 0 },
+    { "id": "104479831", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "163806212", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "122241773", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "180495476", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "280504087", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "104548572", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "170917415", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "114513422", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "176867554", "group": "B", "type": "gma", "sizeBytes": 0 },
+    { "id": "214116040", "group": "B", "type": "gma", "sizeBytes": 0 }
+  ]
+}

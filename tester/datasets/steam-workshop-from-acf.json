@@ -1,0 +1,125 @@
+{
+  "name": "steam-workshop-from-acf",
+  "addons": [
+    {
+      "id": "1764651875",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1761378876",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "20761419",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104479467",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1376458048",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104483020",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "35314381",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1702842117",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104483504",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "19127653",
+      "group": "A",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1351193899",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104487316",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "90739382",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1392148036",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104488112",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "22325794",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1351109646",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "104492363",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "64401681",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    },
+    {
+      "id": "1396698275",
+      "group": "B",
+      "type": "gma",
+      "sizeBytes": 0
+    }
+  ]
+}

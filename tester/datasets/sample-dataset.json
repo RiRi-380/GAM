@@ -1,0 +1,25 @@
+{
+  "name": "sample-100",
+  "addons": [
+    { "id": "1001", "group": "A", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "1002", "group": "A", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "1003", "group": "A", "type": "folder", "sizeBytes": 524288 },
+    { "id": "1004", "group": "A", "type": "folder", "sizeBytes": 524288 },
+    { "id": "1005", "group": "A", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "1006", "group": "A", "type": "folder", "sizeBytes": 524288 },
+    { "id": "1007", "group": "A", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "1008", "group": "A", "type": "folder", "sizeBytes": 524288 },
+    { "id": "1009", "group": "A", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "1010", "group": "A", "type": "folder", "sizeBytes": 524288 },
+    { "id": "2001", "group": "B", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "2002", "group": "B", "type": "folder", "sizeBytes": 524288 },
+    { "id": "2003", "group": "B", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "2004", "group": "B", "type": "folder", "sizeBytes": 524288 },
+    { "id": "2005", "group": "B", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "2006", "group": "B", "type": "folder", "sizeBytes": 524288 },
+    { "id": "2007", "group": "B", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "2008", "group": "B", "type": "folder", "sizeBytes": 524288 },
+    { "id": "2009", "group": "B", "type": "gma", "sizeBytes": 1048576 },
+    { "id": "2010", "group": "B", "type": "folder", "sizeBytes": 524288 }
+  ]
+}
