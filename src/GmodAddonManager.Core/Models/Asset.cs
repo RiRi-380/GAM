@@ -88,7 +88,7 @@ namespace GmodAddonManager.Core.Models
 
         public bool ContainsAllAddons()
         {
-            return Addons.Count == 1 && Addons[0] == "*";
+            return Addons.Contains("*");
         }
 
         public void SetAllAddons()

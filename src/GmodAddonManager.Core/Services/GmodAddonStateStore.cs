@@ -8,12 +8,13 @@ using System.Text.RegularExpressions;
 namespace GmodAddonManager.Core.Services
 {
     /// <summary>
-    /// Manages Garry's Mod addon enable/disable state by editing garrysmod/settings/addons.txt.
-    /// We do not remove workshop files or links; we only toggle load state so Steam won't redownload.
+    /// Manages Garry's Mod addon enable/disable state by editing garrysmod/cfg/addonnomount.txt.
+    /// Addons listed in this file are DISABLED (not mounted).
+    /// Addons NOT in this file are ENABLED.
     /// </summary>
     public class GmodAddonStateStore
     {
-        private readonly string settingsFilePath;
+        private readonly string noMountFilePath;
         private readonly object fileLock = new object();
 
         public GmodAddonStateStore(string gmodRootPath)
@@ -24,9 +25,9 @@ namespace GmodAddonManager.Core.Services
             }
 
             // gmodRootPath should point to .../common/GarrysMod
-            // addons.txt is located at: garrysmod/settings/addons.txt
-            var settingsDir = Path.Combine(gmodRootPath, "garrysmod", "settings");
-            settingsFilePath = Path.Combine(settingsDir, "addons.txt");
+            // addonnomount.txt is located at: garrysmod/cfg/addonnomount.txt
+            var cfgDir = Path.Combine(gmodRootPath, "garrysmod", "cfg");
+            noMountFilePath = Path.Combine(cfgDir, "addonnomount.txt");
         }
 
         /// <summary>
@@ -38,13 +39,28 @@ namespace GmodAddonManager.Core.Services
 
             lock (fileLock)
             {
-                var states = LoadAllStatesNoLock();
-                states[workshopId] = enabled;
-                SaveAllStatesNoLock(states);
+                var disabledIds = LoadDisabledIdsNoLock();
 
-                // Read back to confirm (SaveAllStatesNoLock is best-effort and may fail silently)
-                var persistedStates = LoadAllStatesNoLock();
-                return persistedStates.TryGetValue(workshopId, out var stored) && stored == enabled;
+                if (enabled)
+                {
+                    // Enable = remove from nomount list
+                    disabledIds.Remove(workshopId);
+                }
+                else
+                {
+                    // Disable = add to nomount list
+                    if (!disabledIds.Contains(workshopId))
+                    {
+                        disabledIds.Add(workshopId);
+                    }
+                }
+
+                SaveDisabledIdsNoLock(disabledIds);
+
+                // Read back to confirm
+                var persistedIds = LoadDisabledIdsNoLock();
+                var isNowDisabled = persistedIds.Contains(workshopId);
+                return enabled ? !isNowDisabled : isNowDisabled;
             }
         }
 
@@ -54,23 +70,41 @@ namespace GmodAddonManager.Core.Services
         public bool SetEnabledBulk(Dictionary<string, bool> statesToApply)
         {
             if (statesToApply == null || statesToApply.Count == 0) return true;
+
             lock (fileLock)
             {
-                var states = LoadAllStatesNoLock();
+                var disabledIds = LoadDisabledIdsNoLock();
+
                 foreach (var kvp in statesToApply)
                 {
-                    if (!string.IsNullOrWhiteSpace(kvp.Key))
+                    if (string.IsNullOrWhiteSpace(kvp.Key)) continue;
+
+                    if (kvp.Value)
                     {
-                        states[kvp.Key] = kvp.Value;
+                        // Enable = remove from nomount list
+                        disabledIds.Remove(kvp.Key);
+                    }
+                    else
+                    {
+                        // Disable = add to nomount list
+                        if (!disabledIds.Contains(kvp.Key))
+                        {
+                            disabledIds.Add(kvp.Key);
+                        }
                     }
                 }
-                SaveAllStatesNoLock(states);
+
+                SaveDisabledIdsNoLock(disabledIds);
 
                 // Read back to confirm
-                var persistedStates = LoadAllStatesNoLock();
+                var persistedIds = LoadDisabledIdsNoLock();
                 foreach (var kvp in statesToApply)
                 {
-                    if (!persistedStates.TryGetValue(kvp.Key, out var stored) || stored != kvp.Value)
+                    if (string.IsNullOrWhiteSpace(kvp.Key)) continue;
+
+                    var isNowDisabled = persistedIds.Contains(kvp.Key);
+                    var expectedDisabled = !kvp.Value;
+                    if (isNowDisabled != expectedDisabled)
                     {
                         return false;
                     }
@@ -79,101 +113,141 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        /// <summary>
+        /// Get enabled state for a single addon. Returns null if unknown.
+        /// </summary>
         public bool? GetEnabled(string workshopId)
         {
             if (string.IsNullOrWhiteSpace(workshopId)) return null;
             lock (fileLock)
             {
-                var states = LoadAllStatesNoLock();
-                return states.TryGetValue(workshopId, out var val) ? val : (bool?)null;
+                var disabledIds = LoadDisabledIdsNoLock();
+                // If in nomount list = disabled, otherwise enabled
+                return !disabledIds.Contains(workshopId);
             }
         }
 
-        private Dictionary<string, bool> LoadAllStatesNoLock()
+        /// <summary>
+        /// Get all addon states. Returns true for enabled, false for disabled.
+        /// Note: Only returns states for addons that are explicitly disabled.
+        /// Addons not in the list are assumed enabled.
+        /// </summary>
+        public IReadOnlyDictionary<string, bool> GetAllStates()
         {
-            var result = new Dictionary<string, bool>();
+            lock (fileLock)
+            {
+                var disabledIds = LoadDisabledIdsNoLock();
+                var result = new Dictionary<string, bool>();
+                foreach (var id in disabledIds)
+                {
+                    result[id] = false; // disabled
+                }
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// Get all disabled addon IDs.
+        /// </summary>
+        public HashSet<string> GetDisabledIds()
+        {
+            lock (fileLock)
+            {
+                return LoadDisabledIdsNoLock();
+            }
+        }
+
+        private HashSet<string> LoadDisabledIdsNoLock()
+        {
+            var result = new HashSet<string>();
             try
             {
-                var dir = Path.GetDirectoryName(settingsFilePath);
+                var dir = Path.GetDirectoryName(noMountFilePath);
                 if (string.IsNullOrEmpty(dir)) return result;
+
                 if (!Directory.Exists(dir))
                 {
                     Directory.CreateDirectory(dir);
                 }
 
-                if (!File.Exists(settingsFilePath))
+                if (!File.Exists(noMountFilePath))
                 {
-                    // Create an empty file with root KeyValues to be safe
-                    File.WriteAllText(settingsFilePath, BuildFileContent(result), Encoding.UTF8);
+                    // No file = no disabled addons
                     return result;
                 }
 
-                var text = File.ReadAllText(settingsFilePath, Encoding.UTF8);
+                var text = File.ReadAllText(noMountFilePath, Encoding.UTF8);
 
-                // Try to parse as simple Source KeyValues structure:
-                // "addons" { "12345" "1"  "67890" "0" }
-                // Be tolerant: search for pairs of "id" "0|1"
-                foreach (Match m in Regex.Matches(text, "\\\"(?<id>\\d+)\\\"\\s*\\\"(?<val>[01])\\\""))
+                // Parse addonnomount.txt format:
+                // "addonnomount"
+                // {
+                //     "1"    "workshopId1"
+                //     "2"    "workshopId2"
+                // }
+                // The key is an index, the value is the workshop ID
+                foreach (Match m in Regex.Matches(text, "\"\\d+\"\\s+\"(?<id>\\d+)\""))
                 {
                     var id = m.Groups["id"].Value;
-                    var val = m.Groups["val"].Value == "1";
                     if (!string.IsNullOrEmpty(id))
                     {
-                        result[id] = val;
+                        result.Add(id);
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // If parsing fails, return empty mapping to avoid breaking gameplay
+                System.Diagnostics.Debug.WriteLine($"[GmodAddonStateStore] Failed to load addonnomount.txt: {ex.Message}");
             }
 
             return result;
         }
 
-        private void SaveAllStatesNoLock(Dictionary<string, bool> states)
+        private void SaveDisabledIdsNoLock(HashSet<string> disabledIds)
         {
             try
             {
-                var dir = Path.GetDirectoryName(settingsFilePath);
+                var dir = Path.GetDirectoryName(noMountFilePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {
                     Directory.CreateDirectory(dir);
                 }
 
-                var temp = settingsFilePath + ".tmp";
-                var content = BuildFileContent(states);
-                File.WriteAllText(temp, content, Encoding.UTF8);
-                if (File.Exists(settingsFilePath))
+                var temp = noMountFilePath + ".tmp";
+                var content = BuildNoMountFileContent(disabledIds);
+                // Use UTF-8 without BOM - Source engine doesn't support BOM
+                File.WriteAllText(temp, content, new UTF8Encoding(false));
+
+                if (File.Exists(noMountFilePath))
                 {
-                    File.Replace(temp, settingsFilePath, null);
+                    File.Replace(temp, noMountFilePath, null);
                 }
                 else
                 {
-                    File.Move(temp, settingsFilePath);
+                    File.Move(temp, noMountFilePath);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Best effort; if save fails, ignore to not crash the app
+                System.Diagnostics.Debug.WriteLine($"[GmodAddonStateStore] Failed to save addonnomount.txt: {ex.Message}");
             }
         }
 
-        private string BuildFileContent(Dictionary<string, bool> states)
+        private string BuildNoMountFileContent(HashSet<string> disabledIds)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("\"addons\"");
+            sb.AppendLine("\"addonnomount\"");
             sb.AppendLine("{");
-            // Keep deterministic ordering for stability
-            foreach (var kv in states.OrderBy(k => k.Key))
+
+            // Sort for deterministic output
+            var sortedIds = disabledIds.OrderBy(id => id).ToList();
+            for (int i = 0; i < sortedIds.Count; i++)
             {
-                sb.Append("    \"").Append(kv.Key).Append("\"    \"")
-                  .Append(kv.Value ? "1" : "0").AppendLine("\"");
+                sb.Append("\t\"").Append(i + 1).Append("\"\t\t\"")
+                  .Append(sortedIds[i]).AppendLine("\"");
             }
+
             sb.AppendLine("}");
             return sb.ToString();
         }
     }
 }
-
-

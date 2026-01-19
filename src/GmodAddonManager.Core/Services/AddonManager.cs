@@ -32,6 +32,7 @@ namespace GmodAddonManager.Core.Services
         private string? gmodCacheAddonsPath;
         private string? gmodRootPath;
         private GmodAddonStateStore? gmodAddonStateStore;
+        private readonly IAddonModeStrategy modeStrategy;
         
         private readonly JunctionService junctionService;
         private readonly SteamPathDetector steamPathDetector;
@@ -48,7 +49,7 @@ namespace GmodAddonManager.Core.Services
         private int _softModeNoFileOpsNoticeLogged = 0;
         private int _sessionLogged = 0;
 
-        public DisableMode DisableMode { get; set; } = DisableMode.Soft;
+        public DisableMode DisableMode { get; private set; }
         public bool UnsubscribeOnHardDisable { get; set; } = false;
         public bool StrictLinkMode
         {
@@ -72,16 +73,37 @@ namespace GmodAddonManager.Core.Services
 
         private const int ERROR_NOT_SAME_DEVICE = 17;
 
-        public AddonManager() : this(null, null)
+        public AddonManager() : this(new AddonManagerOptions())
         {
         }
 
-	        public AddonManager(string? customWorkshopPath) : this(customWorkshopPath, null)
-	        {
-	        }
-	
-	        public AddonManager(string? customWorkshopPath, IErrorHandler? customErrorHandler)
-	        {
+        public AddonManager(string? customWorkshopPath) : this(new AddonManagerOptions
+        {
+            CustomWorkshopPath = customWorkshopPath
+        })
+        {
+        }
+
+        public AddonManager(string? customWorkshopPath, IErrorHandler? customErrorHandler) : this(new AddonManagerOptions
+        {
+            CustomWorkshopPath = customWorkshopPath,
+            ErrorHandler = customErrorHandler
+        })
+        {
+        }
+
+        public AddonManager(string? customWorkshopPath, IErrorHandler? customErrorHandler, DisableMode disableMode) : this(new AddonManagerOptions
+        {
+            CustomWorkshopPath = customWorkshopPath,
+            ErrorHandler = customErrorHandler,
+            DisableMode = disableMode
+        })
+        {
+        }
+
+        public AddonManager(AddonManagerOptions? options)
+        {
+            options ??= new AddonManagerOptions();
             steamPathDetector = new SteamPathDetector();
             junctionService = new JunctionService();
             
@@ -97,24 +119,38 @@ namespace GmodAddonManager.Core.Services
             iconResolver.SetWorkshopService(steamWorkshopService);
             
             undoManager = new UndoManager();
-            errorHandler = customErrorHandler ?? new DefaultErrorHandler();
+            errorHandler = options.ErrorHandler ?? new DefaultErrorHandler();
             eventLogger = ExperimentEventLogger.CreateDefault();
             StrictLinkMode = GetStrictLinkModeFromEnvironment();
+            DisableMode = options.DisableMode;
+            modeStrategy = DisableMode == DisableMode.Hard
+                ? new HardAddonModeStrategy()
+                : new SoftAddonModeStrategy();
             
-            if (string.IsNullOrEmpty(customWorkshopPath))
+            if (string.IsNullOrEmpty(options.CustomWorkshopPath))
             {
                 workshopPath = steamPathDetector.DetectWorkshopPath();
                 // Detected workshop path
             }
             else
             {
-                workshopPath = customWorkshopPath;
+                workshopPath = options.CustomWorkshopPath;
             }
-            
-            managerPath = Path.Combine(workshopPath, ".addon-manager");
-            configPath = Path.Combine(managerPath, "config.json");
-            pendingPath = Path.Combine(managerPath, "pending.json");
-            addonsPath = Path.Combine(managerPath, "addons");
+
+            if (DisableMode == DisableMode.Soft)
+            {
+                managerPath = appDataPath;
+                configPath = Path.Combine(managerPath, "config.json");
+                pendingPath = Path.Combine(managerPath, "pending.json");
+                addonsPath = Path.Combine(managerPath, "addons");
+            }
+            else
+            {
+                managerPath = Path.Combine(workshopPath, ".addon-manager");
+                configPath = Path.Combine(managerPath, "config.json");
+                pendingPath = Path.Combine(managerPath, "pending.json");
+                addonsPath = Path.Combine(managerPath, "addons");
+            }
             
             // Detect Gmod cache path
             try
@@ -130,7 +166,7 @@ namespace GmodAddonManager.Core.Services
             }
             
             // Set up cache manager paths
-            if (!string.IsNullOrEmpty(gmodCachePath))
+            if (DisableMode == DisableMode.Hard && !string.IsNullOrEmpty(gmodCachePath))
             {
                 gmodCacheManagerPath = Path.Combine(gmodCachePath, ".addon-manager");
                 gmodCacheAddonsPath = Path.Combine(gmodCacheManagerPath, "addons");
@@ -139,7 +175,12 @@ namespace GmodAddonManager.Core.Services
             }
             else
             {
-                errorHandler.HandleWarning("gmodCachePath is null or empty, cache addon management will be disabled", "Constructor");
+                gmodCacheManagerPath = null;
+                gmodCacheAddonsPath = null;
+                if (string.IsNullOrEmpty(gmodCachePath))
+                {
+                    errorHandler.HandleWarning("gmodCachePath is null or empty, cache addon management will be disabled", "Constructor");
+                }
             }
 
             // Detect Gmod root path for settings management (addons.txt)
@@ -189,8 +230,64 @@ namespace GmodAddonManager.Core.Services
                     LogExperimentEvent("SessionStart", eventScope: "system", result: "success");
                 }
 
-                junctionService.ValidateAdminPrivileges();
+                if (modeStrategy.RequiresAdmin)
+                {
+                    junctionService.ValidateAdminPrivileges();
+                }
 
+                await modeStrategy.InitializeAsync(this);
+
+                // 操作ログマネージャーを初期化
+                operationLogManager = new OperationLogManager(managerPath);
+                
+                // 起動時に古いログをクリーンアップ
+                operationLogManager.CleanupOldLogs();
+
+                if (File.Exists(configPath))
+                {
+                    await LoadConfigurationAsync();
+                    
+                    // ジャンクションアセットが存在しない場合は追加
+                    EnsureJunctionAssetExists();
+                }
+                else
+                {
+                    configuration = new Configuration();
+                    configuration.CreateDefaultAssets();
+                    await SaveConfigurationAsync();
+                }
+                
+                // 起動時に未完了の操作をチェック
+                await CheckIncompleteOperationsAsync();
+
+                await MigrateExistingAddonsAsync();
+                
+                // 起動時のシステム整合性チェック
+                await modeStrategy.ValidateSystemIntegrityAsync(this);
+                
+                // ジャンクション状態のアドオンを検出して更新
+                await UpdateJunctionAssetAsync();
+                
+                // Subscribeアセットに全アドオンが含まれていることを確認
+                await EnsureAllAddonsInSubscribeAssetAsync();
+                
+                // 初期化後、全アドオンの状態を確実に更新
+                await UpdateAddonStatesAsync();
+                
+                // 最後にサブスクライブ解除されたアドオンをクリーンアップ
+                // UpdateAddonStatesAsyncの後に実行することで、ジャンクション再作成を防ぐ
+                await modeStrategy.CleanupUnsubscribedAddonsAsync(this);
+                
+                // Addon Manager initialization complete
+            }
+            catch (Exception ex)
+            {
+                throw; // エラーを再スローして、呼び出し元で処理できるようにする
+            }
+        }
+
+        internal void EnsureManagerDirectories()
+        {
             if (!Directory.Exists(managerPath))
             {
                 ValidatePath(managerPath, "managerPath");
@@ -204,7 +301,65 @@ namespace GmodAddonManager.Core.Services
                 ValidatePath(addonsPath, "addonsPath");
                 Directory.CreateDirectory(addonsPath);
             }
+        }
 
+        internal void EnsureDataDirectory()
+        {
+            if (!Directory.Exists(managerPath))
+            {
+                ValidatePath(managerPath, "managerPath");
+                Directory.CreateDirectory(managerPath);
+            }
+        }
+
+        internal void TryMigrateLegacyManagerData()
+        {
+            if (DisableMode != DisableMode.Soft)
+            {
+                return;
+            }
+
+            var legacyManagerPath = Path.Combine(workshopPath, ".addon-manager");
+            if (!Directory.Exists(legacyManagerPath))
+            {
+                return;
+            }
+
+            var legacyConfigPath = Path.Combine(legacyManagerPath, "config.json");
+            if (!File.Exists(configPath) && File.Exists(legacyConfigPath))
+            {
+                try
+                {
+                    ValidatePath(legacyConfigPath, "legacyConfigPath");
+                    ValidatePath(configPath, "configPath");
+                    File.Copy(legacyConfigPath, configPath, true);
+                    errorHandler.HandleInfo("Migrated legacy config.json to AppData for soft mode", "InitializeAsync");
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning($"Failed to migrate legacy config.json: {ex.Message}", "InitializeAsync");
+                }
+            }
+
+            var legacyPendingPath = Path.Combine(legacyManagerPath, "pending.json");
+            if (!File.Exists(pendingPath) && File.Exists(legacyPendingPath))
+            {
+                try
+                {
+                    ValidatePath(legacyPendingPath, "legacyPendingPath");
+                    ValidatePath(pendingPath, "pendingPath");
+                    File.Copy(legacyPendingPath, pendingPath, true);
+                    errorHandler.HandleInfo("Migrated legacy pending.json to AppData for soft mode", "InitializeAsync");
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning($"Failed to migrate legacy pending.json: {ex.Message}", "InitializeAsync");
+                }
+            }
+        }
+
+        internal void WarnIfCacheOnDifferentDrive()
+        {
             if (!string.IsNullOrEmpty(gmodCachePath) && !AreSameDrive(workshopPath, gmodCachePath))
             {
                 errorHandler.HandleWarning(
@@ -213,104 +368,66 @@ namespace GmodAddonManager.Core.Services
                     "Move the Steam library so both folders share the same volume to keep a single physical copy of each addon.",
                     "InitializeAsync");
             }
+        }
 
-
-            // Create cache manager directories if cache path exists
-            if (!string.IsNullOrEmpty(gmodCachePath))
+        internal void EnsureCacheManagerDirectories()
+        {
+            if (string.IsNullOrEmpty(gmodCachePath))
             {
-                // Attempting to create cache directories
-                try
-                {
-                    // キャッシュパスが存在することを確認
-                    if (!Directory.Exists(gmodCachePath))
-                    {
-                        errorHandler.HandleError(
-                            new DirectoryNotFoundException($"Gmod cache path not found: {gmodCachePath}"),
-                            "Cache path not found",
-                            ErrorSeverity.Warning
-                        );
-                        gmodCacheManagerPath = null;
-                        gmodCacheAddonsPath = null;
-                    }
-                    else
-                    {
-                        // .addon-managerフォルダを作成
-                        if (!Directory.Exists(gmodCacheManagerPath))
-                        {
-                            // Creating cache manager directory
-                            ValidatePath(gmodCacheManagerPath, "gmodCacheManagerPath");
-                            Directory.CreateDirectory(gmodCacheManagerPath);
-                            var dirInfo = new DirectoryInfo(gmodCacheManagerPath);
-                            dirInfo.Attributes |= FileAttributes.Hidden;
-                            // Cache manager directory created successfully
-                            errorHandler.HandleInfo($"Created cache manager directory: {gmodCacheManagerPath}", "InitializeAsync");
-                        }
+                return;
+            }
 
-                        // addonsサブフォルダを作成
-                        if (!Directory.Exists(gmodCacheAddonsPath))
-                        {
-                            ValidatePath(gmodCacheAddonsPath, "gmodCacheAddonsPath");
-                            Directory.CreateDirectory(gmodCacheAddonsPath);
-                            errorHandler.HandleInfo($"Created cache addons directory: {gmodCacheAddonsPath}", "InitializeAsync");
-                        }
-                    }
-                }
-                catch (Exception ex)
+            if (string.IsNullOrEmpty(gmodCacheManagerPath) || string.IsNullOrEmpty(gmodCacheAddonsPath))
+            {
+                return;
+            }
+
+            try
+            {
+                if (!Directory.Exists(gmodCachePath))
                 {
-                    errorHandler.HandleError(ex, "Failed to create cache directories", ErrorSeverity.Error);
-                    // キャッシュ管理を無効化
+                    errorHandler.HandleError(
+                        new DirectoryNotFoundException($"Gmod cache path not found: {gmodCachePath}"),
+                        "Cache path not found",
+                        ErrorSeverity.Warning
+                    );
                     gmodCacheManagerPath = null;
                     gmodCacheAddonsPath = null;
+                    return;
                 }
-            }
 
-            // 操作ログマネージャーを初期化
-            operationLogManager = new OperationLogManager(managerPath);
-            
-            // 起動時に古いログをクリーンアップ
-            operationLogManager.CleanupOldLogs();
+                if (!Directory.Exists(gmodCacheManagerPath))
+                {
+                    ValidatePath(gmodCacheManagerPath, "gmodCacheManagerPath");
+                    Directory.CreateDirectory(gmodCacheManagerPath);
+                    var dirInfo = new DirectoryInfo(gmodCacheManagerPath);
+                    dirInfo.Attributes |= FileAttributes.Hidden;
+                    errorHandler.HandleInfo($"Created cache manager directory: {gmodCacheManagerPath}", "InitializeAsync");
+                }
 
-            if (File.Exists(configPath))
-            {
-                await LoadConfigurationAsync();
-                
-                // ジャンクションアセットが存在しない場合は追加
-                EnsureJunctionAssetExists();
-            }
-            else
-            {
-                configuration = new Configuration();
-                configuration.CreateDefaultAssets();
-                await SaveConfigurationAsync();
-            }
-            
-            // 起動時に未完了の操作をチェック
-            await CheckIncompleteOperationsAsync();
-
-            await MigrateExistingAddonsAsync();
-            
-            // 起動時のシステム整合性チェック
-            await ValidateSystemIntegrityAsync();
-            
-            // ジャンクション状態のアドオンを検出して更新
-            await UpdateJunctionAssetAsync();
-            
-            // Subscribeアセットに全アドオンが含まれていることを確認
-            await EnsureAllAddonsInSubscribeAssetAsync();
-            
-            // 初期化後、全アドオンの状態を確実に更新
-            await UpdateAddonStatesAsync();
-            
-            // 最後にサブスクライブ解除されたアドオンをクリーンアップ
-            // UpdateAddonStatesAsyncの後に実行することで、ジャンクション再作成を防ぐ
-            await CleanupUnsubscribedAddonsAsync();
-            
-                // Addon Manager initialization complete
+                if (!Directory.Exists(gmodCacheAddonsPath))
+                {
+                    ValidatePath(gmodCacheAddonsPath, "gmodCacheAddonsPath");
+                    Directory.CreateDirectory(gmodCacheAddonsPath);
+                    errorHandler.HandleInfo($"Created cache addons directory: {gmodCacheAddonsPath}", "InitializeAsync");
+                }
             }
             catch (Exception ex)
             {
-                throw; // エラーを再スローして、呼び出し元で処理できるようにする
+                errorHandler.HandleError(ex, "Failed to create cache directories", ErrorSeverity.Error);
+                gmodCacheManagerPath = null;
+                gmodCacheAddonsPath = null;
             }
+        }
+
+        internal Task ValidateSystemIntegrityHardAsync()
+        {
+            return ValidateSystemIntegrityAsync();
+        }
+
+        internal Task CleanupUnsubscribedAddonsHardAsync()
+        {
+            return CleanupUnsubscribedAddonsAsync();
         }
 
         private async Task EnsureAllAddonsInSubscribeAssetAsync()
@@ -362,7 +479,12 @@ namespace GmodAddonManager.Core.Services
             await MigrateExistingAddonsAsync(null);
         }
         
-        public async Task MigrateExistingAddonsAsync(HashSet<string> addonIdsToProcess)
+        public Task MigrateExistingAddonsAsync(HashSet<string>? addonIdsToProcess)
+        {
+            return modeStrategy.MigrateExistingAddonsAsync(this, addonIdsToProcess);
+        }
+
+        internal async Task MigrateExistingAddonsHardAsync(HashSet<string>? addonIdsToProcess)
         {
             var directories = Directory.GetDirectories(workshopPath)
                 .Where(d => !Path.GetFileName(d).StartsWith("."))
@@ -753,7 +875,12 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        public async Task<List<WorkshopAddon>> ScanWorkshopFolderAsync()
+        public Task<List<WorkshopAddon>> ScanWorkshopFolderAsync()
+        {
+            return modeStrategy.ScanWorkshopFolderAsync(this);
+        }
+
+        internal async Task<List<WorkshopAddon>> ScanWorkshopFolderHardAsync()
         {
             var addons = new List<WorkshopAddon>();
             var processedIds = new HashSet<string>();
@@ -945,6 +1072,173 @@ namespace GmodAddonManager.Core.Services
                 addons = addons.Where(a => !deletedAddonIds.Contains(a.Id)).ToList();
             }
             
+            return addons;
+        }
+
+        internal async Task<List<WorkshopAddon>> ScanWorkshopFolderSoftAsync()
+        {
+            var addons = new List<WorkshopAddon>();
+            var processedIds = new HashSet<string>(StringComparer.Ordinal);
+
+            if (Directory.Exists(workshopPath))
+            {
+                var workshopDirs = Directory.GetDirectories(workshopPath)
+                    .Where(d => !Path.GetFileName(d).StartsWith("."))
+                    .ToList();
+
+                foreach (var directory in workshopDirs)
+                {
+                    var addonId = Path.GetFileName(directory);
+                    if (!long.TryParse(addonId, out _))
+                    {
+                        continue;
+                    }
+
+                    processedIds.Add(addonId);
+
+                    if (configuration?.AddonMetadata != null && configuration.AddonMetadata.TryGetValue(addonId, out var savedAddon))
+                    {
+                        savedAddon.FolderPath = directory;
+                        savedAddon.IsGmaFile = IsGmaAddonRuntime(addonId);
+                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        addons.Add(savedAddon);
+                    }
+                    else
+                    {
+                        var addon = await ScanAddonAsync(directory);
+                        if (addon != null)
+                        {
+                            addon.IsGmaFile = IsGmaAddonRuntime(addonId);
+                            addon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                            configuration.AddonMetadata[addonId] = addon;
+                            addons.Add(addon);
+                        }
+                    }
+                }
+            }
+
+            if (configuration?.AddonMetadata != null)
+            {
+                foreach (var kvp in configuration.AddonMetadata)
+                {
+                    if (processedIds.Contains(kvp.Key))
+                    {
+                        continue;
+                    }
+
+                    bool addonExists = false;
+
+                    if (kvp.Value.IsGmaFile)
+                    {
+                        string? gmaPath = null;
+
+                        if (!string.IsNullOrEmpty(gmodCachePath))
+                        {
+                            gmaPath = Path.Combine(gmodCachePath, $"{kvp.Key}.gma");
+                            if (File.Exists(gmaPath))
+                            {
+                                addonExists = true;
+                            }
+                            else
+                            {
+                                gmaPath = null;
+                            }
+                        }
+
+                        if (!addonExists)
+                        {
+                            var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
+                            var workshopGmaPath = Path.Combine(workshopDirPath, $"{kvp.Key}.gma");
+                            if (File.Exists(workshopGmaPath))
+                            {
+                                gmaPath = workshopGmaPath;
+                                addonExists = true;
+                            }
+                        }
+
+                        kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                        if (addonExists && gmaPath != null)
+                        {
+                            kvp.Value.FolderPath = gmaPath;
+                        }
+                    }
+                    else
+                    {
+                        var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
+                        if (Directory.Exists(workshopDirPath))
+                        {
+                            addonExists = true;
+                            kvp.Value.FolderPath = workshopDirPath;
+                            kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                        }
+                    }
+
+                    if (addonExists)
+                    {
+                        addons.Add(kvp.Value);
+                        processedIds.Add(kvp.Key);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(gmodCachePath) && Directory.Exists(gmodCachePath))
+            {
+                var gmaFiles = Directory.GetFiles(gmodCachePath, "*.gma");
+                foreach (var gmaFile in gmaFiles)
+                {
+                    var addonId = Path.GetFileNameWithoutExtension(gmaFile);
+                    if (!long.TryParse(addonId, out _))
+                    {
+                        continue;
+                    }
+
+                    if (processedIds.Contains(addonId))
+                    {
+                        continue;
+                    }
+
+                    processedIds.Add(addonId);
+
+                    if (configuration?.AddonMetadata != null && configuration.AddonMetadata.ContainsKey(addonId))
+                    {
+                        var savedAddon = configuration.AddonMetadata[addonId];
+                        savedAddon.FolderPath = gmaFile;
+                        savedAddon.IsGmaFile = true;
+                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        configuration.AddonMetadata[addonId] = savedAddon;
+                        addons.Add(savedAddon);
+                    }
+                    else
+                    {
+                        var addon = new WorkshopAddon(addonId, gmaFile)
+                        {
+                            IsGmaFile = true,
+                            IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true
+                        };
+
+                        ReadGmaMetadata(gmaFile, addon);
+
+                        if (string.IsNullOrWhiteSpace(addon.Title))
+                        {
+                            addon.Title = $"Workshop-{addonId}";
+                        }
+
+                        var fileInfo = new FileInfo(gmaFile);
+                        addon.Size = fileInfo.Length;
+                        addon.LastUpdated = fileInfo.LastWriteTimeUtc;
+
+                        if (configuration != null)
+                        {
+                            configuration.AddonMetadata[addonId] = addon;
+                        }
+
+                        addons.Add(addon);
+                    }
+                }
+            }
+
+            await EnsureAllAddonsInSubscribeAssetAsync();
+
             return addons;
         }
         
@@ -1508,6 +1802,11 @@ namespace GmodAddonManager.Core.Services
 
 	        public void EnableAddon(string addonId)
 	        {
+	            modeStrategy.EnableAddon(this, addonId);
+	        }
+
+	        internal void EnableAddonHard(string addonId)
+	        {
             // Always sync GMod logical state and ensure the workshop structure reflects the enabled view
             try
             {
@@ -1524,7 +1823,10 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableAddon");
+            }
 
             // Remove any legacy stub directory first (for backward compatibility)
             bool removedStub = RemoveDisabledStub(workshopPath, addonId);
@@ -1631,17 +1933,63 @@ namespace GmodAddonManager.Core.Services
 	                CreateJunctionWithMetrics(workshopAddonPath, sourcePath);
 	            }
 
-	            if (addonInfo != null)
-	            {
-	                addonInfo.IsEnabled = true;
-	                if (File.Exists(sourceGmaPath))
-	                {
-	                    addonInfo.IsGmaFile = true;
-	                }
-	            }
-	        }
+            if (addonInfo != null)
+            {
+                addonInfo.IsEnabled = true;
+                if (File.Exists(sourceGmaPath))
+                {
+                    addonInfo.IsGmaFile = true;
+                }
+            }
+        }
+
+        internal void EnableAddonSoft(string addonId)
+        {
+            try
+            {
+                if (gmodAddonStateStore == null)
+                {
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableAddon");
+                }
+                else
+                {
+                    var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
+                    if (!persisted)
+                    {
+                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableAddon");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableAddon");
+            }
+
+            if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
+            {
+                errorHandler.HandleInfo(
+                    "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+                    "EnableAddon");
+            }
+
+            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
+            var isGmaRuntime = IsGmaAddonRuntime(addonId);
+            if (addonInfo != null)
+            {
+                addonInfo.IsEnabled = true;
+                if (isGmaRuntime)
+                {
+                    addonInfo.IsGmaFile = true;
+                }
+            }
+        }
 
         public void DisableAddon(string addonId)
+        {
+            modeStrategy.DisableAddon(this, addonId);
+        }
+
+        internal void DisableAddonHard(string addonId)
         {
             try
             {
@@ -1717,6 +2065,40 @@ namespace GmodAddonManager.Core.Services
 
             // Leave a lightweight stub to discourage immediate Steam re-download
             CreateDisabledStub(workshopPath, addonId);
+        }
+
+        internal void DisableAddonSoft(string addonId)
+        {
+            try
+            {
+                if (gmodAddonStateStore == null)
+                {
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "DisableAddon");
+                }
+                else
+                {
+                    var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
+                    if (!persisted)
+                    {
+                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "DisableAddon");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "DisableAddon");
+            }
+
+            var runtimeIsGma = IsGmaAddonRuntime(addonId);
+            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
+            if (addonInfo != null)
+            {
+                addonInfo.IsEnabled = false;
+                if (runtimeIsGma)
+                {
+                    addonInfo.IsGmaFile = true;
+                }
+            }
         }
 
 	        private void EnableGmaAddon(string addonId)
@@ -2467,14 +2849,29 @@ namespace GmodAddonManager.Core.Services
 
         public AddonStateSnapshot CaptureState()
         {
-            var enabled = new HashSet<string>(GetEnabledAddons(), StringComparer.Ordinal);
+            if (DisableMode == DisableMode.Soft && gmodAddonStateStore != null)
+            {
+                var softStates = gmodAddonStateStore.GetAllStates();
+                var softSnapshotStates = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+                foreach (var addonId in configuration.AddonMetadata.Keys
+                             .Where(id => id != "*")
+                             .OrderBy(id => id, StringComparer.Ordinal))
+                {
+                    softSnapshotStates[addonId] = softStates.TryGetValue(addonId, out var softEnabled) && softEnabled;
+                }
+
+                return BuildSnapshot(softSnapshotStates, "actual:addons.txt");
+            }
+
+            var enabledAddons = new HashSet<string>(GetEnabledAddons(), StringComparer.Ordinal);
             var states = new Dictionary<string, bool>(StringComparer.Ordinal);
 
             foreach (var addonId in configuration.AddonMetadata.Keys
                          .Where(id => id != "*")
                          .OrderBy(id => id, StringComparer.Ordinal))
             {
-                states[addonId] = enabled.Contains(addonId);
+                states[addonId] = enabledAddons.Contains(addonId);
             }
 
             return BuildSnapshot(states, "actual");
@@ -2482,7 +2879,8 @@ namespace GmodAddonManager.Core.Services
 
         public AddonStateSnapshot CaptureExpectedStateSnapshot()
         {
-            return BuildSnapshot(BuildExpectedStates(), "expected");
+            var scope = GetExpectedScopeLabel(assetSpecific: false);
+            return BuildSnapshot(BuildExpectedStates(), scope);
         }
 
         public string ComputeStateHash(AddonStateSnapshot snapshot)
@@ -2495,16 +2893,44 @@ namespace GmodAddonManager.Core.Services
 
         private Dictionary<string, bool> BuildExpectedStates()
         {
+            var enabledAssets = configuration.Assets.Where(asset => asset.Enabled).ToList();
+            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
+            return BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+        }
+
+        private Dictionary<string, bool> BuildExpectedStatesForAssets(
+            IReadOnlyList<Asset> enabledAssets,
+            Asset? subscribeAsset)
+        {
             var states = new Dictionary<string, bool>(StringComparer.Ordinal);
 
             foreach (var addonId in configuration.AddonMetadata.Keys
                          .Where(id => id != "*")
                          .OrderBy(id => id, StringComparer.Ordinal))
             {
-                states[addonId] = CalculateFinalAddonState(addonId);
+                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
             }
 
             return states;
+        }
+
+        private AddonStateSnapshot? CaptureExpectedStateSnapshotForAsset(string? assetId)
+        {
+            if (string.IsNullOrWhiteSpace(assetId))
+            {
+                return null;
+            }
+
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset == null)
+            {
+                return null;
+            }
+
+            var enabledAssets = configuration.Assets.Where(a => a.Id == assetId).ToList();
+            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
+            var states = BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+            return BuildSnapshot(states, GetExpectedScopeLabel(assetSpecific: true));
         }
 
         private AddonStateSnapshot BuildSnapshot(Dictionary<string, bool> states, string? source)
@@ -2528,6 +2954,12 @@ namespace GmodAddonManager.Core.Services
                 sb.ToString(),
                 DateTime.UtcNow,
                 source);
+        }
+
+        private string GetExpectedScopeLabel(bool assetSpecific)
+        {
+            var suffix = DisableMode == DisableMode.Soft ? "addons.txt" : "actual";
+            return assetSpecific ? $"expected:asset:{suffix}" : $"expected:{suffix}";
         }
 
         private bool? GetGmodRunning()
@@ -2557,7 +2989,21 @@ namespace GmodAddonManager.Core.Services
             string? blMethod = null,
             string? note = null,
             ExperimentEventMetrics? metrics = null,
-            string? taskIdOverride = null)
+            string? taskIdOverride = null,
+            string? assetLabel = null,
+            string? assetDisplayName = null,
+            List<string>? fromAssetIds = null,
+            List<string>? fromAssetLabels = null,
+            List<string>? fromAssetDisplayNames = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null,
+            string? toAssetDisplayName = null,
+            string? parentOperationId = null,
+            string? stateHashScope = null,
+            string? expectedHashScope = null,
+            bool? stateChanged = null,
+            string? fromAssetResolveMethod = null,
+            string? toAssetResolveMethod = null)
         {
             var pendingCount = GetPendingChangeCount();
             var pendingQueued = pendingCount.HasValue ? pendingCount.Value > 0 : (bool?)null;
@@ -2582,7 +3028,21 @@ namespace GmodAddonManager.Core.Services
                 gmodRunning: GetGmodRunning(),
                 pendingChangeQueued: pendingQueued,
                 pendingQueueLength: pendingCount,
-                taskIdOverride: taskIdOverride);
+                taskIdOverride: taskIdOverride,
+                assetLabel: assetLabel,
+                assetDisplayName: assetDisplayName,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: toAssetId,
+                toAssetLabel: toAssetLabel,
+                toAssetDisplayName: toAssetDisplayName,
+                parentOperationId: parentOperationId,
+                stateHashScope: stateHashScope,
+                expectedHashScope: expectedHashScope,
+                stateChanged: stateChanged,
+                fromAssetResolveMethod: fromAssetResolveMethod,
+                toAssetResolveMethod: toAssetResolveMethod);
         }
 
         private void LogLinkFallbackCopy(string addonId, string context)
@@ -2835,31 +3295,78 @@ namespace GmodAddonManager.Core.Services
         /// </summary>
         private async Task SaveConfigurationInternalAsync()
         {
+            const int maxRetries = 3;
+            string json = null;
+
+            for (int attempt = 0; attempt < maxRetries; attempt++)
+            {
+                try
+                {
+                    // configurationのスナップショットを作成してシリアライズ
+                    lock (_saveLock)
+                    {
+                        // Create a manual snapshot to avoid "collection was modified" errors
+                        // Take snapshots of keys/values first to minimize race window
+                        var addonMetadataSnapshot = configuration.AddonMetadata.Keys.ToArray()
+                            .Where(k => configuration.AddonMetadata.ContainsKey(k))
+                            .ToDictionary(k => k, k =>
+                            {
+                                configuration.AddonMetadata.TryGetValue(k, out var v);
+                                return v;
+                            })
+                            .Where(kvp => kvp.Value != null)
+                            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+                        var junctionHistorySnapshot = configuration.JunctionHistory.Keys.ToArray()
+                            .Where(k => configuration.JunctionHistory.ContainsKey(k))
+                            .ToDictionary(k => k, k =>
+                            {
+                                configuration.JunctionHistory.TryGetValue(k, out var v);
+                                return v?.ToList() ?? new List<string>();
+                            });
+
+                        var configCopy = new Configuration
+                        {
+                            Version = configuration.Version,
+                            LastUpdated = DateTime.UtcNow,
+                            Assets = configuration.Assets.ToList(),
+                            AddonMetadata = addonMetadataSnapshot,
+                            JunctionHistory = junctionHistorySnapshot
+                        };
+
+                        // シリアライズ
+                        json = JsonConvert.SerializeObject(configCopy, Formatting.Indented);
+                    }
+                    break; // Success, exit retry loop
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("Collection was modified"))
+                {
+                    if (attempt < maxRetries - 1)
+                    {
+                        errorHandler.HandleWarning($"Configuration snapshot failed (attempt {attempt + 1}/{maxRetries}), retrying...", "SaveConfiguration");
+                        await Task.Delay(50 * (attempt + 1)); // Progressive delay
+                        continue;
+                    }
+                    throw; // Rethrow on final attempt
+                }
+            }
+
+            if (string.IsNullOrEmpty(json))
+            {
+                errorHandler.HandleError(new InvalidOperationException("Failed to create configuration snapshot"),
+                    "Failed to save configuration - could not create snapshot", ErrorSeverity.Error);
+                return;
+            }
+
             try
             {
-                // configurationのディープコピーを作成してシリアライズ
-                string json;
-                lock (_saveLock)
-                {
-                    // JSON経由でディープコピーを作成（より安全な方法）
-                    var tempJson = JsonConvert.SerializeObject(configuration, new JsonSerializerSettings
-                    {
-                        ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                        NullValueHandling = NullValueHandling.Ignore
-                    });
-                    var configCopy = JsonConvert.DeserializeObject<Configuration>(tempJson);
-                    
-                    // シリアライズ
-                    json = JsonConvert.SerializeObject(configCopy, Formatting.Indented);
-                }
-                
                 // アトミックな保存処理
                 var tempPath = configPath + ".tmp";
                 var backupPath = configPath + ".bak";
-                
+
                 // 1. 一時ファイルに書き込み
                 await Task.Run(() => File.WriteAllText(tempPath, json));
-                
+
                 // 2. 現在のファイルが存在する場合はバックアップ
                 if (File.Exists(configPath))
                 {
@@ -2869,13 +3376,13 @@ namespace GmodAddonManager.Core.Services
                 {
                     File.Move(tempPath, configPath);
                 }
-                
+
                 errorHandler.HandleInfo($"Configuration saved successfully (atomic). Assets count: {configuration.Assets.Count}", "SaveConfiguration");
             }
             catch (Exception ex)
             {
                 errorHandler.HandleError(ex, "Failed to save configuration", ErrorSeverity.Error);
-                
+
                 // 一時ファイルの削除を試みる
                 try
                 {
@@ -3237,7 +3744,18 @@ namespace GmodAddonManager.Core.Services
             var operationId = eventLogger.NewOperationId();
             var beforeSnapshot = CaptureState();
             var beforeHash = ComputeStateHash(beforeSnapshot);
+            var beforeHashScope = beforeSnapshot.Source;
             result.BeforeHash = beforeHash;
+
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            var fromAssets = configuration.Assets
+                .Where(a => !a.IsSystem && a.Enabled)
+                .ToList();
+            var fromAssetIds = fromAssets.Select(a => a.Id).ToList();
+            var fromAssetLabels = fromAssets.Select(a => GetAssetLabelCode(a.Name)).ToList();
+            var fromAssetDisplayNames = fromAssets.Select(a => a.Name).ToList();
+            var toAssetLabel = asset != null ? GetAssetLabelCode(asset.Name) : null;
+            var toAssetDisplayName = asset?.Name;
 
             LogExperimentEvent(
                 "AssetApplyExclusiveStart",
@@ -3245,9 +3763,17 @@ namespace GmodAddonManager.Core.Services
                 targetId: assetId,
                 result: "start",
                 beforeHash: beforeHash,
-                operationId: operationId);
-
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+                operationId: operationId,
+                assetId: assetId,
+                assetLabel: toAssetLabel,
+                assetDisplayName: toAssetDisplayName,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: assetId,
+                toAssetLabel: toAssetLabel,
+                toAssetDisplayName: toAssetDisplayName,
+                stateHashScope: beforeHashScope);
             if (asset == null)
             {
                 result.Success = false;
@@ -3264,7 +3790,17 @@ namespace GmodAddonManager.Core.Services
                     afterHash: result.AfterHash,
                     expectedHash: result.ExpectedHash,
                     errorCode: result.ErrorCode,
-                    operationId: operationId);
+                    operationId: operationId,
+                    assetId: assetId,
+                    assetLabel: toAssetLabel,
+                    assetDisplayName: toAssetDisplayName,
+                    fromAssetIds: fromAssetIds,
+                    fromAssetLabels: fromAssetLabels,
+                    fromAssetDisplayNames: fromAssetDisplayNames,
+                    toAssetId: assetId,
+                    toAssetLabel: toAssetLabel,
+                    toAssetDisplayName: toAssetDisplayName,
+                    stateHashScope: beforeHashScope);
                 return result;
             }
 
@@ -3272,6 +3808,8 @@ namespace GmodAddonManager.Core.Services
             StateMatchResult? matchResult = null;
             StrictLinkModeException? strictFailure = null;
             string? errorCode = null;
+            AddonStateSnapshot? afterSnapshot = null;
+            AddonStateSnapshot? expectedSnapshot = null;
 
             try
             {
@@ -3282,12 +3820,14 @@ namespace GmodAddonManager.Core.Services
 
                 asset.Enabled = true;
 
-                matchResult = await UpdateAddonStatesInternalAsync(logEvents: true);
+                matchResult = await UpdateAddonStatesInternalAsync(logEvents: true, parentOperationId: operationId);
                 await SaveConfigurationAsync();
 
                 result.Success = matchResult.Matched;
-                result.AfterHash = ComputeStateHash(matchResult.Snapshot);
-                result.ExpectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
+                afterSnapshot = matchResult.Snapshot;
+                expectedSnapshot = matchResult.ExpectedSnapshot;
+                result.AfterHash = ComputeStateHash(afterSnapshot);
+                result.ExpectedHash = ComputeStateHash(expectedSnapshot);
                 errorCode = matchResult.Matched ? null : "state_mismatch";
             }
             catch (StrictLinkModeException ex)
@@ -3309,9 +3849,10 @@ namespace GmodAddonManager.Core.Services
 
                 if (matchResult == null)
                 {
-                    var afterSnapshot = CaptureState();
+                    afterSnapshot = CaptureState();
+                    expectedSnapshot = CaptureExpectedStateSnapshot();
                     result.AfterHash = ComputeStateHash(afterSnapshot);
-                    result.ExpectedHash = ComputeStateHash(CaptureExpectedStateSnapshot());
+                    result.ExpectedHash = ComputeStateHash(expectedSnapshot);
                 }
 
                 LogExperimentEvent(
@@ -3325,7 +3866,18 @@ namespace GmodAddonManager.Core.Services
                     expectedHash: result.ExpectedHash,
                     errorCode: errorCode,
                     operationId: operationId,
-                    metrics: matchResult?.Metrics);
+                    metrics: matchResult?.Metrics,
+                    assetId: assetId,
+                    assetLabel: toAssetLabel,
+                    assetDisplayName: toAssetDisplayName,
+                    fromAssetIds: fromAssetIds,
+                    fromAssetLabels: fromAssetLabels,
+                    fromAssetDisplayNames: fromAssetDisplayNames,
+                    toAssetId: assetId,
+                    toAssetLabel: toAssetLabel,
+                    toAssetDisplayName: toAssetDisplayName,
+                    stateHashScope: afterSnapshot?.Source ?? beforeHashScope,
+                    expectedHashScope: expectedSnapshot?.Source);
             }
 
             if (strictFailure != null)
@@ -3364,46 +3916,387 @@ namespace GmodAddonManager.Core.Services
         /// </summary>
         public async Task UpdateAddonStatesAsync()
         {
-            await UpdateAddonStatesInternalAsync(logEvents: true);
+            await UpdateAddonStatesInternalAsync(logEvents: true, parentOperationId: null);
         }
 
-        public void LogTaskStart(string taskId, string? note = null)
+        private sealed class AssetResolution
         {
+            public Asset? Asset { get; set; }
+            public string? ResolvedId { get; set; }
+            public string? LabelCode { get; set; }
+            public string? DisplayName { get; set; }
+            public string? ResolveMethod { get; set; }
+            public string? ErrorCode { get; set; }
+
+            public bool IsResolved => Asset != null;
+        }
+
+        private static string NormalizeAssetLabel(string label, out string? methodDetail)
+        {
+            var trimmed = label.Trim();
+            methodDetail = null;
+
+            const string assetPrefix = "asset ";
+            if (trimmed.StartsWith(assetPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                methodDetail = "label_normalized:strip_prefix(Asset )";
+                trimmed = trimmed.Substring(assetPrefix.Length).Trim();
+            }
+
+            return trimmed;
+        }
+
+        private static string GetAssetLabelCode(string label)
+        {
+            var normalized = NormalizeAssetLabel(label, out _);
+            return normalized.Trim();
+        }
+
+        private AssetResolution ResolveAssetReference(string? assetId, string? assetLabel)
+        {
+            if (string.IsNullOrWhiteSpace(assetId) && string.IsNullOrWhiteSpace(assetLabel))
+            {
+                return new AssetResolution();
+            }
+
+            if (!string.IsNullOrWhiteSpace(assetId))
+            {
+                var matches = configuration.Assets
+                    .Where(a => string.Equals(a.Id, assetId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (matches.Count == 1)
+                {
+                    var asset = matches[0];
+                    return new AssetResolution
+                    {
+                        Asset = asset,
+                        ResolvedId = asset.Id,
+                        LabelCode = GetAssetLabelCode(asset.Name),
+                        DisplayName = asset.Name,
+                        ResolveMethod = "id"
+                    };
+                }
+
+                return new AssetResolution
+                {
+                    ResolvedId = assetId.Trim(),
+                    LabelCode = assetId.Trim(),
+                    ResolveMethod = "id",
+                    ErrorCode = matches.Count > 1 ? "asset_resolve_ambiguous:id" : "asset_not_found:id"
+                };
+            }
+
+            var rawLabel = assetLabel?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(rawLabel))
+            {
+                return new AssetResolution { ErrorCode = "asset_label_missing" };
+            }
+
+            var matchesByName = configuration.Assets
+                .Where(a => string.Equals(a.Name, rawLabel, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matchesByName.Count == 1)
+            {
+                var asset = matchesByName[0];
+                return new AssetResolution
+                {
+                    Asset = asset,
+                    ResolvedId = asset.Id,
+                    LabelCode = GetAssetLabelCode(asset.Name),
+                    DisplayName = asset.Name,
+                    ResolveMethod = "label_exact"
+                };
+            }
+
+            if (matchesByName.Count > 1)
+            {
+                return new AssetResolution
+                {
+                    LabelCode = GetAssetLabelCode(rawLabel),
+                    ResolveMethod = "label_exact",
+                    ErrorCode = "asset_resolve_ambiguous:label_exact"
+                };
+            }
+
+            var matchesById = configuration.Assets
+                .Where(a => string.Equals(a.Id, rawLabel, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matchesById.Count == 1)
+            {
+                var asset = matchesById[0];
+                return new AssetResolution
+                {
+                    Asset = asset,
+                    ResolvedId = asset.Id,
+                    LabelCode = GetAssetLabelCode(asset.Name),
+                    DisplayName = asset.Name,
+                    ResolveMethod = "label_id"
+                };
+            }
+
+            if (matchesById.Count > 1)
+            {
+                return new AssetResolution
+                {
+                    LabelCode = GetAssetLabelCode(rawLabel),
+                    ResolveMethod = "label_id",
+                    ErrorCode = "asset_resolve_ambiguous:label_id"
+                };
+            }
+
+            var matchesByCode = configuration.Assets
+                .Where(a => string.Equals(GetAssetLabelCode(a.Name), rawLabel, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matchesByCode.Count == 1)
+            {
+                var asset = matchesByCode[0];
+                return new AssetResolution
+                {
+                    Asset = asset,
+                    ResolvedId = asset.Id,
+                    LabelCode = GetAssetLabelCode(asset.Name),
+                    DisplayName = asset.Name,
+                    ResolveMethod = "label_code"
+                };
+            }
+
+            if (matchesByCode.Count > 1)
+            {
+                return new AssetResolution
+                {
+                    LabelCode = GetAssetLabelCode(rawLabel),
+                    ResolveMethod = "label_code",
+                    ErrorCode = "asset_resolve_ambiguous:label_code"
+                };
+            }
+
+            var normalized = NormalizeAssetLabel(rawLabel, out var normalizeMethod);
+            if (!string.Equals(normalized, rawLabel, StringComparison.Ordinal))
+            {
+                var matchesByNormalizedName = configuration.Assets
+                    .Where(a => string.Equals(a.Name, normalized, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (matchesByNormalizedName.Count == 1)
+                {
+                    var asset = matchesByNormalizedName[0];
+                    return new AssetResolution
+                    {
+                        Asset = asset,
+                        ResolvedId = asset.Id,
+                        LabelCode = GetAssetLabelCode(asset.Name),
+                        DisplayName = asset.Name,
+                        ResolveMethod = normalizeMethod ?? "label_normalized"
+                    };
+                }
+
+                if (matchesByNormalizedName.Count > 1)
+                {
+                    return new AssetResolution
+                    {
+                        LabelCode = GetAssetLabelCode(normalized),
+                        ResolveMethod = normalizeMethod ?? "label_normalized",
+                        ErrorCode = "asset_resolve_ambiguous:label_normalized"
+                    };
+                }
+
+                var matchesByNormalizedId = configuration.Assets
+                    .Where(a => string.Equals(a.Id, normalized, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (matchesByNormalizedId.Count == 1)
+                {
+                    var asset = matchesByNormalizedId[0];
+                    return new AssetResolution
+                    {
+                        Asset = asset,
+                        ResolvedId = asset.Id,
+                        LabelCode = GetAssetLabelCode(asset.Name),
+                        DisplayName = asset.Name,
+                        ResolveMethod = (normalizeMethod ?? "label_normalized") + ":id"
+                    };
+                }
+
+                if (matchesByNormalizedId.Count > 1)
+                {
+                    return new AssetResolution
+                    {
+                        LabelCode = GetAssetLabelCode(normalized),
+                        ResolveMethod = (normalizeMethod ?? "label_normalized") + ":id",
+                        ErrorCode = "asset_resolve_ambiguous:label_normalized"
+                    };
+                }
+
+                var matchesByNormalizedCode = configuration.Assets
+                    .Where(a => string.Equals(GetAssetLabelCode(a.Name), normalized, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (matchesByNormalizedCode.Count == 1)
+                {
+                    var asset = matchesByNormalizedCode[0];
+                    return new AssetResolution
+                    {
+                        Asset = asset,
+                        ResolvedId = asset.Id,
+                        LabelCode = GetAssetLabelCode(asset.Name),
+                        DisplayName = asset.Name,
+                        ResolveMethod = (normalizeMethod ?? "label_normalized") + ":code"
+                    };
+                }
+
+                if (matchesByNormalizedCode.Count > 1)
+                {
+                    return new AssetResolution
+                    {
+                        LabelCode = GetAssetLabelCode(normalized),
+                        ResolveMethod = (normalizeMethod ?? "label_normalized") + ":code",
+                        ErrorCode = "asset_resolve_ambiguous:label_normalized"
+                    };
+                }
+
+                return new AssetResolution
+                {
+                    LabelCode = GetAssetLabelCode(normalized),
+                    ResolveMethod = normalizeMethod ?? "label_normalized",
+                    ErrorCode = "asset_not_found:label_normalized"
+                };
+            }
+
+            return new AssetResolution
+            {
+                LabelCode = GetAssetLabelCode(rawLabel),
+                ResolveMethod = "label_exact",
+                ErrorCode = "asset_not_found:label_exact"
+            };
+        }
+
+        private static string? BuildAssetResolutionError(AssetResolution fromAsset, AssetResolution toAsset)
+        {
+            if (fromAsset.ErrorCode == null && toAsset.ErrorCode == null)
+            {
+                return null;
+            }
+
+            if (fromAsset.ErrorCode != null && toAsset.ErrorCode != null)
+            {
+                return $"from_{fromAsset.ErrorCode};to_{toAsset.ErrorCode}";
+            }
+
+            if (fromAsset.ErrorCode != null)
+            {
+                return $"from_{fromAsset.ErrorCode}";
+            }
+
+            return $"to_{toAsset.ErrorCode}";
+        }
+
+        public bool LogTaskStart(
+            string taskId,
+            out string? errorCode,
+            string? note = null,
+            string? fromAssetId = null,
+            string? fromAssetLabel = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null)
+        {
+            errorCode = null;
             if (string.IsNullOrWhiteSpace(taskId))
             {
-                return;
+                errorCode = "task_id_missing";
+                return false;
             }
 
             var snapshot = CaptureState();
             var beforeHash = ComputeStateHash(snapshot);
+            var fromAsset = ResolveAssetReference(fromAssetId, fromAssetLabel);
+            var toAsset = ResolveAssetReference(toAssetId, toAssetLabel);
+            errorCode = BuildAssetResolutionError(fromAsset, toAsset);
+
+            var resolvedFromId = fromAsset.ResolvedId ?? fromAssetId;
+            var resolvedFromLabel = fromAsset.LabelCode ?? (string.IsNullOrWhiteSpace(fromAssetLabel) ? null : GetAssetLabelCode(fromAssetLabel));
+            var resolvedFromDisplay = fromAsset.DisplayName;
+            var resolvedToId = toAsset.ResolvedId ?? toAssetId;
+            var resolvedToLabel = toAsset.LabelCode ?? (string.IsNullOrWhiteSpace(toAssetLabel) ? null : GetAssetLabelCode(toAssetLabel));
+            var resolvedToDisplay = toAsset.DisplayName;
+
+            var fromAssetIds = string.IsNullOrWhiteSpace(resolvedFromId) ? null : new List<string> { resolvedFromId };
+            var fromAssetLabels = string.IsNullOrWhiteSpace(resolvedFromLabel) ? null : new List<string> { resolvedFromLabel };
+            var fromAssetDisplayNames = string.IsNullOrWhiteSpace(resolvedFromDisplay) ? null : new List<string> { resolvedFromDisplay };
+            var expectedSnapshot = CaptureExpectedStateSnapshotForAsset(resolvedToId);
+            var expectedHash = expectedSnapshot != null ? ComputeStateHash(expectedSnapshot) : null;
 
             LogExperimentEvent(
                 "TaskStart",
                 eventScope: "external",
                 targetId: taskId,
-                result: "start",
+                result: errorCode == null ? "start" : "fail",
                 beforeHash: beforeHash,
+                expectedHash: expectedHash,
+                errorCode: errorCode,
                 note: note,
-                taskIdOverride: taskId);
+                taskIdOverride: taskId,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: resolvedToId,
+                toAssetLabel: resolvedToLabel,
+                toAssetDisplayName: resolvedToDisplay,
+                stateHashScope: snapshot.Source,
+                expectedHashScope: expectedSnapshot?.Source,
+                fromAssetResolveMethod: fromAsset.ResolveMethod,
+                toAssetResolveMethod: toAsset.ResolveMethod);
+
+            return errorCode == null;
         }
 
-        public void LogTaskEnd(string taskId, string? expectedHash = null, bool? taskSuccess = null, string? note = null)
+        public bool LogTaskEnd(
+            string taskId,
+            out string? errorCode,
+            string? expectedHash = null,
+            bool? taskSuccess = null,
+            string? note = null,
+            string? fromAssetId = null,
+            string? fromAssetLabel = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null)
         {
+            errorCode = null;
             if (string.IsNullOrWhiteSpace(taskId))
             {
-                return;
+                errorCode = "task_id_missing";
+                return false;
             }
 
             var snapshot = CaptureState();
             var finalHash = ComputeStateHash(snapshot);
             var success = taskSuccess;
+            var fromAsset = ResolveAssetReference(fromAssetId, fromAssetLabel);
+            var toAsset = ResolveAssetReference(toAssetId, toAssetLabel);
+            errorCode = BuildAssetResolutionError(fromAsset, toAsset);
 
-            if (!string.IsNullOrWhiteSpace(expectedHash) && !success.HasValue)
+            var resolvedFromId = fromAsset.ResolvedId ?? fromAssetId;
+            var resolvedFromLabel = fromAsset.LabelCode ?? (string.IsNullOrWhiteSpace(fromAssetLabel) ? null : GetAssetLabelCode(fromAssetLabel));
+            var resolvedFromDisplay = fromAsset.DisplayName;
+            var resolvedToId = toAsset.ResolvedId ?? toAssetId;
+            var resolvedToLabel = toAsset.LabelCode ?? (string.IsNullOrWhiteSpace(toAssetLabel) ? null : GetAssetLabelCode(toAssetLabel));
+            var resolvedToDisplay = toAsset.DisplayName;
+            var fromAssetIds = string.IsNullOrWhiteSpace(resolvedFromId) ? null : new List<string> { resolvedFromId };
+            var fromAssetLabels = string.IsNullOrWhiteSpace(resolvedFromLabel) ? null : new List<string> { resolvedFromLabel };
+            var fromAssetDisplayNames = string.IsNullOrWhiteSpace(resolvedFromDisplay) ? null : new List<string> { resolvedFromDisplay };
+            var resolvedExpectedHash = expectedHash;
+            AddonStateSnapshot? expectedSnapshot = null;
+
+            if (string.IsNullOrWhiteSpace(resolvedExpectedHash) && !string.IsNullOrWhiteSpace(resolvedToId))
             {
-                success = string.Equals(finalHash, expectedHash, StringComparison.Ordinal);
+                expectedSnapshot = CaptureExpectedStateSnapshotForAsset(resolvedToId);
+                resolvedExpectedHash = expectedSnapshot != null ? ComputeStateHash(expectedSnapshot) : null;
             }
 
-            var result = success.HasValue ? (success.Value ? "success" : "fail") : "end";
+            if (!string.IsNullOrWhiteSpace(resolvedExpectedHash) && !success.HasValue)
+            {
+                success = string.Equals(finalHash, resolvedExpectedHash, StringComparison.Ordinal);
+            }
+
+            var result = errorCode != null
+                ? "fail"
+                : (success.HasValue ? (success.Value ? "success" : "fail") : "end");
 
             LogExperimentEvent(
                 "TaskEnd",
@@ -3411,40 +4304,119 @@ namespace GmodAddonManager.Core.Services
                 targetId: taskId,
                 result: result,
                 afterHash: finalHash,
-                expectedHash: expectedHash,
+                expectedHash: resolvedExpectedHash,
                 taskSuccess: success,
                 finalHash: finalHash,
+                errorCode: errorCode,
                 note: note,
-                taskIdOverride: taskId);
+                taskIdOverride: taskId,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: resolvedToId,
+                toAssetLabel: resolvedToLabel,
+                toAssetDisplayName: resolvedToDisplay,
+                stateHashScope: snapshot.Source,
+                expectedHashScope: expectedSnapshot?.Source,
+                fromAssetResolveMethod: fromAsset.ResolveMethod,
+                toAssetResolveMethod: toAsset.ResolveMethod);
+
+            return errorCode == null;
         }
 
-        public void LogBlSwitchStart(string? blMethod = null, string? note = null)
+        public bool LogBlSwitchStart(
+            out string? errorCode,
+            string? blMethod = null,
+            string? note = null,
+            string? fromAssetId = null,
+            string? fromAssetLabel = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null)
         {
+            errorCode = null;
             var snapshot = CaptureState();
             var beforeHash = ComputeStateHash(snapshot);
+            var fromAsset = ResolveAssetReference(fromAssetId, fromAssetLabel);
+            var toAsset = ResolveAssetReference(toAssetId, toAssetLabel);
+            errorCode = BuildAssetResolutionError(fromAsset, toAsset);
+
+            var resolvedFromId = fromAsset.ResolvedId ?? fromAssetId;
+            var resolvedFromLabel = fromAsset.LabelCode ?? (string.IsNullOrWhiteSpace(fromAssetLabel) ? null : GetAssetLabelCode(fromAssetLabel));
+            var resolvedFromDisplay = fromAsset.DisplayName;
+            var resolvedToId = toAsset.ResolvedId ?? toAssetId;
+            var resolvedToLabel = toAsset.LabelCode ?? (string.IsNullOrWhiteSpace(toAssetLabel) ? null : GetAssetLabelCode(toAssetLabel));
+            var resolvedToDisplay = toAsset.DisplayName;
+            var fromAssetIds = string.IsNullOrWhiteSpace(resolvedFromId) ? null : new List<string> { resolvedFromId };
+            var fromAssetLabels = string.IsNullOrWhiteSpace(resolvedFromLabel) ? null : new List<string> { resolvedFromLabel };
+            var fromAssetDisplayNames = string.IsNullOrWhiteSpace(resolvedFromDisplay) ? null : new List<string> { resolvedFromDisplay };
 
             LogExperimentEvent(
                 "BlSwitchStart",
                 eventScope: "external",
                 targetId: blMethod ?? "bl",
-                result: "start",
+                result: errorCode == null ? "start" : "fail",
                 beforeHash: beforeHash,
                 blMethod: blMethod,
-                note: note);
+                note: note,
+                errorCode: errorCode,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: resolvedToId,
+                toAssetLabel: resolvedToLabel,
+                toAssetDisplayName: resolvedToDisplay,
+                stateHashScope: snapshot.Source,
+                fromAssetResolveMethod: fromAsset.ResolveMethod,
+                toAssetResolveMethod: toAsset.ResolveMethod);
+
+            return errorCode == null;
         }
 
-        public void LogBlSwitchEnd(string? blMethod = null, string? expectedHash = null, bool? success = null, string? note = null)
+        public bool LogBlSwitchEnd(
+            out string? errorCode,
+            string? blMethod = null,
+            string? expectedHash = null,
+            bool? success = null,
+            string? note = null,
+            string? fromAssetId = null,
+            string? fromAssetLabel = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null)
         {
+            errorCode = null;
             var snapshot = CaptureState();
             var finalHash = ComputeStateHash(snapshot);
             var resolved = success;
+            var fromAsset = ResolveAssetReference(fromAssetId, fromAssetLabel);
+            var toAsset = ResolveAssetReference(toAssetId, toAssetLabel);
+            errorCode = BuildAssetResolutionError(fromAsset, toAsset);
 
-            if (!string.IsNullOrWhiteSpace(expectedHash) && !resolved.HasValue)
+            var resolvedFromId = fromAsset.ResolvedId ?? fromAssetId;
+            var resolvedFromLabel = fromAsset.LabelCode ?? (string.IsNullOrWhiteSpace(fromAssetLabel) ? null : GetAssetLabelCode(fromAssetLabel));
+            var resolvedFromDisplay = fromAsset.DisplayName;
+            var resolvedToId = toAsset.ResolvedId ?? toAssetId;
+            var resolvedToLabel = toAsset.LabelCode ?? (string.IsNullOrWhiteSpace(toAssetLabel) ? null : GetAssetLabelCode(toAssetLabel));
+            var resolvedToDisplay = toAsset.DisplayName;
+            var fromAssetIds = string.IsNullOrWhiteSpace(resolvedFromId) ? null : new List<string> { resolvedFromId };
+            var fromAssetLabels = string.IsNullOrWhiteSpace(resolvedFromLabel) ? null : new List<string> { resolvedFromLabel };
+            var fromAssetDisplayNames = string.IsNullOrWhiteSpace(resolvedFromDisplay) ? null : new List<string> { resolvedFromDisplay };
+            var resolvedExpectedHash = expectedHash;
+            AddonStateSnapshot? expectedSnapshot = null;
+
+            if (string.IsNullOrWhiteSpace(resolvedExpectedHash) && !string.IsNullOrWhiteSpace(resolvedToId))
             {
-                resolved = string.Equals(finalHash, expectedHash, StringComparison.Ordinal);
+                expectedSnapshot = CaptureExpectedStateSnapshotForAsset(resolvedToId);
+                resolvedExpectedHash = expectedSnapshot != null ? ComputeStateHash(expectedSnapshot) : null;
             }
 
-            var result = resolved.HasValue ? (resolved.Value ? "success" : "fail") : "end";
+            if (!string.IsNullOrWhiteSpace(resolvedExpectedHash) && !resolved.HasValue)
+            {
+                resolved = string.Equals(finalHash, resolvedExpectedHash, StringComparison.Ordinal);
+            }
+
+            var result = errorCode != null
+                ? "fail"
+                : (resolved.HasValue ? (resolved.Value ? "success" : "fail") : "end");
 
             LogExperimentEvent(
                 "BlSwitchEnd",
@@ -3452,10 +4424,23 @@ namespace GmodAddonManager.Core.Services
                 targetId: blMethod ?? "bl",
                 result: result,
                 afterHash: finalHash,
-                expectedHash: expectedHash,
+                expectedHash: resolvedExpectedHash,
                 finalHash: finalHash,
                 blMethod: blMethod,
-                note: note);
+                note: note,
+                errorCode: errorCode,
+                fromAssetIds: fromAssetIds,
+                fromAssetLabels: fromAssetLabels,
+                fromAssetDisplayNames: fromAssetDisplayNames,
+                toAssetId: resolvedToId,
+                toAssetLabel: resolvedToLabel,
+                toAssetDisplayName: resolvedToDisplay,
+                stateHashScope: snapshot.Source,
+                expectedHashScope: expectedSnapshot?.Source,
+                fromAssetResolveMethod: fromAsset.ResolveMethod,
+                toAssetResolveMethod: toAsset.ResolveMethod);
+
+            return errorCode == null;
         }
 
         private sealed class StateMatchResult
@@ -3528,7 +4513,7 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents)
+        private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents, string? parentOperationId = null)
         {
             var allAddonIds = configuration.AddonMetadata.Keys
                 .Where(addonId => addonId != "*")
@@ -3541,18 +4526,22 @@ namespace GmodAddonManager.Core.Services
             string? operationId = logEvents ? eventLogger.NewOperationId() : null;
             AddonStateSnapshot? beforeSnapshot = null;
             string? beforeHash = null;
+            string? beforeHashScope = null;
 
             if (logEvents)
             {
                 beforeSnapshot = CaptureState();
                 beforeHash = ComputeStateHash(beforeSnapshot);
+                beforeHashScope = beforeSnapshot.Source;
                 LogExperimentEvent(
                     "UpdateAddonStatesStart",
                     eventScope: "system",
                     targetId: "all",
                     result: "start",
                     beforeHash: beforeHash,
-                    operationId: operationId);
+                    operationId: operationId,
+                    parentOperationId: parentOperationId,
+                    stateHashScope: beforeHashScope);
             }
 
             var stopwatch = Stopwatch.StartNew();
@@ -3596,7 +4585,7 @@ namespace GmodAddonManager.Core.Services
                     if (FindStrictLinkModeException(ex) != null)
                     {
                         var afterSnapshot = CaptureState();
-                        var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
+                        var expectedSnapshot = BuildSnapshot(expectedStates, GetExpectedScopeLabel(assetSpecific: false));
                         var afterHash = ComputeStateHash(afterSnapshot);
                         var expectedHash = ComputeStateHash(expectedSnapshot);
                         var metricsSnapshot = linkMetrics?.ToEventMetrics();
@@ -3614,7 +4603,10 @@ namespace GmodAddonManager.Core.Services
                                 expectedHash: expectedHash,
                                 errorCode: "strict_link_copy_blocked",
                                 operationId: operationId,
-                                metrics: metricsSnapshot);
+                                metrics: metricsSnapshot,
+                                parentOperationId: parentOperationId,
+                                stateHashScope: afterSnapshot.Source,
+                                expectedHashScope: expectedSnapshot.Source);
                         }
 
                         throw;
@@ -3650,7 +4642,10 @@ namespace GmodAddonManager.Core.Services
                         expectedHash: expectedHash,
                         errorCode: errorCode,
                         operationId: operationId,
-                        metrics: matchResult.Metrics);
+                        metrics: matchResult.Metrics,
+                        parentOperationId: parentOperationId,
+                        stateHashScope: matchResult.Snapshot.Source,
+                        expectedHashScope: matchResult.ExpectedSnapshot.Source);
                 }
 
                 return matchResult;
@@ -3665,7 +4660,7 @@ namespace GmodAddonManager.Core.Services
             Dictionary<string, bool> expectedStates,
             ExperimentEventMetrics? metrics)
         {
-            var expectedSnapshot = BuildSnapshot(expectedStates, "expected");
+            var expectedSnapshot = BuildSnapshot(expectedStates, GetExpectedScopeLabel(assetSpecific: false));
             var expectedNormalized = expectedSnapshot.NormalizedState;
             var stopwatch = Stopwatch.StartNew();
 
@@ -3740,7 +4735,14 @@ namespace GmodAddonManager.Core.Services
         {
             var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
             var enabledAssets = configuration.Assets.Where(a => a.Enabled).ToList();
-            
+            return CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
+        }
+
+        private static bool CalculateFinalAddonState(
+            string addonId,
+            IReadOnlyList<Asset> enabledAssets,
+            Asset? subscribeAsset)
+        {
             // 除外されているかチェック
             foreach (var asset in enabledAssets)
             {
@@ -3753,31 +4755,31 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
+
             // サブスクライブアセットの状態をチェック
             bool isInSubscribe = false;
             bool isSubscribeEnabled = false;
             AddonState subscribeState = AddonState.Disabled;
-            
+
             if (subscribeAsset != null)
             {
-                isSubscribeEnabled = subscribeAsset.Enabled;
+                isSubscribeEnabled = enabledAssets.Any(asset => asset.Id == subscribeAsset.Id);
                 if (subscribeAsset.ContainsAllAddons() || subscribeAsset.Addons.Contains(addonId))
                 {
                     isInSubscribe = true;
                     subscribeState = subscribeAsset.GetAddonState(addonId);
                 }
             }
-            
+
             // 他のアセットで有効になっているかチェック
             foreach (var asset in enabledAssets)
             {
                 if (asset.IsSystem) continue;
-                
+
                 if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
                 {
                     var state = asset.GetAddonState(addonId);
-                    
+
                     if (state == AddonState.Enabled)
                     {
                         return true; // 有効状態のアセットがあれば有効
@@ -3792,15 +4794,15 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
+
             // どのアセットにも含まれていない、または全て無効の場合
             // サブスクライブアセットの状態に従う
             if (subscribeAsset != null)
             {
                 // サブスクライブアセットが有効で、かつアドオンが有効状態の場合のみtrue
-                return subscribeAsset.Enabled && isInSubscribe && subscribeState == AddonState.Enabled;
+                return isSubscribeEnabled && isInSubscribe && subscribeState == AddonState.Enabled;
             }
-            
+
             return false;
         }
         
