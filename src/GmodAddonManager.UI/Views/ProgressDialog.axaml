@@ -1,0 +1,50 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="420" d:DesignHeight="180"
+        x:Class="GmodAddonManager.UI.Views.ProgressDialog"
+        Title="{loc:Localize ProgressDialog.Title}"
+        Width="420"
+        Height="180"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Name="StatusText"
+                   Text="{loc:Localize ProgressDialog.Status}"
+                   FontSize="14"
+                   FontWeight="Bold"
+                   Margin="0,0,0,8"/>
+
+        <TextBlock Grid.Row="1"
+                   Name="DetailText"
+                   Text=""
+                   Opacity="0.7"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,8"/>
+
+        <ProgressBar Grid.Row="2"
+                     Name="ProgressBar"
+                     Height="20"
+                     Minimum="0"
+                     Maximum="100"
+                     IsIndeterminate="True"/>
+
+        <TextBlock Grid.Row="3"
+                   Name="ProgressText"
+                   Text=""
+                   Opacity="0.7"
+                   HorizontalAlignment="Right"
+                   Margin="0,6,0,0"/>
+    </Grid>
+</Window>

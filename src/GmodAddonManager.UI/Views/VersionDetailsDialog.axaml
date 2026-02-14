@@ -1,0 +1,148 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="600"
+        x:Class="GmodAddonManager.UI.Views.VersionDetailsDialog"
+        Title="{loc:Localize VersionDetails.Title}"
+        Width="700"
+        Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="600"
+        MinHeight="500">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- タイトル -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,15">
+            <TextBlock Text="{Binding AssetLabel}"
+                       FontSize="18"
+                       FontWeight="Bold"/>
+            <TextBlock Text="{Binding VersionInfo}"
+                       FontSize="14"
+                       Opacity="0.8"
+                       Margin="0,5,0,0"/>
+        </StackPanel>
+        
+        <!-- 差分情報 -->
+        <Border Grid.Row="1"
+                Background="#1E1E1E"
+                BorderBrush="#333333"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10"
+                Margin="0,0,0,15"
+                IsVisible="{Binding HasPreviousVersion}">
+            <StackPanel>
+                <TextBlock Text="{Binding DiffSummary}"
+                           FontWeight="Bold"
+                           Margin="0,0,0,5"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Border Background="#4CAF50" Width="12" Height="12" CornerRadius="2" Margin="0,0,5,0"/>
+                        <TextBlock Text="{Binding AddedCountText}" Foreground="#4CAF50"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Border Background="#F44336" Width="12" Height="12" CornerRadius="2" Margin="0,0,5,0"/>
+                        <TextBlock Text="{Binding RemovedCountText}" Foreground="#F44336"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+        
+        <!-- ヘッダー情報 -->
+        <TextBlock Grid.Row="2" 
+                   Text="{loc:Localize VersionDetails.AddonListHeader}"
+                   FontSize="14"
+                   FontWeight="Bold"
+                   Margin="0,0,0,10"/>
+        
+        <!-- アドオン一覧 -->
+        <Border Grid.Row="3"
+                BorderBrush="#333333"
+                BorderThickness="1"
+                CornerRadius="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding DisplayAddons}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="2"
+                                    Padding="10"
+                                    CornerRadius="4">
+                                <Border.BorderBrush>
+                                    <SolidColorBrush Color="{Binding BorderColor}"/>
+                                </Border.BorderBrush>
+                                <Border.BorderThickness>
+                                    <Thickness>2</Thickness>
+                                </Border.BorderThickness>
+                                <Border.Background>
+                                    <SolidColorBrush Color="{Binding BackgroundColor}" Opacity="0.1"/>
+                                </Border.Background>
+                                
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <!-- 差分インジケーター -->
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding StatusIcon}"
+                                               FontSize="16"
+                                               FontWeight="Bold"
+                                               Margin="0,0,10,0"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Foreground>
+                                            <SolidColorBrush Color="{Binding BorderColor}"/>
+                                        </TextBlock.Foreground>
+                                    </TextBlock>
+                                    
+                                    <!-- アドオン情報 -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}"
+                                                   FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding AddonId}"
+                                                   Opacity="0.7"
+                                                   FontSize="12"/>
+                                    </StackPanel>
+                                    
+                                    <!-- 状態表示 -->
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding StateDisplay}"
+                                               VerticalAlignment="Center"
+                                               Opacity="0.7"
+                                               FontSize="12"
+                                               IsVisible="{Binding HasState}"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- 閉じるボタン -->
+        <Button Grid.Row="4"
+                Content="{loc:Localize Dialog.Close}"
+                HorizontalAlignment="Center"
+                Width="100"
+                Margin="0,15,0,0"
+                Click="OnCloseClick"/>
+    </Grid>
+</Window>

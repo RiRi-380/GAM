@@ -1,0 +1,353 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="500"
+        x:Class="GmodAddonManager.UI.Views.VersionManagementDialog"
+        Title="{loc:Localize VersionManagement.Title}"
+        WindowState="Maximized"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="800"
+        MinHeight="600">
+    
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" MinWidth="250"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        
+        <!-- 左側：バージョン一覧 -->
+        <Grid Grid.Column="0" Background="#1E1E1E">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- ヘッダー -->
+            <Border Grid.Row="0" 
+                    Background="#2D2D30"
+                    Padding="15">
+                <TextBlock FontSize="16"
+                           FontWeight="Bold"
+                           Text="{Binding AssetTitle}"/>
+            </Border>
+            
+            <!-- アクションボタン -->
+            <StackPanel Grid.Row="1" 
+                        Margin="15">
+                <Button Content="{loc:Localize VersionManagement.CreateNewVersion}"
+                        Command="{Binding CreateNewVersionCommand}"
+                        Classes="accent"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,0,0,15"/>
+            </StackPanel>
+            
+            <!-- 設定オプション -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                    Margin="15,0,15,10"
+                    CornerRadius="4"
+                    Padding="10">
+                <StackPanel Spacing="8">
+                    <!-- アドオン状態保存 -->
+                    <CheckBox Content="{loc:Localize VersionManagement.IncludeAddonStates}"
+                              IsChecked="{Binding IncludeAddonStates}"/>
+                    
+                    <!-- 並び順 -->
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                            CornerRadius="4"
+                            Padding="8,5">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10">
+                            <TextBlock Text="{loc:Localize VersionManagement.SortOrderLabel}" 
+                                       VerticalAlignment="Center"
+                                       FontSize="12"/>
+                            <RadioButton Content="{loc:Localize VersionManagement.SortNewest}"
+                                         IsChecked="{Binding IsNewestFirst}"
+                                         GroupName="SortOrder"
+                                         FontSize="12"/>
+                            <RadioButton Content="{loc:Localize VersionManagement.SortOldest}"
+                                         IsChecked="{Binding IsOldestFirst}"
+                                         GroupName="SortOrder"
+                                         FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+                    
+                    <!-- 差分表示 -->
+                    <CheckBox Content="{loc:Localize VersionManagement.ShowDiff}"
+                              IsChecked="{Binding ShowDiff}"
+                              ToolTip.Tip="{loc:Localize VersionManagement.DiffLegendTooltip}"/>
+                </StackPanel>
+            </Border>
+            
+            <!-- バージョン一覧 -->
+            <ScrollViewer Grid.Row="3" Padding="10">
+                <ItemsControl ItemsSource="{Binding SortedVersions}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 外側の枠（選択中かつ現在使用中の場合は緑） -->
+                            <Border BorderBrush="{Binding OuterBorderColor}"
+                                    BorderThickness="{Binding OuterBorderThickness}"
+                                    CornerRadius="6"
+                                    Margin="0,0,0,8"
+                                    Padding="{Binding OuterBorderPadding}">
+                                <!-- 内側の枠（メインの枠） -->
+                                <Border BorderBrush="{Binding BorderColor}"
+                                        BorderThickness="2"
+                                        CornerRadius="4"
+                                        Padding="10"
+                                        Cursor="Hand"
+                                        PointerPressed="OnVersionItemPressed">
+                                    <Border.Background>
+                                        <SolidColorBrush Color="{Binding BackgroundColor}"/>
+                                    </Border.Background>
+                                    <Border.Styles>
+                                        <Style Selector="Border:pointerover">
+                                            <Setter Property="Background" Value="#3A3A3A"/>
+                                        </Style>
+                                    </Border.Styles>
+                                    
+                                    <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <!-- バージョン番号 -->
+                                    <TextBlock Grid.Row="0"
+                                               Text="{Binding VersionDisplay}"
+                                               FontSize="14"
+                                               FontWeight="Bold"/>
+                                    
+                                    <!-- 詳細情報 -->
+                                    <TextBlock Grid.Row="1"
+                                               Text="{Binding CreatedAtDisplay}"
+                                               FontSize="11"
+                                               Opacity="0.7"/>
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="{Binding AddonCountDisplay}"
+                                                   FontSize="11"
+                                                   Opacity="0.7"/>
+                                        <TextBlock Text="{Binding StateInfoDisplay}"
+                                                   FontSize="11"
+                                                   Opacity="0.7"
+                                                   IsVisible="{Binding HasStateInfo}"/>
+                                    </StackPanel>
+                                    
+                                    <!-- 削除ボタン -->
+                                    <Button Command="{Binding $parent[ItemsControl].DataContext.DeleteVersionCommand}"
+                                            CommandParameter="{Binding}"
+                                            IsVisible="{Binding CanDelete}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Top"
+                                            Width="24"
+                                            Height="24"
+                                            Margin="0,-5,-5,0"
+                                            ToolTip.Tip="{loc:Localize VersionManagement.DeleteVersionTooltip}">
+                                        <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
+                                    </Button>
+                                </Grid>
+                                </Border>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+            
+            <!-- 復元ボタンと履歴削除ボタン -->
+            <StackPanel Grid.Row="4" Margin="15">
+                <Button Content="{loc:Localize VersionManagement.RestoreSelected}"
+                        Command="{Binding RestoreSelectedVersionCommand}"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,0,0,10"
+                        IsVisible="{Binding CanRestore}"/>
+
+                <Button Content="{loc:Localize VersionManagement.RenameVersions}"
+                        Command="{Binding RenameVersionsCommand}"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,0,0,10"/>
+                        
+                <!-- 全履歴クリアボタン（常に表示） -->
+                <Border BorderBrush="#666666"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="0"
+                        Background="#1E1E1E">
+                    <Button Content="{loc:Localize VersionManagement.ClearHistory}"
+                            Command="{Binding ClearVersionHistoryCommand}"
+                            Background="Transparent"
+                            Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                            HorizontalAlignment="Stretch"
+                            Height="35"/>
+                </Border>
+            </StackPanel>
+        </Grid>
+        
+        <!-- スプリッター -->
+        <!-- 右側：アドオン表示エリア -->
+        <Grid Grid.Column="1" Background="#252526">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            
+            <!-- ヘッダー -->
+            <Border Grid.Row="0"
+                    Background="#2D2D30"
+                    Padding="15">
+                <TextBlock Text="{Binding SelectedVersionTitle}"
+                           FontSize="16"
+                           FontWeight="Bold"/>
+            </Border>
+            
+            <!-- アドオン一覧 -->
+            <ScrollViewer Grid.Row="1" 
+                          Name="AddonScrollViewer"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <ScrollViewer.Styles>
+                    <Style Selector="ScrollViewer">
+                        <Setter Property="AllowAutoHide" Value="False"/>
+                    </Style>
+                </ScrollViewer.Styles>
+                <ItemsRepeater ItemsSource="{Binding SelectedVersionAddons}"
+                               Margin="5">
+                    <ItemsRepeater.Layout>
+                        <UniformGridLayout MinColumnSpacing="10"
+                                          MinRowSpacing="10"
+                                          MinItemWidth="200"
+                                          MinItemHeight="220"
+                                          ItemsJustification="Start"
+                                          ItemsStretch="None"/>
+                    </ItemsRepeater.Layout>
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate>
+                            <Border Width="200" 
+                                    Height="220" 
+                                    Margin="8"
+                                    Padding="10"
+                                    Background="#1F1F1F"
+                                    CornerRadius="12"
+                                    BorderThickness="3"
+                                    BorderBrush="{Binding BorderColor}"
+                                    PointerPressed="OnAddonPointerPressed">
+                                <Border.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="{loc:Localize VersionManagement.ShowAddonDetails}" 
+                                                  Command="{Binding AddonItemViewModel.OpenWorkshopCommand}"/>
+                                    </ContextMenu>
+                                </Border.ContextMenu>
+                                <Border.Styles>
+                                    <Style Selector="Border">
+                                        <Setter Property="Transitions">
+                                            <Transitions>
+                                                <BrushTransition Property="Background" Duration="0:0:0.08"/>
+                                                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.05"/>
+                                            </Transitions>
+                                        </Setter>
+                                        <Setter Property="BoxShadow" Value="0 4 16 0 #30000000"/>
+                                        <Setter Property="ClipToBounds" Value="False"/>
+                                        <Setter Property="Cursor" Value="Hand"/>
+                                    </Style>
+                                    <Style Selector="Border:pointerover">
+                                        <Setter Property="Background" Value="#252525"/>
+                                        <Setter Property="RenderTransform">
+                                            <Setter.Value>
+                                                <TransformGroup>
+                                                    <ScaleTransform ScaleX="1.02" ScaleY="1.02"/>
+                                                    <TranslateTransform Y="-2"/>
+                                                </TransformGroup>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Setter Property="BoxShadow" Value="0 6 16 0 #40000000"/>
+                                    </Style>
+                                </Border.Styles>
+                                
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="140"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <!-- サムネイル -->
+                                    <Border Grid.Row="0" 
+                                            Width="140"
+                                            Height="140" 
+                                            CornerRadius="8"
+                                            Margin="0,0,0,5"
+                                            ClipToBounds="True">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="#1A1A1A" Offset="0"/>
+                                                <GradientStop Color="#0A0A0A" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <Grid>
+                                            <!-- ローディング中 -->
+                                            <ProgressBar Width="30" Height="30"
+                                                        IsIndeterminate="True"
+                                                        IsVisible="{Binding AddonItemViewModel.IsThumbnailLoading}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"/>
+                                            
+                                            <!-- サムネイル画像 -->
+                                            <Image Source="{Binding AddonItemViewModel.ThumbnailBitmap}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding AddonItemViewModel.ThumbnailBitmap, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                                <Image.Transitions>
+                                                    <Transitions>
+                                                        <DoubleTransition Property="Opacity" Duration="0:0:0.3"/>
+                                                    </Transitions>
+                                                </Image.Transitions>
+                                            </Image>
+                                        </Grid>
+                                    </Border>
+                                    
+                                    <!-- タイトル -->
+                                    <TextBlock Grid.Row="1"
+                                              Text="{Binding AddonItemViewModel.Title}"
+                                              FontWeight="Bold"
+                                              TextWrapping="Wrap"
+                                              MaxLines="2"
+                                              TextTrimming="CharacterEllipsis"
+                                              VerticalAlignment="Top"
+                                              ToolTip.Tip="{Binding AddonItemViewModel.Title}"/>
+                                    
+                                    <!-- ファイルサイズ -->
+                                    <TextBlock Grid.Row="2"
+                                              Text="{Binding AddonItemViewModel.FileSizeText}"
+                                              FontSize="11"
+                                              Opacity="0.7"/>
+                                    
+                                    <!-- 更新日時 -->
+                                    <TextBlock Grid.Row="3"
+                                              Text="{Binding AddonItemViewModel.LastModifiedText}"
+                                              FontSize="11"
+                                              Opacity="0.7"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
+            </ScrollViewer>
+        </Grid>
+        
+        <!-- 閉じるボタン（右下固定） -->
+        <Button Grid.Column="1"
+                Content="{loc:Localize Dialog.Close}"
+                Width="100"
+                Height="35"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="20"
+                Click="OnCloseClick"/>
+    </Grid>
+</Window>

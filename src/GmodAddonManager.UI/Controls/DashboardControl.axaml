@@ -1,0 +1,170 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="GmodAddonManager.UI.Controls.DashboardControl">
+    
+    <ScrollViewer>
+            <StackPanel Spacing="12" Margin="15">
+                
+                <!-- ヘッダー -->
+                <Border CornerRadius="8" 
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                        Padding="15">
+                    <StackPanel Spacing="12">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <Image Grid.Column="0"
+                                   Source="/Assets/logo.png" 
+                                   Width="48" Height="48"
+                                   Margin="0,0,12,0"
+                                   VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" 
+                                       VerticalAlignment="Center">
+                                <TextBlock Text="{loc:Localize MainWindow.Title}" 
+                                          FontSize="18" 
+                                          FontWeight="Bold"
+                                          TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Version}" 
+                                          Opacity="0.7"
+                                          FontSize="12"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                
+                <!-- 統計情報 -->
+                <Border CornerRadius="8" 
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                        Padding="15">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="{loc:Localize Dashboard.Statistics}" 
+                                  FontSize="16" 
+                                  FontWeight="Bold"/>
+                        
+                        <Grid RowDefinitions="Auto,8,Auto,8,Auto,8,Auto" 
+                              ColumnDefinitions="Auto,*,Auto">
+                            
+                            <PathIcon Grid.Row="0" Grid.Column="0" 
+                                     Data="{StaticResource FolderIcon}" 
+                                     Width="16" Height="16"
+                                     Margin="0,0,8,0"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" 
+                                      Text="{loc:Localize Dashboard.TotalAddons}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="2" 
+                                      Text="{Binding TotalAddons}" 
+                                      FontWeight="Bold"/>
+                            
+                            <PathIcon Grid.Row="2" Grid.Column="0" 
+                                     Data="{StaticResource CheckIcon}" 
+                                     Width="16" Height="16"
+                                     Foreground="#4CAF50"
+                                     Margin="0,0,8,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" 
+                                      Text="{loc:Localize Dashboard.EnabledAddons}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" 
+                                      Text="{Binding EnabledAddons}" 
+                                      FontWeight="Bold"
+                                      Foreground="#4CAF50"/>
+                            
+                            <PathIcon Grid.Row="4" Grid.Column="0" 
+                                     Data="{StaticResource CloseIcon}" 
+                                     Width="16" Height="16"
+                                     Foreground="#FF9800"
+                                     Margin="0,0,8,0"/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" 
+                                      Text="{loc:Localize Dashboard.DisabledAddons}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="2" 
+                                      Text="{Binding DisabledAddons}" 
+                                      FontWeight="Bold"
+                                      Foreground="#FF9800"/>
+                            
+                            <PathIcon Grid.Row="6" Grid.Column="0" 
+                                     Data="{StaticResource HardDriveIcon}" 
+                                     Width="16" Height="16"
+                                     Margin="0,0,8,0"/>
+                            <TextBlock Grid.Row="6" Grid.Column="1" 
+                                      Text="{loc:Localize Dashboard.TotalSize}"/>
+                            <TextBlock Grid.Row="6" Grid.Column="2" 
+                                      Text="{Binding TotalSize}" 
+                                      FontWeight="Bold"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                
+                <!-- クイックアクション -->
+                <Border CornerRadius="8" 
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                        Padding="15">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="{loc:Localize Dashboard.QuickActions}" 
+                                  FontSize="16" 
+                                  FontWeight="Bold"/>
+                        
+                        <Button Command="{Binding CheckNewAddonsCommand}"
+                               HorizontalAlignment="Stretch"
+                               Padding="12,8">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="{StaticResource RefreshIcon}" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="{loc:Localize Dashboard.CheckNewAddons}"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+                
+                <!-- 最近の操作 -->
+                <Border CornerRadius="8" 
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                        Padding="15">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="{loc:Localize Dashboard.RecentActivity}" 
+                                  FontSize="16" 
+                                  FontWeight="Bold"/>
+                        
+                        <ItemsControl ItemsSource="{Binding RecentActivities}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="8,4"
+                                           Background="Transparent">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Time}" 
+                                                      Opacity="0.6"
+                                                      FontSize="11"
+                                                      Width="50"/>
+                                            <TextBlock Text="{Binding Description}" 
+                                                      TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        
+                        <TextBlock Text="{loc:Localize Dashboard.NoRecentActivity}"
+                                  Opacity="0.5"
+                                  FontStyle="Italic"
+                                  IsVisible="{Binding !HasRecentActivity}"/>
+                    </StackPanel>
+                </Border>
+                
+                <!-- ヒント -->
+                <Border CornerRadius="8" 
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                        Padding="15">
+                    <StackPanel Spacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <PathIcon Data="{StaticResource InfoIcon}" 
+                                     Width="16" Height="16"/>
+                            <TextBlock Text="{loc:Localize Dashboard.Tip}" 
+                                      FontWeight="Bold"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding CurrentTip}" 
+                                  TextWrapping="Wrap"
+                                  Opacity="0.9"/>
+                    </StackPanel>
+                </Border>
+                
+            </StackPanel>
+        </ScrollViewer>
+</UserControl>

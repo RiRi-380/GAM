@@ -1,0 +1,65 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="250"
+        x:Class="GmodAddonManager.UI.Views.VersionRestoreConfirmDialog"
+        Title="{loc:Localize VersionRestoreConfirm.Title}"
+        Width="500"
+        Height="250"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    
+    <DockPanel>
+        <!-- ボタンパネル（下部に固定） -->
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Spacing="10"
+                    Margin="0,10,0,20">
+            
+            <Button Name="YesButton"
+                    Content="{loc:Localize Dialog.Yes}"
+                    Width="80"
+                    IsDefault="True"
+                    Click="OnYesClick"/>
+            
+            <Button Name="NoButton"
+                    Content="{loc:Localize Dialog.No}"
+                    Width="80"
+                    IsCancel="True"
+                    Click="OnNoClick"/>
+            
+            <Button Name="DetailsButton"
+                    Content="{loc:Localize Dialog.Details}"
+                    Width="80"
+                    Click="OnDetailsClick"
+                    IsVisible="{Binding ShowSubscribeInfo}"/>
+        </StackPanel>
+        
+        <!-- メインコンテンツ -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Margin="20,20,20,10">
+            <StackPanel Spacing="10">
+                <TextBlock Text="{Binding ConfirmMessage}"
+                           TextWrapping="Wrap"/>
+                
+                <!-- サブスクライブ/アンサブスクライブ情報 -->
+                <StackPanel IsVisible="{Binding ShowSubscribeInfo}"
+                            Spacing="5">
+                    <TextBlock FontWeight="Bold" Margin="0,10,0,0"
+                               Text="{Binding SubscribeCountText}"/>
+                    
+                    <TextBlock FontWeight="Bold"
+                               Text="{Binding UnsubscribeCountText}"/>
+                    
+                    <TextBlock Text="{Binding ManualSyncNote}"
+                               FontStyle="Italic"
+                               Foreground="Gray"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

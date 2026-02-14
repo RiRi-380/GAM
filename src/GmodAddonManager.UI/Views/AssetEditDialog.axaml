@@ -1,0 +1,68 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="clr-namespace:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="560"
+        x:Class="GmodAddonManager.UI.Views.AssetEditDialog"
+        Title="{loc:Localize AssetEdit.Title}"
+        Width="560"
+        Height="560"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <DockPanel Margin="20">
+        <StackPanel DockPanel.Dock="Top" Spacing="6">
+            <TextBlock Text="{loc:Localize AssetEdit.NameLabel}"
+                       FontWeight="Bold"/>
+            <TextBox x:Name="AssetNameTextBox"
+                     Watermark="{loc:Localize AssetEdit.NamePlaceholder}"/>
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,20,0,0">
+            <Button Width="100"
+                    Click="OnCancel"
+                    Content="{loc:Localize Dialog.Cancel}"/>
+            <Button x:Name="SaveButton"
+                    Width="120"
+                    Classes="accent"
+                    Click="OnSave"
+                    Content="{loc:Localize Dialog.Save}"/>
+        </StackPanel>
+
+        <StackPanel Spacing="8" Margin="0,20,0,0">
+            <TextBlock Text="{loc:Localize AssetEdit.ImageLabel}"
+                       FontWeight="Bold"/>
+            <TextBlock Text="{loc:Localize AssetEdit.ImageDescription}"
+                       FontSize="11"
+                       Opacity="0.7"/>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="OnChangeImage"
+                        Width="140"
+                        Content="{loc:Localize AssetEdit.ChangeImage}"/>
+                <Button x:Name="RemoveImageButton"
+                        Click="OnRemoveImage"
+                        Width="140"
+                        Content="{loc:Localize AssetEdit.RemoveImage}"/>
+            </StackPanel>
+            <TextBlock x:Name="SelectedImageText"
+                       FontSize="13"
+                       Opacity="0.9"
+                       TextWrapping="Wrap">
+                <TextBlock.Styles>
+                    <Style Selector="TextBlock.removed">
+                        <Setter Property="Foreground" Value="#4A90E2"/>
+                        <Setter Property="Opacity" Value="1"/>
+                        <Setter Property="FontSize" Value="15"/>
+                        <Setter Property="FontWeight" Value="Bold"/>
+                    </Style>
+                </TextBlock.Styles>
+            </TextBlock>
+        </StackPanel>
+    </DockPanel>
+</Window>

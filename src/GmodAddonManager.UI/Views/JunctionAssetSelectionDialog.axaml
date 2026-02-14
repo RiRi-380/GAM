@@ -1,0 +1,122 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="450"
+        x:Class="GmodAddonManager.UI.Views.JunctionAssetSelectionDialog"
+        Title="{loc:Localize JunctionRestore.Title}"
+        Width="400"
+        Height="450"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner">
+    
+    <DockPanel Margin="10">
+        <!-- ヘッダー -->
+        <TextBlock DockPanel.Dock="Top" 
+                  Text="{loc:Localize JunctionRestore.Header}" 
+                  FontSize="14"
+                  FontWeight="Bold"
+                  Margin="0,0,0,10"/>
+        
+        <!-- ボタン -->
+        <StackPanel DockPanel.Dock="Bottom" 
+                   Orientation="Horizontal" 
+                   HorizontalAlignment="Right"
+                   Margin="0,10,0,0"
+                   Spacing="10">
+            <Button Name="RestoreToOriginalButton"
+                    Content="{loc:Localize JunctionRestore.RestoreToOriginal}"
+                    Width="120"
+                    Height="32"
+                    IsVisible="False"
+                    Click="OnRestoreToOriginalClick"
+                    Classes="warning"/>
+            <Button Name="CancelButton"
+                    Content="{loc:Localize Dialog.Cancel}"
+                    Width="100"
+                    Height="32"
+                    Click="OnCancelClick"/>
+            <Button Name="OkButton"
+                    Content="{loc:Localize JunctionRestore.RestoreButton}"
+                    Width="100"
+                    Height="32"
+                    IsEnabled="False"
+                    Click="OnOkClick"
+                    Classes="accent"/>
+        </StackPanel>
+        
+        <!-- アセットリスト -->
+        <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="1"
+                CornerRadius="4">
+            <ListBox Name="AssetListBox"
+                     SelectionMode="Single"
+                     SelectionChanged="OnSelectionChanged">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AssetItemViewModel">
+                        <Border Padding="10,8"
+                                Background="Transparent">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <!-- アイコン -->
+                                <Border Width="32" Height="32"
+                                        ClipToBounds="True"
+                                        Classes="assetImage"
+                                        Classes.hasImage="{Binding HasCustomImage}">
+                                    <Border.Styles>
+                                        <Style Selector="Border.assetImage">
+                                            <Setter Property="CornerRadius" Value="4"/>
+                                            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListLowBrush}"/>
+                                        </Style>
+                                        <Style Selector="Border.assetImage.hasImage">
+                                            <Setter Property="CornerRadius" Value="4"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                        </Style>
+                                    </Border.Styles>
+                                    <Grid>
+                                        <Image Source="{Binding AssetImageBitmap}"
+                                               Stretch="UniformToFill"
+                                               IsVisible="{Binding HasCustomImage}"/>
+                                        <Border IsVisible="{Binding HasNoCustomImage}"
+                                                Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                                            <TextBlock Text="{Binding Name, Converter={StaticResource FirstCharacterConverter}}"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"
+                                                      FontSize="16"
+                                                      FontWeight="Bold"
+                                                      Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"/>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                                
+                                <!-- 情報 -->
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Name}"
+                                              FontWeight="Bold"
+                                              FontSize="14"/>
+                                    <TextBlock Opacity="0.7"
+                                              FontSize="12"
+                                              Text="{Binding AddonCountDisplay}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+                
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                        <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
+                    </Style>
+                    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                        <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentLowBrush}"/>
+                    </Style>
+                </ListBox.Styles>
+            </ListBox>
+        </Border>
+    </DockPanel>
+</Window>

@@ -1,0 +1,139 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+        x:Class="GmodAddonManager.UI.Views.NewAddonCheckWindow"
+        Title="{loc:Localize NewAddonCheck.Title}"
+        Width="600"
+        Height="400"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False"
+        SystemDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="NoChrome"
+        ExtendClientAreaTitleBarHeightHint="-1"
+        Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+    
+    <Grid>
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                <GradientStop Color="#1e1e1e" Offset="0"/>
+                <GradientStop Color="#2d2d30" Offset="1"/>
+            </LinearGradientBrush>
+        </Grid.Background>
+        
+        <Grid VerticalAlignment="Center" Margin="50">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Logo/Title -->
+            <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,0,0,30">
+                <TextBlock Text="{loc:Localize NewAddonCheck.MainTitle}" 
+                           FontSize="32" 
+                           FontWeight="Light"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="{loc:Localize NewAddonCheck.Subtitle}" 
+                           FontSize="16" 
+                           Opacity="0.7"
+                           HorizontalAlignment="Center"
+                           Margin="0,5,0,0"/>
+            </StackPanel>
+            
+            <!-- Progress Message -->
+            <TextBlock Grid.Row="1" 
+                       x:Name="StatusText"
+                       Text="{loc:Localize NewAddonCheck.Scanning}"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,20"/>
+            
+            <!-- Progress Bar -->
+            <ProgressBar Grid.Row="2" 
+                         x:Name="ProgressBar"
+                         Height="8"
+                         Margin="0,0,0,10"
+                         Classes="circular"/>
+            
+            <!-- Detailed Status -->
+            <Border Grid.Row="3" 
+                    Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                    CornerRadius="4"
+                    Margin="0,10,0,0"
+                    Height="100">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <SelectableTextBlock x:Name="DetailText"
+                                         FontFamily="Consolas"
+                                         FontSize="12"
+                                         Opacity="0.8"
+                                         Padding="10"
+                                         TextWrapping="Wrap"
+                                         SelectionBrush="#3399FF"/>
+                </ScrollViewer>
+            </Border>
+            
+            <!-- Statistics -->
+            <Grid Grid.Row="4" Margin="0,20,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                    <TextBlock x:Name="NewCountText" 
+                               Text="0" 
+                               FontSize="24" 
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="{loc:Localize NewAddonCheck.NewAddons}" 
+                               FontSize="12" 
+                               Opacity="0.7"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                    <TextBlock x:Name="ProcessedCountText" 
+                               Text="0" 
+                               FontSize="24" 
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="{loc:Localize NewAddonCheck.Processed}" 
+                               FontSize="12" 
+                               Opacity="0.7"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                    <TextBlock x:Name="ElapsedTimeText" 
+                               Text="0:00" 
+                               FontSize="24" 
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="{loc:Localize NewAddonCheck.Elapsed}" 
+                               FontSize="12" 
+                               Opacity="0.7"
+                               HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+            
+            <!-- Info -->
+            <TextBlock Grid.Row="5" 
+                       x:Name="InfoText"
+                       Text="{loc:Localize NewAddonCheck.Info}"
+                       FontSize="12"
+                       Opacity="0.5"
+                       HorizontalAlignment="Center"
+                       Margin="0,30,0,0"
+                       TextWrapping="Wrap"/>
+        </Grid>
+    </Grid>
+</Window>
