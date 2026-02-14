@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="200"
+        x:Class="GmodAddonManager.UI.Views.ResetChoiceDialog"
+        Title="{loc:Localize Warning.Title}"
+        Width="400"
+        Height="200"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+    
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" 
+                   Text="{loc:Localize Warning.ResetStatesChoice}"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,16"/>
+        
+        <StackPanel DockPanel.Dock="Bottom" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Name="CancelButton" Content="{loc:Localize Dialog.Cancel}" Width="100"/>
+        </StackPanel>
+        
+        <StackPanel Spacing="8">
+            <Button Name="ResetAllButton" 
+                    HorizontalAlignment="Stretch"
+                    Height="40"
+                    Classes="primary">
+                <TextBlock Text="{loc:Localize Warning.ResetAllAddons}" 
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"/>
+            </Button>
+            
+            <Button Name="ResetCurrentButton" 
+                    HorizontalAlignment="Stretch"
+                    Height="40">
+                <TextBlock Text="{loc:Localize Warning.ResetCurrentAssetOnly}" 
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"/>
+            </Button>
+        </StackPanel>
+    </DockPanel>
+</Window>

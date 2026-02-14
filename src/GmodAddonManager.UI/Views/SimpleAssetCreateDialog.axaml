@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="200"
+        x:Class="GmodAddonManager.UI.Views.SimpleAssetCreateDialog"
+        Title="{loc:Localize Dialog.CreateAsset}"
+        Width="400"
+        Height="200"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner">
+
+    <StackPanel Margin="20" Spacing="10">
+        <TextBlock Text="{loc:Localize Dialog.AssetName}"
+                   FontWeight="Bold"/>
+        <TextBox x:Name="AssetNameTextBox"
+                 Watermark="{loc:Localize Dialog.AssetNamePlaceholder}"
+                 TextChanged="OnNameChanged"
+                 KeyUp="OnNameKeyUp"/>
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,10,0,0">
+            <Button Content="{loc:Localize Dialog.Cancel}"
+                    Click="OnCancel"/>
+            <Button x:Name="CreateButton"
+                    Content="{loc:Localize Dialog.Create}"
+                    IsEnabled="False"
+                    Click="OnCreate"
+                    Classes="accent"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

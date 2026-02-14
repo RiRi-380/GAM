@@ -1,0 +1,294 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="500"
+        x:Class="GmodAddonManager.UI.Views.SettingsDialog"
+        Title="{loc:Localize Settings.Title}"
+        Width="700"
+        Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    
+    <DockPanel Margin="30">
+        <!-- ヘッダー -->
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
+            <TextBlock Text="{loc:Localize Settings.Header}" FontSize="24" FontWeight="Bold"/>
+            <TextBlock Text="{loc:Localize Settings.Description}" Opacity="0.7" Margin="0,5,0,0"/>
+        </StackPanel>
+        
+        <!-- ボタン -->
+        <StackPanel DockPanel.Dock="Bottom" 
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,20,0,0">
+            <Button Width="100" Click="OnCancel" Content="{loc:Localize Dialog.Cancel}"/>
+            <Button Width="100" Click="OnSave" Classes="accent" Content="{loc:Localize Dialog.Save}"/>
+        </StackPanel>
+        
+        <!-- 設定コンテンツ -->
+        <ScrollViewer>
+            <StackPanel Spacing="30">
+                <!-- 言語設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.LanguageDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.DisplayLanguage}" FontWeight="SemiBold"/>
+                            <ComboBox Name="LanguageComboBox" 
+                                      Width="300" 
+                                      HorizontalAlignment="Left"
+                                      SelectedIndex="0">
+                                <ComboBoxItem Content="{loc:Localize Settings.Japanese}"/>
+                                <ComboBoxItem Content="{loc:Localize Settings.English}"/>
+                            </ComboBox>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                
+                <!-- 詳細設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.AdvancedDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+
+                        <Expander IsExpanded="False">
+                            <Expander.Header>
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="{loc:Localize Settings.DisableModeHeader}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{loc:Localize Settings.DisableModeDescription}" Opacity="0.7" FontSize="12"/>
+                                </StackPanel>
+                            </Expander.Header>
+
+                            <StackPanel Spacing="10" Margin="0,10,0,0">
+                                <RadioButton Name="SoftDisableRadio"
+                                             Content="{loc:Localize Settings.SoftDisableTitle}"
+                                             GroupName="DisableModeGroup"
+                                             IsEnabled="False"
+                                             IsChecked="True"/>
+                                <TextBlock Text="{loc:Localize Settings.SoftDisableDescription}" Opacity="0.7" FontSize="12" Margin="20,0,0,0"/>
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </Border>
+                
+                <!-- ローカルアドオン設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.LocalAddonsTitle}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.LocalAddonsDescription}" Opacity="0.7" FontSize="12" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <CheckBox Name="LocalAddonsCheckBox"
+                                  Content="{loc:Localize Settings.LocalAddonsToggle}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- パフォーマンス設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.PerformanceHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.PerformanceDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <StackPanel Spacing="10">
+                            <CheckBox Name="BackgroundTitleUpdatesCheckBox"
+                                      Content="{loc:Localize Settings.EnableBackgroundTitleUpdates}"/>
+                            <CheckBox Name="BackgroundAddonPreloadCheckBox"
+                                      Content="{loc:Localize Settings.EnableBackgroundAddonPreload}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                
+                <!-- ログ設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.LogHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.LogDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.LogLocation}" FontWeight="SemiBold"/>
+                            <TextBlock Name="LogLocationText" 
+                                      Opacity="0.8" 
+                                      FontSize="12"
+                                      TextWrapping="Wrap"
+                                      FontFamily="Consolas, monospace"/>
+                        </StackPanel>
+                        
+                        <CheckBox Name="ShowConsoleCheckBox" 
+                                  Content="{loc:Localize Settings.ShowConsoleOnStartup}"
+                                  Margin="0,10,0,10"/>
+                        
+                        <Button Click="OnOpenLogFolder" Width="200" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <PathIcon Data="{StaticResource FolderIcon}" Width="16" Height="16"/>
+                                <TextBlock Text="{loc:Localize Settings.OpenLogFolder}"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+                
+                <!-- アップデート設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.UpdateDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+
+                        <Button Click="OnCheckForUpdate" Width="200" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                                <TextBlock Text="{loc:Localize Settings.CheckForUpdate}"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- 危険な操作 -->
+                <Border Background="#2A1515" BorderBrush="#CC0000" BorderThickness="1" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.DangerZoneHeader}" FontSize="18" FontWeight="Bold" Foreground="#FF4444"/>
+                            <TextBlock Text="{loc:Localize Settings.DangerZoneDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <Border Background="#1F0A0A" CornerRadius="4" Padding="15">
+                            <StackPanel Spacing="10">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <PathIcon Data="{StaticResource WarningIcon}" Width="20" Height="20" Foreground="#FF4444"/>
+                                    <TextBlock Text="{loc:Localize Settings.ResetManagerTitle}" FontWeight="Bold" FontSize="14" Foreground="#FF4444"/>
+                                </StackPanel>
+                                <TextBlock x:Name="ResetManagerDescriptionText"
+                                           Text="{loc:Localize Settings.ResetManagerDescription}" 
+                                           TextWrapping="Wrap" 
+                                           Opacity="0.8"
+                                           FontSize="12"/>
+                                <TextBlock Text="{loc:Localize Settings.ResetManagerWarning}" 
+                                           TextWrapping="Wrap" 
+                                           Foreground="#FF9999"
+                                           FontSize="11"
+                                           FontStyle="Italic"/>
+                                <Button Name="ResetManagerButton"
+                                        Click="OnResetManager"
+                                        Background="#CC0000"
+                                        Foreground="White"
+                                        Width="200"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,10,0,0">
+                                    <Button.Styles>
+                                        <Style Selector="Button:pointerover">
+                                            <Setter Property="Background" Value="#EE0000"/>
+                                        </Style>
+                                    </Button.Styles>
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <PathIcon Data="{StaticResource DeleteIcon}" Width="16" Height="16"/>
+                                        <TextBlock Text="{loc:Localize Settings.ResetManagerButton}"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                        
+                        <Border Name="RestoreOriginalSection" Background="#1F0A0A" CornerRadius="4" Padding="15" Margin="0,15,0,0">
+                            <StackPanel Spacing="10">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <PathIcon Data="{StaticResource RefreshIcon}" Width="20" Height="20" Foreground="#FF9944"/>
+                                    <TextBlock Text="{loc:Localize Settings.RestoreOriginalTitle}" FontWeight="Bold" FontSize="14" Foreground="#FF9944"/>
+                                </StackPanel>
+                                <TextBlock x:Name="RestoreOriginalDescriptionText"
+                                           Text="{loc:Localize Settings.RestoreOriginalDescription}" 
+                                           TextWrapping="Wrap" 
+                                           Opacity="0.8"
+                                           FontSize="12"/>
+                                <TextBlock Text="{loc:Localize Settings.RestoreOriginalWarning}" 
+                                           TextWrapping="Wrap" 
+                                           Foreground="#FFAA66"
+                                           FontSize="11"
+                                           FontStyle="Italic"/>
+                                <Button Name="RestoreOriginalButton"
+                                        Click="OnRestoreOriginal"
+                                        Background="#FF6600"
+                                        Foreground="White"
+                                        Width="200"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,10,0,0">
+                                    <Button.Styles>
+                                        <Style Selector="Button:pointerover">
+                                            <Setter Property="Background" Value="#FF8800"/>
+                                        </Style>
+                                    </Button.Styles>
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                                        <TextBlock Text="{loc:Localize Settings.RestoreOriginalButton}"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#1F0A0A" CornerRadius="4" Padding="15" Margin="0,15,0,0">
+                            <StackPanel Spacing="10">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <PathIcon Data="{StaticResource WarningIcon}" Width="20" Height="20" Foreground="#FF6666"/>
+                                    <TextBlock Text="{loc:Localize Settings.ManualMigrationTitle}" FontWeight="Bold" FontSize="14" Foreground="#FF6666"/>
+                                </StackPanel>
+                                <TextBlock Text="{loc:Localize Settings.ManualMigrationDescription}"
+                                           TextWrapping="Wrap"
+                                           Opacity="0.8"
+                                           FontSize="12"/>
+                                <TextBlock Text="{loc:Localize Settings.ManualMigrationWarning}"
+                                           TextWrapping="Wrap"
+                                           Foreground="#FF9999"
+                                           FontSize="11"
+                                           FontStyle="Italic"/>
+                                <Button Click="OnManualMigration"
+                                        Background="#CC3333"
+                                        Foreground="White"
+                                        Width="200"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,10,0,0">
+                                    <Button.Styles>
+                                        <Style Selector="Button:pointerover">
+                                            <Setter Property="Background" Value="#EE4444"/>
+                                        </Style>
+                                    </Button.Styles>
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
+                                        <TextBlock Text="{loc:Localize Settings.ManualMigrationButton}"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- 開発者モード -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.DeveloperModeHeader}" FontSize="18" FontWeight="Bold"/>
+                        </StackPanel>
+
+                        <StackPanel Spacing="5">
+                            <TextBox Name="DeveloperModeTextBox"
+                                     Width="300"
+                                     HorizontalAlignment="Left"
+                                     TextChanged="OnDeveloperModeTextChanged"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

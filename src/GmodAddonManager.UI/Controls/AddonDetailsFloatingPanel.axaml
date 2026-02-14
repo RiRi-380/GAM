@@ -1,0 +1,71 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             xmlns:controls="using:GmodAddonManager.UI.Controls"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="600"
+             x:Class="GmodAddonManager.UI.Controls.AddonDetailsFloatingPanel"
+             x:DataType="vm:MainWindowViewModel">
+    
+    <Grid>
+        <!-- 半透明の背景オーバーレイ -->
+        <Border Name="BackgroundOverlay"
+                Background="#80000000"
+                IsVisible="{Binding AddonGridViewModel.SelectedAddon, Converter={x:Static ObjectConverters.IsNotNull}}"
+                PointerPressed="OnBackgroundOverlayPressed">
+            <Border.Transitions>
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.2"/>
+                </Transitions>
+            </Border.Transitions>
+        </Border>
+        
+        <!-- フローティングパネル -->
+        <Border Name="FloatingPanel"
+                Width="400"
+                HorizontalAlignment="Right"
+                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                BoxShadow="-4 0 20 0 #40000000"
+                IsVisible="{Binding AddonGridViewModel.SelectedAddon, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <Border.Transitions>
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.3">
+                        <TransformOperationsTransition.Easing>
+                            <CubicEaseOut/>
+                        </TransformOperationsTransition.Easing>
+                    </TransformOperationsTransition>
+                </Transitions>
+            </Border.Transitions>
+            
+            <Grid RowDefinitions="Auto,*">
+                <!-- ヘッダー -->
+                <Border Grid.Row="0" 
+                        Height="48"
+                        Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
+                    <Grid Margin="16,0">
+                        <TextBlock Text="{loc:Localize AddonDetails.Title}"
+                                   VerticalAlignment="Center"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"/>
+                        
+                        <Button HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Width="32" Height="32"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Click="OnCloseButtonClick">
+                            <PathIcon Data="{StaticResource CloseIcon}"
+                                     Width="16" Height="16"/>
+                        </Button>
+                    </Grid>
+                </Border>
+                
+                <!-- コンテンツ -->
+                <controls:AddonDetailsControl Grid.Row="1"
+                                            DataContext="{Binding AddonGridViewModel}"/>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -1,0 +1,40 @@
+﻿- Title: Initial release reset (history rewrite + repo cleanup)
+- Goal / Non-goals:
+  - Goal: Remove unwanted files/dirs, ensure no sensitive artifacts, and rewrite history to a clean initial commit for GAM.
+  - Non-goals: Refactor code, resolve build warnings, or change runtime behavior.
+- Context / Current behavior:
+  - Repository contains extra artifacts and legacy files; user wants a clean initial history on GitHub.
+- Expected behavior (acceptance criteria):
+  - Unwanted paths removed and ignored going forward.
+  - No Steamworks files or personal data in repo.
+  - New orphan history with a single initial commit on `main` pushed to origin.
+- Constraints (perf, compatibility, security, etc):
+  - Destructive history rewrite; ensure only desired files are committed.
+- Approach (high level):
+  - Delete specified files/dirs and update .gitignore.
+  - Verify no Steamworks/PII remnants.
+  - Create orphan commit and force-push to origin main.
+- Files to touch (guess OK; update as you learn):
+  - .gitignore
+  - Remove: backup/, .codex/, .preview-obj/, .tmp/, .history/, tester/results/
+  - Remove: ADDON_DISABLE_ANALYSIS_REPORT.md, ADDON_DISABLE_FIX_IMPLEMENTATION.md, AGENTS.md
+- Dependencies (add/update/remove) + rationale:
+  - None.
+- Verification plan (commands/tests + what pass means):
+  - Search for Steamworks files and personal identifiers.
+  - `git status` shows only intended files staged.
+  - Force-push succeeds and origin main has new initial history.
+- Rollback plan (簡単でOK):
+  - Restore previous history from a backup clone or GitHub reflog/branch if available.
+- Open questions (max 3; unresolvedならここへ):
+  - None.
+
+- Updates:
+  - Deleted repo-local junk dirs/files (backup/, .codex/, .preview-obj/, .tmp/, .history/, tester/results/).
+  - Removed ADDON_DISABLE_* reports and AGENTS.md.
+  - Updated .gitignore to keep these out going forward.
+  - Verified no Steamworks files remain and no user-path strings were found.
+  - Created orphan history and force-pushed `main` with a single initial commit.
+
+- Updates:
+  - Removed experimental/reference folders: gamdeepresearch/, ijitte/.

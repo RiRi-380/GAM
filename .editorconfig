@@ -1,0 +1,36 @@
+root = true
+
+[*]
+charset = utf-8
+
+[*.cs]
+indent_style = space
+indent_size = 4
+
+[*.axaml]
+indent_style = space
+indent_size = 4
+
+[*.axaml.cs]
+indent_style = space
+indent_size = 4
+
+[*.ps1]
+charset = utf-8
+
+[*.md]
+charset = utf-8
+
+[src/GmodAddonManager.UI/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1031.severity = none
+dotnet_diagnostic.CS0168.severity = none
+dotnet_diagnostic.CS1998.severity = none
+dotnet_diagnostic.CA1822.severity = none
+dotnet_diagnostic.CA1805.severity = none
+dotnet_diagnostic.CA1002.severity = none
+dotnet_diagnostic.CA1062.severity = none
+dotnet_diagnostic.CA1304.severity = none
+dotnet_diagnostic.CA1305.severity = none
+dotnet_diagnostic.CA1307.severity = none
+dotnet_diagnostic.CA1056.severity = none

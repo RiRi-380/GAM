@@ -1,0 +1,394 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             xmlns:controls="using:GmodAddonManager.UI.Controls"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="GmodAddonManager.UI.Controls.AddonDetailsControl"
+             x:DataType="vm:AddonGridViewModel">
+    
+    <Grid>
+        <!-- アドオンが選択されていない時のダッシュボード -->
+        <controls:DashboardControl IsVisible="{Binding SelectedAddon, Converter={x:Static ObjectConverters.IsNull}}"
+                                  DataContext="{Binding DashboardViewModel}"/>
+        
+        <!-- アドオンが選択されている時の詳細 -->
+        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                BorderBrush="Transparent"
+                BorderThickness="0"
+                IsVisible="{Binding SelectedAddon, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <ScrollViewer Padding="15"
+                         DataContext="{Binding SelectedAddon}">
+                <StackPanel Spacing="15">
+                
+                <!-- サムネイル -->
+                <Border Width="200"
+                       Height="200"
+                       Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                       CornerRadius="4"
+                       ClipToBounds="True"
+                       HorizontalAlignment="Center">
+                    <Grid>
+                        <!-- プレースホルダー -->
+                        <PathIcon Data="{StaticResource FolderIcon}" 
+                                 Width="48" 
+                                 Height="48"
+                                 Opacity="0.3"
+                                 IsVisible="{Binding !ThumbnailBitmap}"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"/>
+                        
+                        <!-- ローディングインジケータ -->
+                        <Border Width="40" 
+                               Height="40"
+                               IsVisible="{Binding IsThumbnailLoading}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center">
+                            <ProgressBar IsIndeterminate="True" />
+                        </Border>
+                        
+                        <!-- サムネイル画像 -->
+                        <Image Source="{Binding ThumbnailBitmap}"
+                               Stretch="UniformToFill"
+                               IsVisible="{Binding ThumbnailBitmap, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <Image.Transitions>
+                                <Transitions>
+                                    <DoubleTransition Property="Opacity" Duration="0:0:0.3"/>
+                                </Transitions>
+                            </Image.Transitions>
+                        </Image>
+                    </Grid>
+                </Border>
+                
+                <!-- タイトルと作者 -->
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" Spacing="4">
+                        <TextBlock Text="{Binding Title}"
+                                  FontSize="18"
+                                  FontWeight="Bold"
+                                  TextWrapping="Wrap"
+                                  TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding Author}"
+                                  FontSize="12"
+                                  Opacity="0.7"
+                                  IsVisible="{Binding Author, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                    </StackPanel>
+                    
+                    <!-- お気に入りボタン -->
+                    <ToggleButton Grid.Column="1"
+                                 IsChecked="{Binding IsFavorite}"
+                                 Command="{Binding ToggleFavoriteCommand}"
+                                 Width="32" Height="32"
+                                 VerticalAlignment="Top"
+                                 Background="Transparent"
+                                 BorderThickness="0">
+                        <PathIcon Data="{StaticResource StarIcon}" 
+                                 Width="20" Height="20">
+                            <PathIcon.Styles>
+                                <Style Selector="PathIcon">
+                                    <Setter Property="Foreground" Value="#666666"/>
+                                </Style>
+                                <Style Selector="ToggleButton:checked PathIcon">
+                                    <Setter Property="Foreground" Value="#FFD700"/>
+                                </Style>
+                            </PathIcon.Styles>
+                        </PathIcon>
+                    </ToggleButton>
+                </Grid>
+                
+                <!-- 基本情報 -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{loc:Localize AddonDetails.BasicInfo}"
+                              FontWeight="Bold"
+                              FontSize="14"
+                              Opacity="0.7"/>
+                    
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" 
+                          ColumnDefinitions="100,*">
+                        
+                        <TextBlock Grid.Row="0" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.ID}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" 
+                                  Text="{Binding AddonId}"
+                                  TextTrimming="CharacterEllipsis"/>
+                        
+                        <TextBlock Grid.Row="1" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.Size}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" 
+                                  Text="{Binding FileSizeText}"/>
+                        
+                        <TextBlock Grid.Row="2" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.UpdatedAt}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" 
+                                  Text="{Binding LastModifiedText}"/>
+                        
+                        <TextBlock Grid.Row="3" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.Type}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Row="3" Grid.Column="1" 
+                                  Text="{Binding TypeDisplay}"
+                                  IsVisible="{Binding TypeDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                        
+                        <TextBlock Grid.Row="4" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.Path}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Row="4" Grid.Column="1" 
+                                  Text="{Binding FolderPath}"
+                                  TextWrapping="Wrap"
+                                  FontFamily="Consolas,Courier New"
+                                  FontSize="11"/>
+                        
+                        <TextBlock Grid.Row="5" Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.AssetMembership}"
+                                  Opacity="0.7"/>
+                        <ItemsControl Grid.Row="5" Grid.Column="1" 
+                                     ItemsSource="{Binding AssetMemberships}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource SystemAccentColor}"
+                                           CornerRadius="3"
+                                           Padding="6,2"
+                                           Margin="0,0,4,4">
+                                        <TextBlock Text="{Binding}" 
+                                                  FontSize="11"
+                                                  Foreground="White"/>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </StackPanel>
+                
+                <!-- タグ -->
+                <StackPanel Spacing="8"
+                           IsVisible="{Binding Tags, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{loc:Localize AddonDetails.Tags}"
+                              FontWeight="Bold"
+                              FontSize="14"
+                              Opacity="0.7"/>
+                    <ItemsControl ItemsSource="{Binding TagsDisplay}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                       BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                       BorderThickness="1"
+                                       CornerRadius="3"
+                                       Padding="8,4"
+                                       Margin="0,0,4,4">
+                                    <TextBlock Text="{Binding}" FontSize="12"/>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+                
+                <!-- アクション -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{loc:Localize AddonDetails.Actions}"
+                              FontWeight="Bold"
+                              FontSize="14"
+                              Opacity="0.7"/>
+                    
+                    <Grid ColumnDefinitions="*,8,*">
+                        <Button Grid.Column="0"
+                               Command="{Binding OpenFolderCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <PathIcon Data="{StaticResource FolderIcon}" 
+                                         Width="14" Height="14"/>
+                                <TextBlock Text="{loc:Localize AddonDetails.OpenFolder}" 
+                                          FontSize="12"/>
+                            </StackPanel>
+                        </Button>
+                        
+                        <Button Grid.Column="2"
+                               Command="{Binding OpenWorkshopCommand}"
+                               IsEnabled="{Binding HasWorkshopId}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <PathIcon Data="{StaticResource WebIcon}" 
+                                         Width="14" Height="14"/>
+                                <TextBlock Text="{loc:Localize AddonDetails.OpenWorkshop}" 
+                                          FontSize="12"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    
+                    <Button Command="{Binding CopyWorkshopUrlCommand}"
+                           IsEnabled="{Binding HasWorkshopId}"
+                           HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <PathIcon Data="{StaticResource CopyIcon}" 
+                                     Width="14" Height="14"/>
+                            <TextBlock Text="{loc:Localize AddonDetails.CopyUrl}" 
+                                      FontSize="12"/>
+                        </StackPanel>
+                    </Button>
+                    
+                    <Button Command="{Binding LoadDetailsCommand}"
+                           HorizontalAlignment="Stretch"
+                           IsVisible="{Binding !IsDetailsLoaded}">
+                        <TextBlock Text="{loc:Localize AddonDetails.LoadDetails}"/>
+                    </Button>
+                </StackPanel>
+                
+                <!-- Workshop情報（詳細読み込み後） -->
+                <StackPanel Spacing="8"
+                           IsVisible="{Binding IsDetailsLoaded}">
+                    <TextBlock Text="{loc:Localize AddonDetails.WorkshopInfo}"
+                              FontWeight="Bold"
+                              FontSize="14"
+                              Opacity="0.7"/>
+                    
+                    <!-- 説明 -->
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                           CornerRadius="4"
+                           Padding="12"
+                           IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="{loc:Localize AddonDetails.Description}"
+                                      FontWeight="Bold"
+                                      FontSize="12"
+                                      Opacity="0.7"/>
+                            <TextBlock Text="{Binding Description}"
+                                      TextWrapping="Wrap"
+                                      FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+                    
+                    <!-- Workshop ID -->
+                    <Grid ColumnDefinitions="120,*">
+                        <TextBlock Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.WorkshopId}"
+                                  Opacity="0.7"/>
+                        <SelectableTextBlock Grid.Column="1" 
+                                            Text="{Binding AddonId}"
+                                            FontFamily="Consolas,Courier New"/>
+                    </Grid>
+                    
+                    <!-- 公開日 -->
+                    <Grid ColumnDefinitions="120,*"
+                          IsVisible="{Binding TimeCreated, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <TextBlock Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.PublishedDate}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Column="1" 
+                                  Text="{Binding TimeCreatedText}"/>
+                    </Grid>
+                    
+                    <!-- 最終更新 -->
+                    <Grid ColumnDefinitions="120,*"
+                          IsVisible="{Binding TimeUpdated, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <TextBlock Grid.Column="0" 
+                                  Text="{loc:Localize AddonDetails.LastUpdated}"
+                                  Opacity="0.7"/>
+                        <TextBlock Grid.Column="1" 
+                                  Text="{Binding TimeUpdatedText}"/>
+                    </Grid>
+                </StackPanel>
+                
+                <!-- 技術情報タブ -->
+                <Expander IsVisible="{Binding IsDetailsLoaded}"
+                         Margin="0,8,0,0">
+                    <Expander.Header>
+                        <TextBlock Text="{loc:Localize AddonDetails.TechnicalInfo}"
+                                  FontWeight="Bold"
+                                  FontSize="14"/>
+                    </Expander.Header>
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                           CornerRadius="4"
+                           Padding="12"
+                           Margin="0,8,0,0">
+                        <StackPanel Spacing="8">
+                            <!-- ファイル構成 -->
+                            <TextBlock Text="{loc:Localize AddonDetails.FileStructure}"
+                                      FontWeight="Bold"
+                                      FontSize="12"
+                                      Opacity="0.7"/>
+                            <ScrollViewer MaxHeight="200">
+                                <TreeView ItemsSource="{Binding FileTree}"
+                                         FontFamily="Consolas,Courier New"
+                                         FontSize="11">
+                                    <TreeView.ItemTemplate>
+                                        <TreeDataTemplate ItemsSource="{Binding Children}">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <PathIcon Data="{Binding Icon}" 
+                                                         Width="14" Height="14"
+                                                         Foreground="{Binding IconColor}"/>
+                                                <TextBlock Text="{Binding Name}"/>
+                                                <TextBlock Text="{Binding SizeText}" 
+                                                          Opacity="0.6"
+                                                          FontSize="10"
+                                                          Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                        </TreeDataTemplate>
+                                    </TreeView.ItemTemplate>
+                                </TreeView>
+                            </ScrollViewer>
+                            
+                            <!-- 状態情報 -->
+                            <TextBlock Text="{loc:Localize AddonDetails.StateInfo}"
+                                      FontWeight="Bold"
+                                      FontSize="12"
+                                      Opacity="0.7"
+                                      Margin="0,8,0,0"/>
+                            <Grid RowDefinitions="Auto,Auto" 
+                                  ColumnDefinitions="100,*">
+                                <TextBlock Grid.Row="0" Grid.Column="0" 
+                                          Text="{loc:Localize AddonDetails.CurrentState}"
+                                          Opacity="0.7"/>
+                                <TextBlock Grid.Row="0" Grid.Column="1" 
+                                          Text="{Binding StateText}"/>
+                                
+                                <TextBlock Grid.Row="1" Grid.Column="0" 
+                                          Text="{loc:Localize AddonDetails.IsGmaFile}"
+                                          Opacity="0.7"/>
+                                <TextBlock Grid.Row="1" Grid.Column="1" 
+                                          Text="{Binding IsGmaFileText}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Expander>
+                
+                <!-- メモ -->
+                <Expander Margin="0,8,0,0">
+                    <Expander.Header>
+                        <TextBlock Text="{loc:Localize AddonDetails.Notes}"
+                                  FontWeight="Bold"
+                                  FontSize="14"/>
+                    </Expander.Header>
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                           CornerRadius="4"
+                           Padding="12"
+                           Margin="0,8,0,0">
+                        <StackPanel Spacing="8">
+                            <TextBox Text="{Binding Notes}"
+                                    AcceptsReturn="True"
+                                    TextWrapping="Wrap"
+                                    MinHeight="100"
+                                    Watermark="{loc:Localize AddonDetails.NotesPlaceholder}"/>
+                            <Button Command="{Binding SaveNotesCommand}"
+                                   HorizontalAlignment="Right">
+                                <TextBlock Text="{loc:Localize AddonDetails.SaveNotes}"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                </Expander>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</UserControl>

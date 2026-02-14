@@ -1,0 +1,51 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:GmodAddonManager.UI"
+             xmlns:converters="using:GmodAddonManager.UI.Converters"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             x:Class="GmodAddonManager.UI.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="/Assets/Icons.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            
+            <converters:BoolToColorConverter x:Key="BoolToColorConverter"/>
+            <converters:FirstCharacterConverter x:Key="FirstCharacterConverter"/>
+            <converters:AssetIdToColorConverter x:Key="AssetIdToColorConverter"/>
+            <converters:BytesToKilobytesConverter x:Key="BytesToKilobytesConverter"/>
+            
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme>
+            <FluentTheme.Palettes>
+                <ColorPaletteResources x:Key="Light" 
+                                     Accent="#FF0078D4" 
+                                     AltHigh="White" 
+                                     AltLow="#FFF8F8F8"/>
+                <ColorPaletteResources x:Key="Dark" 
+                                     Accent="#4A90E2" 
+                                     RegionColor="#1A1A1A"
+                                     BaseHigh="#FFFFFF"
+                                     BaseMediumHigh="#CCCCCC"
+                                     BaseMedium="#999999"
+                                     BaseMediumLow="#666666"
+                                     BaseLow="#333333"
+                                     AltHigh="#252525"
+                                     AltMediumHigh="#1F1F1F" 
+                                     AltMedium="#1A1A1A"
+                                     AltMediumLow="#151515"
+                                     AltLow="#0A0A0A"
+                                     ChromeHigh="#252525"
+                                     ChromeMedium="#1F1F1F"
+                                     ChromeLow="#1A1A1A"
+                                     ChromeAltLow="#0A0A0A"/>
+            </FluentTheme.Palettes>
+        </FluentTheme>
+    </Application.Styles>
+</Application>

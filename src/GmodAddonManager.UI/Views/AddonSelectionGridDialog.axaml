@@ -1,0 +1,186 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        x:Class="GmodAddonManager.UI.Views.AddonSelectionGridDialog"
+        Title="{loc:Localize Dialog.SelectAddons}"
+        Width="900"
+        Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- タイトル -->
+        <TextBlock Grid.Row="0" 
+                   Text="{loc:Localize Dialog.SelectAddonsToAdd}" 
+                   FontSize="16" 
+                   FontWeight="Bold"
+                   Margin="0,0,0,10"/>
+        
+        <!-- 検索ボックス -->
+        <TextBox Grid.Row="1"
+                 Name="SearchTextBox"
+                 Watermark="{loc:Localize Dialog.SearchAddons}"
+                 Margin="0,0,0,10"/>
+        
+        <!-- アドオングリッド -->
+        <Border Grid.Row="2" 
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Margin="0,0,0,10">
+            <ScrollViewer>
+                <ItemsControl Name="AddonGrid" Margin="5">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Width="180" 
+                                    Height="180" 
+                                    Margin="5"
+                                    Padding="10"
+                                    Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                    CornerRadius="4"
+                                    Classes.selected="{Binding IsSelected}"
+                                    PointerPressed="OnAddonPointerPressed">
+                                
+                                <Border.Styles>
+                                    <Style Selector="Border">
+                                        <Setter Property="Transitions">
+                                            <Transitions>
+                                                <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                                            </Transitions>
+                                        </Setter>
+                                    </Style>
+                                    <Style Selector="Border.selected">
+                                        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}"/>
+                                        <Setter Property="BorderThickness" Value="2"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColorDark1}"/>
+                                    </Style>
+                                    <Style Selector="Border:pointerover">
+                                        <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
+                                    </Style>
+                                </Border.Styles>
+                                
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="100"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <!-- サムネイル -->
+                                    <Border Grid.Row="0" 
+                                            CornerRadius="2"
+                                            ClipToBounds="True"
+                                            Background="{DynamicResource SystemControlBackgroundBaseLowBrush}">
+                                        <Panel>
+                                            <Image Source="{Binding ThumbnailImage}" 
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding HasThumbnail}"/>
+                                            <TextBlock Text="📦" 
+                                                       FontSize="48" 
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       IsVisible="{Binding !HasThumbnail}"/>
+                                        </Panel>
+                                    </Border>
+                                    
+                                    <!-- タイトル -->
+                                    <TextBlock Grid.Row="1" 
+                                               Text="{Binding Title}" 
+                                               FontWeight="Bold"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextWrapping="Wrap"
+                                               MaxLines="2"
+                                               Margin="0,5,0,0"
+                                               Classes.selected="{Binding IsSelected}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock.selected">
+                                                <Setter Property="Foreground" Value="White"/>
+                                            </Style>
+                                        </TextBlock.Styles>
+                                    </TextBlock>
+                                    
+                                    <!-- サイズ -->
+                                    <TextBlock Grid.Row="2" 
+                                               Text="{Binding FormattedSize}"
+                                               FontSize="11"
+                                               Opacity="0.7"
+                                               Classes.selected="{Binding IsSelected}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock.selected">
+                                                <Setter Property="Foreground" Value="White"/>
+                                                <Setter Property="Opacity" Value="0.9"/>
+                                            </Style>
+                                        </TextBlock.Styles>
+                                    </TextBlock>
+                                    
+                                    <!-- 選択チェックマーク -->
+                                    <Border Grid.Row="0" Grid.RowSpan="3"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Top"
+                                            Width="24" Height="24"
+                                            Margin="0,-5,-5,0"
+                                            Background="{DynamicResource SystemAccentColor}"
+                                            CornerRadius="12"
+                                            IsVisible="{Binding IsSelected}">
+                                        <TextBlock Text="✓" 
+                                                   Foreground="White"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontWeight="Bold"/>
+                                    </Border>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- 選択状態 -->
+        <TextBlock Grid.Row="3" 
+                   Name="SelectionText"
+                   Margin="0,0,0,10"/>
+        
+        <!-- ボタン -->
+        <StackPanel Grid.Row="4" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right" 
+                    Spacing="10">
+            <Button Name="SelectAllButton" 
+                    Content="{loc:Localize Dialog.SelectAll}" 
+                    Width="100"
+                    Click="OnSelectAllClick"/>
+            <Button Name="DeselectAllButton" 
+                    Content="{loc:Localize Dialog.DeselectAll}" 
+                    Width="100"
+                    Click="OnDeselectAllClick"/>
+            <Button Name="OkButton" 
+                    Content="{loc:Localize Dialog.Add}" 
+                    Width="80"
+                    Click="OnOkClick"
+                    IsEnabled="False"/>
+            <Button Name="CancelButton" 
+                    Content="{loc:Localize Dialog.Cancel}" 
+                    Width="80"
+                    Click="OnCancelClick"/>
+        </StackPanel>
+    </Grid>
+</Window>
