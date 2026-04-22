@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -72,10 +73,11 @@ public partial class SettingsDialog : Window
     private async void OnSave(object? sender, RoutedEventArgs e)
     {
         if (currentSettings == null) return;
-        
+
         var needsRestart = false;
         var languageChanged = false;
-        
+        var disableModeChanged = false;
+
         // 言語が変更されたかチェック
         var newLanguage = LanguageComboBox.SelectedIndex == 0 ? "ja-JP" : "en-US";
         if (newLanguage != currentSettings.Language)
@@ -89,12 +91,19 @@ public partial class SettingsDialog : Window
         currentSettings.Language = newLanguage;
 
         // 無効化モード設定を更新
-        currentSettings.DisableMode = SoftDisableRadio.IsChecked == true ? DisableMode.Soft : DisableMode.Hard;
+        var newDisableMode = SoftDisableRadio.IsChecked == true ? DisableMode.Soft : DisableMode.Hard;
+        disableModeChanged = newDisableMode != currentSettings.DisableMode;
+        if (disableModeChanged)
+        {
+            needsRestart = true;
+        }
+        currentSettings.DisableMode = newDisableMode;
         currentSettings.UnsubscribeOnHardDisable = UnsubscribeCheckBox.IsChecked ?? false;
-        
+
         // コンソール表示設定を更新
         var newShowConsole = ShowConsoleCheckBox.IsChecked ?? false;
-        if (newShowConsole != currentSettings.ShowConsoleOnStartup)
+        var showConsoleChanged = newShowConsole != currentSettings.ShowConsoleOnStartup;
+        if (showConsoleChanged)
         {
             needsRestart = true;
         }
@@ -106,10 +115,21 @@ public partial class SettingsDialog : Window
         // 成功メッセージを表示
         if (needsRestart)
         {
-            var consoleMessage = newShowConsole 
-                ? "設定が保存されました。\nコンソール表示設定は次回起動時から有効になります。"
-                : "設定が保存されました。\nコンソール表示設定は次回起動時から無効になります。";
-            await dialogService.ShowInfoAsync(L.Get("Success.Title"), consoleMessage);
+            var restartMessages = new List<string> { "設定が保存されました。" };
+
+            if (showConsoleChanged)
+            {
+                restartMessages.Add(newShowConsole
+                    ? "コンソール表示設定は次回起動時から有効になります。"
+                    : "コンソール表示設定は次回起動時から無効になります。");
+            }
+
+            if (disableModeChanged)
+            {
+                restartMessages.Add("アドオン無効化方式の変更を反映するには、アプリケーションを再起動してください。");
+            }
+
+            await dialogService.ShowInfoAsync(L.Get("Success.Title"), string.Join("\n\n", restartMessages));
         }
         else if (languageChanged)
         {
