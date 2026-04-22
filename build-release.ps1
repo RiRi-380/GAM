@@ -1,6 +1,7 @@
 # Build script for GAM - Same as GitHub Actions
 param(
-    [string]$Version = "v1.0.0"
+    [string]$Version = "v1.0.0",
+    [switch]$NonInteractive
 )
 
 $releaseVersion = $Version.Trim().TrimStart('v')
@@ -17,6 +18,7 @@ $revisionComponent = if ($versionValue.Revision -ge 0) { $versionValue.Revision 
 $assemblyVersion = "{0}.{1}.{2}.{3}" -f $versionValue.Major, $versionValue.Minor, $buildComponent, $revisionComponent
 $fileVersion = $assemblyVersion
 $informationalVersion = $Version.Trim()
+$compatibilityInstallerName = "GAM-Setup.exe"
 
 Write-Host "Building GAM $Version..." -ForegroundColor Green
 Write-Host "Resolved release version: $releaseVersion" -ForegroundColor Cyan
@@ -96,6 +98,10 @@ if (Test-Path $innoSetupPath) {
     if (Test-Path $installerSource) {
         Move-Item $installerSource . -Force
         Write-Host "Installer created: GAM-Setup-$releaseVersion.exe" -ForegroundColor Green
+
+        $compatibilityInstallerPath = Join-Path $PSScriptRoot $compatibilityInstallerName
+        Copy-Item "GAM-Setup-$releaseVersion.exe" $compatibilityInstallerPath -Force
+        Write-Host "Compatibility installer created: $compatibilityInstallerName" -ForegroundColor Green
     }
 } else {
     Write-Host "Inno Setup not found. Skipping installer build." -ForegroundColor Red
@@ -107,8 +113,15 @@ Write-Host "Outputs:" -ForegroundColor Cyan
 Write-Host "  - Portable: $zipPath" -ForegroundColor White
 Write-Host "  - Executable: publish\GmodAddonManager.UI.exe" -ForegroundColor White
 
-# Option to run the built executable
-$response = Read-Host "`nDo you want to run the built executable? (y/n)"
-if ($response -eq 'y') {
-    Start-Process "publish\GmodAddonManager.UI.exe"
+if (Test-Path $compatibilityInstallerName) {
+    Write-Host "  - Installer alias: $compatibilityInstallerName" -ForegroundColor White
+}
+
+$shouldPromptToRun = -not $NonInteractive -and -not $env:CI
+if ($shouldPromptToRun) {
+    # Option to run the built executable
+    $response = Read-Host "`nDo you want to run the built executable? (y/n)"
+    if ($response -eq 'y') {
+        Start-Process "publish\GmodAddonManager.UI.exe"
+    }
 }

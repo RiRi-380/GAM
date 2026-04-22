@@ -11,94 +11,42 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    
+
     steps:
     - name: Checkout
       uses: actions/checkout@v3
-      
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v3
       with:
         dotnet-version: '6.0.x'
-        
-    - name: Restore dependencies
-      run: |
-        dotnet restore -r win-x64
-      
-    - name: Build
-      run: |
-        dotnet build -c Release
-        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o publish
-      
-    - name: Copy steam_api64.dll
-      run: |
-        # プロジェクトルートのsteam_api64.dllをpublishディレクトリにコピー
-        if (Test-Path "steam_api64.dll") {
-          Copy-Item "steam_api64.dll" -Destination "publish/steam_api64.dll" -Force
-          Write-Host "steam_api64.dll copied from project root"
-        } else {
-          # バックアップ: 再帰的に探す
-          $steamDll = Get-ChildItem -Path . -Recurse -Filter "steam_api64.dll" | Select-Object -First 1
-          if ($steamDll) {
-            Copy-Item $steamDll.FullName -Destination "publish/steam_api64.dll" -Force
-            Write-Host "steam_api64.dll copied from: $($steamDll.FullName)"
-          } else {
-            Write-Error "steam_api64.dll not found!"
-            exit 1
-          }
-        }
-      shell: pwsh
-      
-    - name: Create portable archive
-      run: |
-        # Remove 'v' prefix from tag name if present
-        $version = "${{ github.ref_name }}"
-        if ($version.StartsWith("v")) {
-          $version = $version.Substring(1)
-        }
-        
-        Compress-Archive -Path publish/* -DestinationPath GAM-Portable-$version.zip
-      shell: pwsh
-      
+
     - name: Setup Inno Setup
       run: |
         choco install innosetup -y
-    
+
     - name: Download VC++ Redistributable
       run: |
-        # Create redist directory
         New-Item -ItemType Directory -Force -Path redist
-        
-        # Download VC++ Redistributable
         Write-Host "Downloading Visual C++ Redistributable..."
         Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
           -OutFile "redist/VC_redist.x64.exe" `
           -UseBasicParsing
-        
         Write-Host "VC++ Redistributable downloaded successfully"
       shell: pwsh
-        
-    - name: Build installer
+
+    - name: Build release assets
       run: |
-        # Create dist directory if it doesn't exist
-        New-Item -ItemType Directory -Force -Path dist
-        
-        # Remove 'v' prefix from tag name if present
-        $version = "${{ github.ref_name }}"
-        if ($version.StartsWith("v")) {
-          $version = $version.Substring(1)
-        }
-        
-        Write-Host "Building installer for version: $version"
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/setup.iss /DMyAppVersion=$version
+        ./build-release.ps1 -Version "${{ github.ref_name }}" -NonInteractive
       shell: pwsh
-      
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
           ./GAM-Portable-*.zip
-          ./dist/GAM-Setup-*.exe
+          ./GAM-Setup-*.exe
+          ./GAM-Setup.exe
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
         draft: false
