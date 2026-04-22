@@ -3,7 +3,24 @@ param(
     [string]$Version = "v1.0.0"
 )
 
+$releaseVersion = $Version.Trim().TrimStart('v')
+
+try {
+    [Version]$versionValue = $releaseVersion
+}
+catch {
+    throw "Version must be a numeric semantic version like v1.0.1 or 1.0.1. Received: $Version"
+}
+
+$buildComponent = if ($versionValue.Build -ge 0) { $versionValue.Build } else { 0 }
+$revisionComponent = if ($versionValue.Revision -ge 0) { $versionValue.Revision } else { 0 }
+$assemblyVersion = "{0}.{1}.{2}.{3}" -f $versionValue.Major, $versionValue.Minor, $buildComponent, $revisionComponent
+$fileVersion = $assemblyVersion
+$informationalVersion = $Version.Trim()
+
 Write-Host "Building GAM $Version..." -ForegroundColor Green
+Write-Host "Resolved release version: $releaseVersion" -ForegroundColor Cyan
+Write-Host "Resolved assembly/file version: $assemblyVersion" -ForegroundColor Cyan
 
 # Clean previous builds
 Write-Host "Cleaning previous builds..." -ForegroundColor Yellow
@@ -27,6 +44,10 @@ dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
     -p:PublishSingleFile=true `
     -p:PublishTrimmed=false `
     -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:Version=$releaseVersion `
+    -p:AssemblyVersion=$assemblyVersion `
+    -p:FileVersion=$fileVersion `
+    -p:InformationalVersion=$informationalVersion `
     -o publish
 
 # Copy steam_api64.dll to publish folder
@@ -45,7 +66,7 @@ if (Test-Path $steamDllSource) {
 
 # Create portable ZIP
 Write-Host "Creating portable ZIP..." -ForegroundColor Yellow
-$zipPath = "GAM-Portable-$Version.zip"
+$zipPath = "GAM-Portable-$releaseVersion.zip"
 if (Test-Path $zipPath) {
     Remove-Item $zipPath
 }
@@ -68,13 +89,13 @@ if (Test-Path $innoSetupPath) {
         Write-Host "✓ Visual C++ Redistributable found" -ForegroundColor Green
     }
     
-    & $innoSetupPath installer/setup.iss /DMyAppVersion=$Version
+    & $innoSetupPath installer/setup.iss /DMyAppVersion=$releaseVersion
     
     # Move installer to root directory for easy access
-    $installerSource = "dist\GAM-Setup-$Version.exe"
+    $installerSource = "dist\GAM-Setup-$releaseVersion.exe"
     if (Test-Path $installerSource) {
         Move-Item $installerSource . -Force
-        Write-Host "Installer created: GAM-Setup-$Version.exe" -ForegroundColor Green
+        Write-Host "Installer created: GAM-Setup-$releaseVersion.exe" -ForegroundColor Green
     }
 } else {
     Write-Host "Inno Setup not found. Skipping installer build." -ForegroundColor Red

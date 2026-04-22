@@ -108,10 +108,12 @@ namespace GmodAddonManager.Core.Services
             junctionService = new JunctionService();
             
             // Initialize WorkshopIconResolver
-            var appDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GmodAddonManager"
-            );
+            var appDataPath = !string.IsNullOrWhiteSpace(options.CustomAppDataPath)
+                ? options.CustomAppDataPath
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GmodAddonManager"
+                );
             var iconResolver = new WorkshopIconResolver(steamPathDetector, null, appDataPath);
             
             steamWorkshopService = new SteamWorkshopService(iconResolver);
@@ -153,16 +155,24 @@ namespace GmodAddonManager.Core.Services
             }
             
             // Detect Gmod cache path
-            try
+            if (options.DisableCacheScan)
             {
-                gmodCachePath = steamPathDetector.DetectGmodCachePath();
-                // Detected gmodCachePath
-            }
-            catch (Exception ex)
-            {
-                // Error detecting cache path
-                // エラーが発生してもnullとして続行
                 gmodCachePath = null;
+                errorHandler.HandleInfo("Cache scanning disabled by options", "Constructor");
+            }
+            else
+            {
+                try
+                {
+                    gmodCachePath = steamPathDetector.DetectGmodCachePath();
+                    // Detected gmodCachePath
+                }
+                catch (Exception ex)
+                {
+                    // Error detecting cache path
+                    // エラーが発生してもnullとして続行
+                    gmodCachePath = null;
+                }
             }
             
             // Set up cache manager paths
@@ -502,6 +512,12 @@ namespace GmodAddonManager.Core.Services
                 
                 if (long.TryParse(dirName, out _))
                 {
+                    if (!DirectoryHasAddonPayload(directory, "MigrateExistingAddons"))
+                    {
+                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "MigrateExistingAddons");
+                        continue;
+                    }
+
                     if (junctionService.IsJunction(directory))
                     {
                         // Skipping - already a junction
@@ -1094,6 +1110,12 @@ namespace GmodAddonManager.Core.Services
                         continue;
                     }
 
+                    if (!DirectoryHasAddonPayload(directory, "ScanWorkshopFolderSoftAsync"))
+                    {
+                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "ScanWorkshopFolderSoftAsync");
+                        continue;
+                    }
+
                     processedIds.Add(addonId);
 
                     if (configuration?.AddonMetadata != null && configuration.AddonMetadata.TryGetValue(addonId, out var savedAddon))
@@ -1165,7 +1187,7 @@ namespace GmodAddonManager.Core.Services
                     else
                     {
                         var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
-                        if (Directory.Exists(workshopDirPath))
+                        if (DirectoryHasAddonPayload(workshopDirPath, "ScanWorkshopFolderSoftAsync"))
                         {
                             addonExists = true;
                             kvp.Value.FolderPath = workshopDirPath;
@@ -1237,6 +1259,12 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
+            var deletedAddonIds = await CleanupDeletedWorkshopAddonsAsync(addons);
+            if (deletedAddonIds.Count > 0)
+            {
+                addons = addons.Where(a => !deletedAddonIds.Contains(a.Id)).ToList();
+            }
+
             await EnsureAllAddonsInSubscribeAssetAsync();
 
             return addons;
@@ -1277,6 +1305,12 @@ namespace GmodAddonManager.Core.Services
                 // Check if it's a valid addon ID
                 if (!long.TryParse(dirName, out _))
                     continue;
+
+                if (!DirectoryHasAddonPayload(dir, "ScanForNewAddonsAsync"))
+                {
+                    errorHandler.HandleInfo($"Skipping empty workshop directory: {dir}", "ScanForNewAddonsAsync");
+                    continue;
+                }
                     
                 // Check if we already know about this addon
                 if (configuration.AddonMetadata.ContainsKey(dirName))
@@ -1402,6 +1436,11 @@ namespace GmodAddonManager.Core.Services
             string addonId = Path.GetFileName(addonPath);
             
             if (!long.TryParse(addonId, out _))
+            {
+                return null;
+            }
+
+            if (!DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
             {
                 return null;
             }
@@ -1798,6 +1837,33 @@ namespace GmodAddonManager.Core.Services
             }
 
             return value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
+        {
+            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                return Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories)
+                    .Any(filePath => !IsIgnoredAddonPresenceMarker(filePath));
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to inspect addon directory payload at {directoryPath}. Treating directory as present. {ex.Message}",
+                    operationName);
+                return true;
+            }
+        }
+
+        private static bool IsIgnoredAddonPresenceMarker(string filePath)
+        {
+            var fileName = Path.GetFileName(filePath);
+            return string.Equals(fileName, ".gam_disabled", StringComparison.OrdinalIgnoreCase);
         }
 
 	        public void EnableAddon(string addonId)
@@ -6374,7 +6440,9 @@ namespace GmodAddonManager.Core.Services
                         }
                         else
                         {
-                            fileExists = Directory.Exists(workshopDirPath) && !junctionService.IsJunction(workshopDirPath);
+                            fileExists = Directory.Exists(workshopDirPath) &&
+                                         !junctionService.IsJunction(workshopDirPath) &&
+                                         DirectoryHasAddonPayload(workshopDirPath, "CleanupDeletedWorkshopAddons");
                         }
                     }
                     
@@ -6489,11 +6557,14 @@ namespace GmodAddonManager.Core.Services
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
-                var workshopPath = Path.Combine(this.workshopPath, addonId);
+                var workshopAddonPath = Path.Combine(this.workshopPath, addonId);
                 
                 // ワークショップフォルダ側が完全に存在しない（ジャンクションも実体もGMAファイルも無い）
-                bool workshopExists = Directory.Exists(workshopPath) || File.Exists(workshopPath) || 
-                                    File.Exists(workshopPath + ".gma");
+                bool workshopExists = addon.IsGmaFile
+                    ? File.Exists(workshopAddonPath) ||
+                      File.Exists(workshopAddonPath + ".gma") ||
+                      DirectoryHasAddonPayload(workshopAddonPath, "CleanupUnsubscribedAddons")
+                    : DirectoryHasAddonPayload(workshopAddonPath, "CleanupUnsubscribedAddons");
                 
                 if (!workshopExists)
                 {

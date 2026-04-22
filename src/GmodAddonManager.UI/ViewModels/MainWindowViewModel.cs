@@ -721,7 +721,6 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
 
             // 設定変更を反映
             var updatedSettings = AppSettings.Load();
-            addonManager.DisableMode = updatedSettings.DisableMode;
             addonManager.UnsubscribeOnHardDisable = updatedSettings.UnsubscribeOnHardDisable;
         }
         catch (Exception ex)

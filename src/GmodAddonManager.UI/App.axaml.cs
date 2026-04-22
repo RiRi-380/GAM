@@ -152,7 +152,17 @@ public partial class App : Application
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"Creating AddonManager at: {DateTime.Now}\n");
 #endif
-                addonManager = new AddonManager(null, errorHandler);
+                var disableMode = settings.DisableMode;
+                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
+                {
+                    disableMode = DisableMode.Hard;
+                }
+
+                addonManager = new AddonManager(new AddonManagerOptions
+                {
+                    ErrorHandler = errorHandler,
+                    DisableMode = disableMode
+                });
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
@@ -162,13 +172,8 @@ public partial class App : Application
 #endif
 
                 // 無効化モード設定を適用
-                addonManager.DisableMode = settings.DisableMode;
                 addonManager.UnsubscribeOnHardDisable = settings.UnsubscribeOnHardDisable;
                 addonManager.StrictLinkMode = settings.StrictLinkMode || addonManager.StrictLinkMode;
-                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
-                {
-                    addonManager.DisableMode = DisableMode.Hard;
-                }
                 
                 // WorkshopIconResolverの取得
                 workshopIconResolver = addonManager.GetWorkshopIconResolver() as WorkshopIconResolver;

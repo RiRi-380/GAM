@@ -34,15 +34,14 @@ namespace GmodAddonManager.Core.Services
 
                 var response = await httpClient.GetStringAsync(GITHUB_API_URL);
                 var release = JsonConvert.DeserializeObject<GitHubRelease>(response);
+                await SaveLastCheckTime();
 
                 if (release != null && IsNewerVersion(release.TagName))
                 {
-                    var installerAsset = release.Assets?.FirstOrDefault(a => 
-                        a.Name.EndsWith("-Setup.exe") || a.Name.EndsWith("-installer.exe"));
+                    var installerAsset = release.Assets?.FirstOrDefault(a => IsInstallerAssetName(a.Name));
 
                     if (installerAsset != null)
                     {
-                        await SaveLastCheckTime();
                         return new UpdateInfo
                         {
                             Version = release.TagName,
@@ -84,6 +83,18 @@ namespace GmodAddonManager.Core.Services
             }
             
             return false;
+        }
+
+        internal static bool IsInstallerAssetName(string? assetName)
+        {
+            if (string.IsNullOrWhiteSpace(assetName))
+            {
+                return false;
+            }
+
+            return assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                   (assetName.Contains("setup", StringComparison.OrdinalIgnoreCase) ||
+                    assetName.Contains("installer", StringComparison.OrdinalIgnoreCase));
         }
 
         private async Task SaveLastCheckTime()
