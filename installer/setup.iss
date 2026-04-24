@@ -1,6 +1,10 @@
+#ifndef MyAppVersion
+#define MyAppVersion "1.0.0"
+#endif
+
 [Setup]
 AppName=Gmod Addon Manager
-AppVersion=1.0.0
+AppVersion={#MyAppVersion}
 AppPublisher=RiRi-380
 AppPublisherURL=https://github.com/RiRi-380/GAM
 DefaultDirName={autopf}\GmodAddonManager

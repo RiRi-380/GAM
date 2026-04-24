@@ -20,7 +20,8 @@ namespace GmodAddonManager.Core.Services
         private static readonly string[] GmodProcessNames = new[]
         {
             "hl2",
-            "gmod"
+            "gmod",
+            "garrysmod"
         };
 
         /// <summary>

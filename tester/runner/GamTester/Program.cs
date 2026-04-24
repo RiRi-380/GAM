@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using GmodAddonManager.Core.Models;
@@ -36,8 +37,8 @@ internal static class Program
             steamConfig = new SteamCmdConfig(
                 Path.GetFullPath(options.SteamCmdPath ?? "steamcmd"),
                 options.SteamUser!,
-                options.SteamPassword,
-                options.SteamGuard,
+                Environment.GetEnvironmentVariable("GAM_STEAM_PASSWORD"),
+                options.SteamGuard ?? Environment.GetEnvironmentVariable("GAM_STEAM_GUARD"),
                 options.SteamLibrary);
         }
 
@@ -112,7 +113,6 @@ internal sealed class Options
     public string? Mode { get; private set; }
     public string? SteamCmdPath { get; private set; }
     public string? SteamUser { get; private set; }
-    public string? SteamPassword { get; private set; }
     public string? SteamGuard { get; private set; }
     public string? SteamLibrary { get; private set; }
 
@@ -156,9 +156,6 @@ internal sealed class Options
                 case "--steam-user":
                     options.SteamUser = args[++i];
                     break;
-                case "--steam-password":
-                    options.SteamPassword = args[++i];
-                    break;
                 case "--steam-guard":
                     options.SteamGuard = args[++i];
                     break;
@@ -186,7 +183,8 @@ internal sealed class Options
 
     public static void PrintUsage()
     {
-        Console.WriteLine("Usage: dotnet run --project tester/runner/GamTester/GamTester.csproj -- --dataset <path> --scenario <path> [--condition LM|BL] [--repeat N] [--results <csv>] [--workroot <path>] [--mode local|steamcmd] [--steamcmd-path <path>] [--steam-user <user>] [--steam-password <pass>] [--steam-guard <code>] [--steam-library <path>]");
+        Console.WriteLine("Usage: dotnet run --project tester/runner/GamTester/GamTester.csproj -- --dataset <path> --scenario <path> [--condition LM|BL] [--repeat N] [--results <csv>] [--workroot <path>] [--mode local|steamcmd] [--steamcmd-path <path>] [--steam-user <user>] [--steam-guard <code>] [--steam-library <path>]");
+        Console.WriteLine("SteamCMD password is read from GAM_STEAM_PASSWORD to keep it out of process command lines.");
     }
 }
 
@@ -820,18 +818,27 @@ internal static class SteamCmdRunner
 {
     public static async Task DownloadAsync(SteamCmdConfig config, IEnumerable<string> addonIds)
     {
-        var ids = addonIds.Distinct().ToList();
+        var ids = addonIds
+            .Select(id => id.Trim())
+            .Where(id => id.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
         if (ids.Count == 0)
         {
             return;
         }
 
-        var args = BuildArgs(config, ids);
+        if (ids.Any(id => !ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+        {
+            throw new InvalidOperationException("SteamCMD workshop item ids must be numeric.");
+        }
+
+        var commands = BuildCommands(config, ids);
 
         var psi = new ProcessStartInfo
         {
             FileName = config.ExecutablePath,
-            Arguments = args,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -844,46 +851,73 @@ internal static class SteamCmdRunner
             throw new InvalidOperationException("Failed to start steamcmd process.");
         }
 
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        var stderr = await proc.StandardError.ReadToEndAsync();
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+
+        foreach (var command in commands)
+        {
+            await proc.StandardInput.WriteLineAsync(command);
+        }
+
+        proc.StandardInput.Close();
         await proc.WaitForExitAsync();
+        await stdoutTask;
+        var stderr = await stderrTask;
 
         if (proc.ExitCode != 0)
         {
-            throw new InvalidOperationException($"steamcmd exited with {proc.ExitCode}. stderr={stderr}");
+            throw new InvalidOperationException($"steamcmd exited with {proc.ExitCode}. stderr={RedactSensitive(stderr, config)}");
         }
     }
 
-    private static string BuildArgs(SteamCmdConfig config, List<string> addonIds)
+    private static IReadOnlyList<string> BuildCommands(SteamCmdConfig config, List<string> addonIds)
     {
-        var parts = new List<string>
+        var commands = new List<string>
         {
-            "+@ShutdownOnFailedCommand 1"
+            "@ShutdownOnFailedCommand 1"
         };
 
         if (!string.IsNullOrWhiteSpace(config.LibraryPath))
         {
-            parts.Add($"+force_install_dir \"{config.LibraryPath}\"");
+            commands.Add($"force_install_dir {QuoteSteamCmdArgument(config.LibraryPath)}");
         }
 
-        var login = $"+login {config.User}";
+        var login = $"login {QuoteSteamCmdArgument(config.User)}";
         if (!string.IsNullOrWhiteSpace(config.Password))
         {
-            login += $" {config.Password}";
+            login += $" {QuoteSteamCmdArgument(config.Password)}";
             if (!string.IsNullOrWhiteSpace(config.GuardCode))
             {
-                login += $" {config.GuardCode}";
+                login += $" {QuoteSteamCmdArgument(config.GuardCode)}";
             }
         }
-        parts.Add(login);
+        commands.Add(login);
 
         foreach (var id in addonIds)
         {
-            parts.Add($"+workshop_download_item 4000 {id}");
+            commands.Add($"workshop_download_item 4000 {id}");
         }
 
-        parts.Add("+quit");
-        return string.Join(" ", parts);
+        commands.Add("quit");
+        return commands;
+    }
+
+    private static string QuoteSteamCmdArgument(string value)
+    {
+        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
+
+    private static string RedactSensitive(string value, SteamCmdConfig config)
+    {
+        foreach (var secret in new[] { config.Password, config.GuardCode })
+        {
+            if (!string.IsNullOrEmpty(secret))
+            {
+                value = value.Replace(secret, "[redacted]", StringComparison.Ordinal);
+            }
+        }
+
+        return value;
     }
 }
 

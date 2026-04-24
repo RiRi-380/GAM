@@ -23,6 +23,7 @@ namespace GmodAddonManager.Core.Services
         private const int MaxConcurrentDownloads = 8;
         private const int DownloadDelayMs = 50;
         private const int IconSize = 512;
+        private const long MaxIconDownloadBytes = 5L * 1024 * 1024;
 
         // PNG signature bytes
         private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
@@ -30,6 +31,7 @@ namespace GmodAddonManager.Core.Services
         static WorkshopIconResolver()
         {
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "GmodAddonManager/1.0");
+            _httpClient.Timeout = TimeSpan.FromSeconds(15);
         }
 
         public WorkshopIconResolver(
@@ -57,9 +59,7 @@ namespace GmodAddonManager.Core.Services
                     sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
                     onRetry: (outcome, timespan, retryCount, context) =>
                     {
-                        var result = outcome.Result;
-                        var exception = outcome.Exception;
-                        // Log retry attempt
+                        outcome.Result?.Dispose();
                     });
         }
 
@@ -261,17 +261,23 @@ namespace GmodAddonManager.Core.Services
                     return null;
 
                 var details = await _workshopService.GetWorkshopDetailsAsync(workshopId.ToString());
-                if (details?.PreviewUrl == null)
+                if (details?.PreviewUrl == null || !IsHttpsUrl(details.PreviewUrl))
                     return null;
 
                 // Download with retry policy
-                var response = await _retryPolicy.ExecuteAsync(async () =>
-                    await _httpClient.GetAsync(details.PreviewUrl));
+                using var response = await _retryPolicy.ExecuteAsync(async () =>
+                    await _httpClient.GetAsync(details.PreviewUrl, HttpCompletionOption.ResponseHeadersRead));
 
                 if (!response.IsSuccessStatusCode)
                     return null;
 
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                if (!IsImageContentType(response) ||
+                    response.Content.Headers.ContentLength is long contentLength && contentLength > MaxIconDownloadBytes)
+                {
+                    return null;
+                }
+
+                var imageBytes = await ReadContentWithLimitAsync(response.Content, MaxIconDownloadBytes);
                 
                 // Process and save as PNG using SkiaSharp
                 using var bitmap = SKBitmap.Decode(imageBytes);
@@ -359,6 +365,46 @@ namespace GmodAddonManager.Core.Services
             {
                 return false;
             }
+        }
+
+        private static bool IsHttpsUrl(string url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                   uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        private static bool IsImageContentType(HttpResponseMessage response)
+        {
+            var mediaType = response.Content.Headers.ContentType?.MediaType;
+            return string.IsNullOrEmpty(mediaType) ||
+                   mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task<byte[]> ReadContentWithLimitAsync(HttpContent content, long maxBytes)
+        {
+            await using var stream = await content.ReadAsStreamAsync();
+            using var memory = new MemoryStream();
+            var buffer = new byte[8192];
+            long totalBytes = 0;
+
+            while (true)
+            {
+                var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                totalBytes += bytesRead;
+                if (totalBytes > maxBytes)
+                {
+                    throw new InvalidDataException($"Remote image exceeded {maxBytes} bytes.");
+                }
+
+                memory.Write(buffer, 0, bytesRead);
+            }
+
+            return memory.ToArray();
         }
     }
 }

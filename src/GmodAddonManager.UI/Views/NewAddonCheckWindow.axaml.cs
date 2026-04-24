@@ -20,12 +20,12 @@ namespace GmodAddonManager.UI.Views
         private int newAddonCount = 0;
         private int processedCount = 0;
         
-        public NewAddonCheckWindow(AddonManager addonManager)
+        public NewAddonCheckWindow()
         {
             InitializeComponent();
-            this.addonManager = addonManager;
-            this.stopwatch = new Stopwatch();
-            
+            addonManager = null!;
+            stopwatch = new Stopwatch();
+
             // Setup timer for elapsed time display
             timer = new DispatcherTimer
             {
@@ -33,10 +33,20 @@ namespace GmodAddonManager.UI.Views
             };
             timer.Tick += UpdateElapsedTime;
         }
+
+        public NewAddonCheckWindow(AddonManager addonManager)
+            : this()
+        {
+            this.addonManager = addonManager;
+        }
         
         protected override void OnOpened(EventArgs e)
         {
             base.OnOpened(e);
+            if (addonManager == null)
+            {
+                return;
+            }
             _ = CheckForNewAddons();
         }
         

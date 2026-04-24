@@ -1,6 +1,7 @@
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.Core.Models;
 using ReactiveUI;
+using ReactiveUI.Avalonia;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -83,7 +84,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
         
         // Undo状態の監視
         Observable.Timer(TimeSpan.Zero, TimeSpan.FromSeconds(1))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(AvaloniaScheduler.Instance)
             .Subscribe(_ => UpdateUndoState());
             
         // 保留中の変更が適用された時のリフレッシュ
@@ -721,7 +722,6 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
 
             // 設定変更を反映
             var updatedSettings = AppSettings.Load();
-            addonManager.DisableMode = updatedSettings.DisableMode;
             addonManager.UnsubscribeOnHardDisable = updatedSettings.UnsubscribeOnHardDisable;
         }
         catch (Exception ex)

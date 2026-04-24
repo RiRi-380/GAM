@@ -13,11 +13,13 @@ namespace GmodAddonManager.UI.Services
     public static class RemoteImageLoader
     {
         private static readonly HttpClient _httpClient = new();
+        private const long MaxImageBytes = 5L * 1024 * 1024;
         
         static RemoteImageLoader()
         {
             // Steam CDNからの画像取得用にUser-Agentを設定
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.Timeout = TimeSpan.FromSeconds(15);
         }
         
         /// <summary>
@@ -27,16 +29,53 @@ namespace GmodAddonManager.UI.Services
         {
             try
             {
-                var response = await _httpClient.GetAsync(url);
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                    uri.Scheme != Uri.UriSchemeHttps)
+                {
+                    return null;
+                }
+
+                using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 if (!response.IsSuccessStatusCode)
                 {
                     return null;
                 }
                 
+                var mediaType = response.Content.Headers.ContentType?.MediaType;
+                if (!string.IsNullOrEmpty(mediaType) &&
+                    !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxImageBytes)
+                {
+                    return null;
+                }
+
                 // Load into memory stream first to ensure proper disposal
                 using var responseStream = await response.Content.ReadAsStreamAsync();
                 var memoryStream = new MemoryStream();
-                await responseStream.CopyToAsync(memoryStream);
+                var buffer = new byte[8192];
+                long totalBytes = 0;
+
+                while (true)
+                {
+                    var bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length);
+                    if (bytesRead == 0)
+                    {
+                        break;
+                    }
+
+                    totalBytes += bytesRead;
+                    if (totalBytes > MaxImageBytes)
+                    {
+                        memoryStream.Dispose();
+                        return null;
+                    }
+
+                    await memoryStream.WriteAsync(buffer, 0, bytesRead);
+                }
                 memoryStream.Position = 0;
                 
                 // Create bitmap from memory stream

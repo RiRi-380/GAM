@@ -26,6 +26,7 @@ namespace GmodAddonManager.Core.Services
         private const int ERROR_ACCESS_DENIED = 5;
         private const int REPARSE_DATA_BUFFER_HEADER_SIZE = 8;
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr CreateFile(
             string lpFileName,
@@ -36,6 +37,7 @@ namespace GmodAddonManager.Core.Services
             uint dwFlagsAndAttributes,
             IntPtr hTemplateFile);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool DeviceIoControl(
             IntPtr hDevice,
@@ -47,18 +49,22 @@ namespace GmodAddonManager.Core.Services
             out uint lpBytesReturned,
             IntPtr lpOverlapped);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool RemoveDirectory(string lpPathName);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool CreateHardLink(
             string lpFileName,
             string lpExistingFileName,
             IntPtr lpSecurityAttributes);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool DeleteFile(string lpFileName);
 

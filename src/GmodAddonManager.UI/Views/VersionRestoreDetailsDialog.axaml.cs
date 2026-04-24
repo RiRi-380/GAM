@@ -7,12 +7,22 @@ namespace GmodAddonManager.UI.Views
 {
     public partial class VersionRestoreDetailsDialog : Window
     {
+        public VersionRestoreDetailsDialog()
+        {
+            InitializeComponent();
+
+            var viewModel = new VersionRestoreDetailsViewModel(
+                new List<string>(),
+                new List<string>());
+
+            DataContext = viewModel;
+        }
+
         public VersionRestoreDetailsDialog(
             List<string> addonsToSubscribe,
             List<string> addonsToUnsubscribe)
+            : this()
         {
-            InitializeComponent();
-            
             var viewModel = new VersionRestoreDetailsViewModel(
                 addonsToSubscribe,
                 addonsToUnsubscribe);

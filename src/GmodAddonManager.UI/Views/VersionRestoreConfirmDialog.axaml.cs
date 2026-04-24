@@ -12,14 +12,24 @@ namespace GmodAddonManager.UI.Views
         
         public bool Result { get; private set; }
         
+        public VersionRestoreConfirmDialog()
+        {
+            InitializeComponent();
+            _viewModel = new VersionRestoreConfirmViewModel(
+                string.Empty,
+                new List<string>(),
+                new List<string>(),
+                false);
+            DataContext = _viewModel;
+        }
+
         public VersionRestoreConfirmDialog(
             string confirmMessage,
             List<string> addonsToSubscribe,
             List<string> addonsToUnsubscribe,
             bool isSteamworksAvailable)
+            : this()
         {
-            InitializeComponent();
-            
             _viewModel = new VersionRestoreConfirmViewModel(
                 confirmMessage,
                 addonsToSubscribe,

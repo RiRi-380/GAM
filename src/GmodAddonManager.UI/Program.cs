@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.ReactiveUI;
+using ReactiveUI.Avalonia;
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -20,21 +20,26 @@ namespace GmodAddonManager.UI;
 
 class Program
 {
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll")]
     static extern bool AllocConsole();
-    
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll")]
     static extern bool AttachConsole(int processId);
-    
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll")]
     static extern bool FreeConsole();
-    
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool SetConsoleCP(uint wCodePageID);
-    
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool SetConsoleOutputCP(uint wCodePageID);
-    
+
     [STAThread]
     public static void Main(string[] args)
     {
@@ -50,16 +55,16 @@ class Program
                     // アタッチできない場合は新しいコンソールを作成
                     AllocConsole();
                 }
-                
+
                 // Windowsコンソールのデフォルトエンコーディングを使用
                 // 日本語WindowsではShift-JIS (CP932)がデフォルト
                 // UTF-8設定を削除し、システムデフォルトを使用
-                
+
                 // 標準出力をコンソールにリダイレクト
                 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), Encoding.UTF8) { AutoFlush = true });
                 Console.SetError(new StreamWriter(Console.OpenStandardError(), Encoding.UTF8) { AutoFlush = true });
                 Console.SetIn(new StreamReader(Console.OpenStandardInput(), Encoding.UTF8));
-                
+
                 // Console.WriteLine("=== Gmod Addon Manager Debug Console ===");
                 // Console.WriteLine($"Started at: {DateTime.Now}");
                 // Console.WriteLine($"Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
@@ -81,7 +86,7 @@ class Program
                     Verb = "runas",
                     Arguments = string.Join(" ", args)
                 };
-                
+
                 try
                 {
                     Process.Start(startInfo);
@@ -104,14 +109,14 @@ class Program
                                     Margin = new Thickness(20),
                                     Children =
                                     {
-                                        new TextBlock 
-                                        { 
+                                        new TextBlock
+                                        {
                                             Text = "このアプリケーションは管理者権限が必要です。",
                                             TextWrapping = TextWrapping.Wrap,
                                             Margin = new Thickness(0, 0, 0, 20)
                                         },
-                                        new Button 
-                                        { 
+                                        new Button
+                                        {
                                             Content = "OK",
                                             HorizontalAlignment = HorizontalAlignment.Center,
                                             Width = 80
@@ -128,13 +133,13 @@ class Program
             }
         }
         */
-        
+
         // グローバル例外ハンドラーの設定
         SetupGlobalExceptionHandlers();
-        
+
         // グレースフルシャットダウンの設定
         SetupGracefulShutdown();
-        
+
         try
         {
 #if DEBUG
@@ -142,17 +147,17 @@ class Program
             var startupLogPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "startup_log.txt");
             System.IO.File.WriteAllText(startupLogPath, $"Starting at: {DateTime.Now}\nBase Directory: {AppDomain.CurrentDomain.BaseDirectory}\nCurrent Directory: {System.IO.Directory.GetCurrentDirectory()}\n");
 #endif
-            
+
 #if DEBUG
             // Very early startup log
             System.IO.File.WriteAllText("app_startup.log", $"Program.Main started at: {DateTime.Now}\n");
 #endif
-            
+
             var appBuilder = BuildAvaloniaApp();
 #if DEBUG
             System.IO.File.AppendAllText("app_startup.log", $"AppBuilder created at: {DateTime.Now}\n");
 #endif
-            
+
             appBuilder.StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
@@ -176,7 +181,7 @@ class Program
         {
             var exception = e.ExceptionObject as Exception;
             var errorHandler = GetErrorHandler();
-            
+
             if (errorHandler != null)
             {
                 errorHandler.HandleError(
@@ -190,19 +195,19 @@ class Program
                 // フォールバック: ファイルにログを記録
                 LogUnhandledException(exception);
             }
-            
+
             // クリティカルエラーの場合、ユーザーに通知してから終了
             if (e.IsTerminating)
             {
                 ShowCriticalErrorDialog(exception).Wait();
             }
         };
-        
+
         // 非同期タスクの未処理例外をキャッチ
         TaskScheduler.UnobservedTaskException += (sender, e) =>
         {
             var errorHandler = GetErrorHandler();
-            
+
             if (errorHandler != null)
             {
                 foreach (var ex in e.Exception.InnerExceptions)
@@ -219,11 +224,11 @@ class Program
                 // フォールバック: ファイルにログを記録
                 LogUnhandledException(e.Exception);
             }
-            
+
             e.SetObserved(); // 例外を処理済みとしてマーク
         };
     }
-    
+
     private static IErrorHandler? GetErrorHandler()
     {
         try
@@ -236,7 +241,7 @@ class Program
             return null;
         }
     }
-    
+
     private static void SetupGracefulShutdown()
     {
         // Ctrl+Cハンドラー
@@ -245,13 +250,13 @@ class Program
             e.Cancel = true; // 即座に終了しない
             PerformGracefulShutdown();
         };
-        
+
         // プロセス終了イベント
         AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
         {
             PerformGracefulShutdown();
         };
-        
+
         // アプリケーション終了時のフック（Windows向け）
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -264,7 +269,7 @@ class Program
             };
         }
     }
-    
+
     private static void PerformGracefulShutdown()
     {
         try
@@ -272,7 +277,7 @@ class Program
             // 現在の操作状態を保存
             var errorHandler = GetErrorHandler();
             errorHandler?.HandleInfo("Performing graceful shutdown...", "Shutdown");
-            
+
             // Avaloniaアプリケーションのシャットダウン
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
@@ -284,7 +289,7 @@ class Program
             LogUnhandledException(ex);
         }
     }
-    
+
     private static void LogUnhandledException(Exception? exception)
     {
         try
@@ -294,22 +299,22 @@ class Program
                 "GmodAddonManager",
                 "logs"
             );
-            
+
             if (!System.IO.Directory.Exists(logDir))
                 System.IO.Directory.CreateDirectory(logDir);
-            
+
             var logFile = System.IO.Path.Combine(logDir, $"error_{DateTime.Now:yyyyMMdd}.log");
-            
+
             var threadInfo = $"Thread: {System.Threading.Thread.CurrentThread.ManagedThreadId} " +
                            $"(IsBackground: {System.Threading.Thread.CurrentThread.IsBackground}, " +
                            $"IsThreadPoolThread: {System.Threading.Thread.CurrentThread.IsThreadPoolThread})";
-            
+
             var logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [Critical] Unhandled Exception\n" +
                           $"{threadInfo}\n" +
                           $"Exception Type: {exception?.GetType().FullName ?? "Unknown"}\n" +
                           $"Message: {exception?.Message ?? "No message"}\n" +
                           $"Stack Trace:\n{exception?.StackTrace ?? "No stack trace"}\n";
-            
+
             // Inner exceptions
             var innerEx = exception?.InnerException;
             int depth = 1;
@@ -322,9 +327,9 @@ class Program
                 innerEx = innerEx.InnerException;
                 depth++;
             }
-            
+
             logEntry += "\n========================================\n\n";
-            
+
             System.IO.File.AppendAllText(logFile, logEntry);
         }
         catch
@@ -332,7 +337,7 @@ class Program
             // ログ書き込みエラーは無視
         }
     }
-    
+
     private static async Task ShowCriticalErrorDialog(Exception? exception)
     {
         try
@@ -351,8 +356,8 @@ class Program
                         Margin = new Thickness(20),
                         Children =
                         {
-                            new TextBlock 
-                            { 
+                            new TextBlock
+                            {
                                 Text = "A critical error has occurred and the application must close.",
                                 TextWrapping = TextWrapping.Wrap,
                                 FontWeight = FontWeight.Bold,
@@ -372,8 +377,8 @@ class Program
                                 Foreground = Brushes.Gray,
                                 Margin = new Thickness(0, 0, 0, 20)
                             },
-                            new Button 
-                            { 
+                            new Button
+                            {
                                 Content = "OK",
                                 HorizontalAlignment = HorizontalAlignment.Center,
                                 Width = 100
@@ -381,10 +386,10 @@ class Program
                         }
                     }
                 };
-                
+
                 var button = (Button)((StackPanel)errorWindow.Content).Children[3];
                 button.Click += (_, _) => errorWindow.Close();
-                
+
                 await errorWindow.ShowDialog(desktop.MainWindow ?? errorWindow);
             }
         }
@@ -397,6 +402,6 @@ class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .UseReactiveUI()
+            .UseReactiveUI(_ => { })
             .LogToTrace();
 }

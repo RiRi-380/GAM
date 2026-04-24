@@ -33,7 +33,7 @@ namespace GmodAddonManager.Core.Services
         private string? gmodRootPath;
         private GmodAddonStateStore? gmodAddonStateStore;
         private readonly IAddonModeStrategy modeStrategy;
-        
+
         private readonly JunctionService junctionService;
         private readonly SteamPathDetector steamPathDetector;
         private readonly SteamWorkshopService steamWorkshopService;
@@ -41,11 +41,11 @@ namespace GmodAddonManager.Core.Services
         private readonly IErrorHandler errorHandler;
         private readonly ExperimentEventLogger eventLogger;
         private readonly AsyncLocal<LinkOperationMetrics?> linkMetricsContext = new AsyncLocal<LinkOperationMetrics?>();
-        
+
         private readonly System.Threading.Timer _saveDebounceTimer;
         private readonly object _saveLock = new object();
         private bool _saveRequested = false;
-        private int _saveDebounceMilliseconds = 1000; // デフォルト1秒
+        private int _saveDebounceMilliseconds = 1000; // 繝・ヵ繧ｩ繝ｫ繝・遘・
         private int _softModeNoFileOpsNoticeLogged = 0;
         private int _sessionLogged = 0;
 
@@ -65,7 +65,7 @@ namespace GmodAddonManager.Core.Services
         public Func<int?>? PendingChangeCountProvider { get; set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int StateMatchPollIntervalMs { get; set; } = 200;
-        
+
         private Configuration configuration;
         private OperationLogManager operationLogManager;
 
@@ -106,18 +106,20 @@ namespace GmodAddonManager.Core.Services
             options ??= new AddonManagerOptions();
             steamPathDetector = new SteamPathDetector();
             junctionService = new JunctionService();
-            
+
             // Initialize WorkshopIconResolver
-            var appDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GmodAddonManager"
-            );
+            var appDataPath = !string.IsNullOrWhiteSpace(options.CustomAppDataPath)
+                ? options.CustomAppDataPath
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GmodAddonManager"
+                );
             var iconResolver = new WorkshopIconResolver(steamPathDetector, null, appDataPath);
-            
+
             steamWorkshopService = new SteamWorkshopService(iconResolver);
             // Update the iconResolver with the workshop service reference
             iconResolver.SetWorkshopService(steamWorkshopService);
-            
+
             undoManager = new UndoManager();
             errorHandler = options.ErrorHandler ?? new DefaultErrorHandler();
             eventLogger = ExperimentEventLogger.CreateDefault();
@@ -126,7 +128,7 @@ namespace GmodAddonManager.Core.Services
             modeStrategy = DisableMode == DisableMode.Hard
                 ? new HardAddonModeStrategy()
                 : new SoftAddonModeStrategy();
-            
+
             if (string.IsNullOrEmpty(options.CustomWorkshopPath))
             {
                 workshopPath = steamPathDetector.DetectWorkshopPath();
@@ -150,21 +152,27 @@ namespace GmodAddonManager.Core.Services
                 configPath = Path.Combine(managerPath, "config.json");
                 pendingPath = Path.Combine(managerPath, "pending.json");
                 addonsPath = Path.Combine(managerPath, "addons");
-            }
-            
-            // Detect Gmod cache path
-            try
+            }            // Detect Gmod cache path
+            if (options.DisableCacheScan)
             {
-                gmodCachePath = steamPathDetector.DetectGmodCachePath();
-                // Detected gmodCachePath
-            }
-            catch (Exception ex)
-            {
-                // Error detecting cache path
-                // エラーが発生してもnullとして続行
                 gmodCachePath = null;
+                errorHandler.HandleInfo("Cache scanning disabled by options", "Constructor");
             }
-            
+            else
+            {
+                try
+                {
+                    gmodCachePath = steamPathDetector.DetectGmodCachePath();
+                    // Detected gmodCachePath
+                }
+                catch (Exception ex)
+                {
+                    // Error detecting cache path
+                    // ????????????????ull?????????
+                    gmodCachePath = null;
+                }
+            }
+
             // Set up cache manager paths
             if (DisableMode == DisableMode.Hard && !string.IsNullOrEmpty(gmodCachePath))
             {
@@ -183,7 +191,7 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            // Detect Gmod root path for settings management (addons.txt)
+            // Detect Gmod root path for settings management (addonnomount.txt)
             try
             {
                 var candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
@@ -195,15 +203,15 @@ namespace GmodAddonManager.Core.Services
                 }
                 else
                 {
-                    errorHandler.HandleWarning("Garry's Mod root path not found; will not edit addons.txt state store", "Constructor");
+                    errorHandler.HandleWarning("Garry's Mod root path not found; will not edit addonnomount.txt state store", "Constructor");
                 }
             }
             catch (Exception ex)
             {
                 errorHandler.HandleWarning($"Failed to resolve GMod root path: {ex.Message}", "Constructor");
             }
-            
-            // デバウンスタイマーの初期化
+
+            // 繝・ヰ繧ｦ繝ｳ繧ｹ繧ｿ繧､繝槭・縺ｮ蛻晄悄蛹・
             _saveDebounceTimer = new System.Threading.Timer(
                 async _ => await ExecutePendingSaveAsync(),
                 null,
@@ -237,17 +245,17 @@ namespace GmodAddonManager.Core.Services
 
                 await modeStrategy.InitializeAsync(this);
 
-                // 操作ログマネージャーを初期化
+                // 謫堺ｽ懊Ο繧ｰ繝槭ロ繝ｼ繧ｸ繝｣繝ｼ繧貞・譛溷喧
                 operationLogManager = new OperationLogManager(managerPath);
-                
-                // 起動時に古いログをクリーンアップ
+
+                // 襍ｷ蜍墓凾縺ｫ蜿､縺・Ο繧ｰ繧偵け繝ｪ繝ｼ繝ｳ繧｢繝・・
                 operationLogManager.CleanupOldLogs();
 
                 if (File.Exists(configPath))
                 {
                     await LoadConfigurationAsync();
-                    
-                    // ジャンクションアセットが存在しない場合は追加
+
+                    // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺悟ｭ伜惠縺励↑縺・ｴ蜷医・霑ｽ蜉
                     EnsureJunctionAssetExists();
                 }
                 else
@@ -256,33 +264,33 @@ namespace GmodAddonManager.Core.Services
                     configuration.CreateDefaultAssets();
                     await SaveConfigurationAsync();
                 }
-                
-                // 起動時に未完了の操作をチェック
+
+                // 襍ｷ蜍墓凾縺ｫ譛ｪ螳御ｺ・・謫堺ｽ懊ｒ繝√ぉ繝・け
                 await CheckIncompleteOperationsAsync();
 
                 await MigrateExistingAddonsAsync();
-                
-                // 起動時のシステム整合性チェック
+
+                // 襍ｷ蜍墓凾縺ｮ繧ｷ繧ｹ繝・Β謨ｴ蜷域ｧ繝√ぉ繝・け
                 await modeStrategy.ValidateSystemIntegrityAsync(this);
-                
-                // ジャンクション状態のアドオンを検出して更新
+
+                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ迥ｶ諷九・繧｢繝峨が繝ｳ繧呈､懷・縺励※譖ｴ譁ｰ
                 await UpdateJunctionAssetAsync();
-                
-                // Subscribeアセットに全アドオンが含まれていることを確認
+
+                // Subscribe繧｢繧ｻ繝・ヨ縺ｫ蜈ｨ繧｢繝峨が繝ｳ縺悟性縺ｾ繧後※縺・ｋ縺薙→繧堤｢ｺ隱・
                 await EnsureAllAddonsInSubscribeAssetAsync();
-                
-                // 初期化後、全アドオンの状態を確実に更新
+
+                // 蛻晄悄蛹門ｾ後∝・繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九ｒ遒ｺ螳溘↓譖ｴ譁ｰ
                 await UpdateAddonStatesAsync();
-                
-                // 最後にサブスクライブ解除されたアドオンをクリーンアップ
-                // UpdateAddonStatesAsyncの後に実行することで、ジャンクション再作成を防ぐ
+
+                // 譛蠕後↓繧ｵ繝悶せ繧ｯ繝ｩ繧､繝冶ｧ｣髯､縺輔ｌ縺溘い繝峨が繝ｳ繧偵け繝ｪ繝ｼ繝ｳ繧｢繝・・
+                // UpdateAddonStatesAsync縺ｮ蠕後↓螳溯｡後☆繧九％縺ｨ縺ｧ縲√ず繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ蜀堺ｽ懈・繧帝亟縺・
                 await modeStrategy.CleanupUnsubscribedAddonsAsync(this);
-                
+
                 // Addon Manager initialization complete
             }
             catch (Exception ex)
             {
-                throw; // エラーを再スローして、呼び出し元で処理できるようにする
+                throw; // 繧ｨ繝ｩ繝ｼ繧貞・繧ｹ繝ｭ繝ｼ縺励※縲∝他縺ｳ蜃ｺ縺怜・縺ｧ蜃ｦ逅・〒縺阪ｋ繧医≧縺ｫ縺吶ｋ
             }
         }
 
@@ -434,10 +442,10 @@ namespace GmodAddonManager.Core.Services
         {
             var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
             if (subscribeAsset == null) return;
-            
+
             bool needsSave = false;
-            
-            // 全てのアドオン（フォルダとGMAの両方）をSubscribeアセットに追加
+
+            // 蜈ｨ縺ｦ縺ｮ繧｢繝峨が繝ｳ・医ヵ繧ｩ繝ｫ繝縺ｨGMA縺ｮ荳｡譁ｹ・峨ｒSubscribe繧｢繧ｻ繝・ヨ縺ｫ霑ｽ蜉
             foreach (var kvp in configuration.AddonMetadata)
             {
                 // Runtime check to ensure correct IsGmaFile flag
@@ -451,34 +459,34 @@ namespace GmodAddonManager.Core.Services
                     kvp.Value.IsGmaFile = isGmaRuntime;
                     needsSave = true;
                 }
-                
+
                 if (!subscribeAsset.Addons.Contains(kvp.Key))
                 {
-                    // ジャンクションアセットに属するアドオンは除外
+                    // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺ｫ螻槭☆繧九い繝峨が繝ｳ縺ｯ髯､螟・
                     var junctionAsset = configuration.Assets.FirstOrDefault(a => a.Id == "junction-system-asset");
                     if (junctionAsset != null && junctionAsset.Addons.Contains(kvp.Key))
                     {
                         continue;
                     }
-                    
+
                     subscribeAsset.AddAddon(kvp.Key, kvp.Value.IsEnabled ? AddonState.Enabled : AddonState.Disabled);
                     needsSave = true;
                 }
             }
-            
-            // メタデータが修正された場合は保存
+
+            // 繝｡繧ｿ繝・・繧ｿ縺御ｿｮ豁｣縺輔ｌ縺溷ｴ蜷医・菫晏ｭ・
             if (needsSave)
             {
                 await SaveConfigurationAsync();
             }
         }
-        
+
 
         public async Task MigrateExistingAddonsAsync()
         {
             await MigrateExistingAddonsAsync(null);
         }
-        
+
         public Task MigrateExistingAddonsAsync(HashSet<string>? addonIdsToProcess)
         {
             return modeStrategy.MigrateExistingAddonsAsync(this, addonIdsToProcess);
@@ -493,15 +501,21 @@ namespace GmodAddonManager.Core.Services
             foreach (var directory in directories)
             {
                 string dirName = Path.GetFileName(directory);
-                
+
                 // Skip if we're only processing specific addon IDs and this isn't one of them
                 if (addonIdsToProcess != null && !addonIdsToProcess.Contains(dirName))
                 {
                     continue;
                 }
-                
+
                 if (long.TryParse(dirName, out _))
                 {
+                    if (!DirectoryHasAddonPayload(directory, "MigrateExistingAddons"))
+                    {
+                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "MigrateExistingAddons");
+                        continue;
+                    }
+
                     if (junctionService.IsJunction(directory))
                     {
                         // Skipping - already a junction
@@ -515,7 +529,7 @@ namespace GmodAddonManager.Core.Services
 
                     try
                     {
-                        // 実体フォルダの場合、管理フォルダに移動（失敗時はロールバック）
+                        // 螳滉ｽ薙ヵ繧ｩ繝ｫ繝縺ｮ蝣ｴ蜷医∫ｮ｡逅・ヵ繧ｩ繝ｫ繝縺ｫ遘ｻ蜍包ｼ亥､ｱ謨玲凾縺ｯ繝ｭ繝ｼ繝ｫ繝舌ャ繧ｯ・・
                         if (!targetAlreadyExists)
                         {
                             ValidatePath(directory, "directory");
@@ -531,7 +545,7 @@ namespace GmodAddonManager.Core.Services
 
                         bool workshopPresenceCreated = false;
 
-                        // GMAファイルが存在するかチェック（存在する場合はハードリンク方式を優先）
+                        // GMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ縺九メ繧ｧ繝・け・亥ｭ伜惠縺吶ｋ蝣ｴ蜷医・繝上・繝峨Μ繝ｳ繧ｯ譁ｹ蠑上ｒ蜆ｪ蜈茨ｼ・
                         string gmaPath = Path.Combine(targetPath, $"{dirName}.gma");
                         if (File.Exists(gmaPath))
                         {
@@ -563,7 +577,7 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
 
-                        // 既に管理フォルダが存在していた場合のみ、残っている実体フォルダをマージ
+                        // 譌｢縺ｫ邂｡逅・ヵ繧ｩ繝ｫ繝縺悟ｭ伜惠縺励※縺・◆蝣ｴ蜷医・縺ｿ縲∵ｮ九▲縺ｦ縺・ｋ螳滉ｽ薙ヵ繧ｩ繝ｫ繝繧偵・繝ｼ繧ｸ
                         if (!string.IsNullOrEmpty(tempPath) && Directory.Exists(tempPath))
                         {
                             try
@@ -576,7 +590,7 @@ namespace GmodAddonManager.Core.Services
                             }
                             catch (Exception ex)
                             {
-                                // ロールバックは難しいので、テンポラリを残して警告に留める
+                                // 繝ｭ繝ｼ繝ｫ繝舌ャ繧ｯ縺ｯ髮｣縺励＞縺ｮ縺ｧ縲√ユ繝ｳ繝昴Λ繝ｪ繧呈ｮ九＠縺ｦ隴ｦ蜻翫↓逡吶ａ繧・
                                 errorHandler.HandleError(ex,
                                     $"Failed to merge addon {dirName} contents into managed folder. Leaving temp folder: {tempPath}",
                                     ErrorSeverity.Warning);
@@ -616,7 +630,7 @@ namespace GmodAddonManager.Core.Services
             // Scan cache folder for .gma files and migrate to managed folder
             if (!string.IsNullOrEmpty(gmodCachePath))
             {
-                // フォルダが存在しない場合は作成を試みる
+                // 繝輔か繝ｫ繝縺悟ｭ伜惠縺励↑縺・ｴ蜷医・菴懈・繧定ｩｦ縺ｿ繧・
                 if (!string.IsNullOrEmpty(gmodCacheAddonsPath) && !Directory.Exists(gmodCacheAddonsPath))
                 {
                     try
@@ -630,30 +644,30 @@ namespace GmodAddonManager.Core.Services
                     catch (Exception ex)
                     {
                         errorHandler.HandleError(ex, "Failed to create cache folders during migration", ErrorSeverity.Error);
-                        return; // GMA移行をスキップ
+                        return; // GMA遘ｻ陦後ｒ繧ｹ繧ｭ繝・・
                     }
                 }
 
-                // フォルダが正常に存在する場合のみ処理を続行
+                // 繝輔か繝ｫ繝縺梧ｭ｣蟶ｸ縺ｫ蟄伜惠縺吶ｋ蝣ｴ蜷医・縺ｿ蜃ｦ逅・ｒ邯夊｡・
                 if (Directory.Exists(gmodCachePath) && Directory.Exists(gmodCacheAddonsPath))
                 {
                     var gmaFiles = Directory.GetFiles(gmodCachePath, "*.gma");
                     foreach (var gmaFile in gmaFiles)
                     {
                     string fileName = Path.GetFileNameWithoutExtension(gmaFile);
-                    
+
                     // Skip if we're only processing specific addon IDs and this isn't one of them
                     if (addonIdsToProcess != null && !addonIdsToProcess.Contains(fileName))
                     {
                         continue;
                     }
-                    
+
                     // Extract workshop ID from filename
                     if (long.TryParse(fileName, out _))
                     {
                         string targetPath = Path.Combine(gmodCacheAddonsPath, Path.GetFileName(gmaFile));
                         ValidatePath(targetPath, "targetPath");
-                        
+
                         // Move file to managed folder
                         if (!File.Exists(targetPath))
                         {
@@ -666,7 +680,7 @@ namespace GmodAddonManager.Core.Services
                             ValidatePath(gmaFile, "gmaFile");
                             File.Delete(gmaFile);
                         }
-                        
+
                         // Create hard link back to cache (keep it enabled by default)
                         if (AreSameDrive(targetPath, gmaFile))
                         {
@@ -677,7 +691,7 @@ namespace GmodAddonManager.Core.Services
                             // Different drives - copy back
                             CopyFileForLinkFallback(fileName, targetPath, gmaFile, "MigrateExistingAddons");
                         }
-                        
+
                         // Add or update metadata
                         if (!configuration.AddonMetadata.ContainsKey(fileName))
                         {
@@ -690,15 +704,15 @@ namespace GmodAddonManager.Core.Services
                                 IsGmaFile = true,
                                 IsEnabled = true
                             };
-                            
+
                             // Try to read metadata from GMA file
                             ReadGmaMetadata(targetPath, addon);
-                            
-                            // タイトルが取得できなかった場合、複数回再試行
+
+                            // 繧ｿ繧､繝医Ν縺悟叙蠕励〒縺阪↑縺九▲縺溷ｴ蜷医∬､・焚蝗槫・隧ｦ陦・
                             int retryCount = 0;
                             while ((string.IsNullOrWhiteSpace(addon.Title) || addon.Title == fileName || addon.Title.StartsWith("Workshop-")) && retryCount < 3)
                             {
-                                await Task.Delay(100 * (retryCount + 1)); // 徐々に遅延を増やす
+                                await Task.Delay(100 * (retryCount + 1)); // 蠕舌・↓驕・ｻｶ繧貞｢励ｄ縺・
                                 var title = await ReadGmaTitleOnlyAsync(targetPath);
                                 if (!string.IsNullOrWhiteSpace(title) && title != fileName && !title.StartsWith("Workshop-"))
                                 {
@@ -707,21 +721,21 @@ namespace GmodAddonManager.Core.Services
                                 }
                                 retryCount++;
                             }
-                            
-                            // それでも取得できない場合は、Workshop形式のタイトルを維持
+
+                            // 縺昴ｌ縺ｧ繧ょ叙蠕励〒縺阪↑縺・ｴ蜷医・縲仝orkshop蠖｢蠑上・繧ｿ繧､繝医Ν繧堤ｶｭ謖・
                             if (string.IsNullOrWhiteSpace(addon.Title) || addon.Title == fileName)
                             {
                                 addon.Title = $"Workshop-{fileName}";
-                                addon.NeedsTitleUpdate = true; // タイトル更新が必要なフラグを立てる
+                                addon.NeedsTitleUpdate = true; // 繧ｿ繧､繝医Ν譖ｴ譁ｰ縺悟ｿ・ｦ√↑繝輔Λ繧ｰ繧堤ｫ九※繧・
                             }
                             else if (addon.Title.StartsWith("Workshop-"))
                             {
-                                // すでにWorkshop形式の場合もタイトル更新が必要
+                                // 縺吶〒縺ｫWorkshop蠖｢蠑上・蝣ｴ蜷医ｂ繧ｿ繧､繝医Ν譖ｴ譁ｰ縺悟ｿ・ｦ・
                                 addon.NeedsTitleUpdate = true;
                             }
-                            
+
                             configuration.AddonMetadata[fileName] = addon;
-                            
+
                             // Add to Subscribe asset
                             var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
                             if (subscribeAsset != null && !subscribeAsset.Addons.Contains(fileName))
@@ -734,11 +748,11 @@ namespace GmodAddonManager.Core.Services
                             var existingAddon = configuration.AddonMetadata[fileName];
                             existingAddon.IsGmaFile = true;
                             existingAddon.IsEnabled = true;
-                            
-                            // 既存アドオンでもタイトルが不適切な場合は更新
+
+                            // 譌｢蟄倥い繝峨が繝ｳ縺ｧ繧ゅち繧､繝医Ν縺御ｸ埼←蛻・↑蝣ｴ蜷医・譖ｴ譁ｰ
                             if (existingAddon.Title == fileName || existingAddon.Title.StartsWith("Workshop-") || existingAddon.Title.StartsWith("Cache Addon") || existingAddon.NeedsTitleUpdate)
                             {
-                                // 複数回再試行
+                                // 隍・焚蝗槫・隧ｦ陦・
                                 int retryCount = 0;
                                 bool titleUpdated = false;
                                 while (!titleUpdated && retryCount < 3)
@@ -754,8 +768,8 @@ namespace GmodAddonManager.Core.Services
                                     }
                                     retryCount++;
                                 }
-                                
-                                // それでも取得できない場合
+
+                                // 縺昴ｌ縺ｧ繧ょ叙蠕励〒縺阪↑縺・ｴ蜷・
                                 if (!titleUpdated)
                                 {
                                     if (existingAddon.Title == fileName || existingAddon.Title.StartsWith("Cache Addon"))
@@ -765,7 +779,7 @@ namespace GmodAddonManager.Core.Services
                                     existingAddon.NeedsTitleUpdate = true;
                                 }
                             }
-                            
+
                             // Add to Subscribe asset if not already there
                             var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
                             if (subscribeAsset != null && !subscribeAsset.Addons.Contains(fileName))
@@ -884,27 +898,27 @@ namespace GmodAddonManager.Core.Services
         {
             var addons = new List<WorkshopAddon>();
             var processedIds = new HashSet<string>();
-            
+
             errorHandler.HandleInfo($"Starting ScanWorkshopFolderAsync - gmodCacheAddonsPath: {gmodCacheAddonsPath ?? "null"}", "ScanWorkshopFolderAsync");
-            
-            // 1. 管理フォルダのアドオンをスキャン
+
+            // 1. 邂｡逅・ヵ繧ｩ繝ｫ繝縺ｮ繧｢繝峨が繝ｳ繧偵せ繧ｭ繝｣繝ｳ
             if (Directory.Exists(addonsPath))
             {
                 var directories = Directory.GetDirectories(addonsPath);
-                
+
                 foreach (var directory in directories)
                 {
                     string addonId = Path.GetFileName(directory);
                     processedIds.Add(addonId);
-                    
-                    
-                    // 保存されているメタデータがある場合は優先的に使用
+
+
+                    // 菫晏ｭ倥＆繧後※縺・ｋ繝｡繧ｿ繝・・繧ｿ縺後≠繧句ｴ蜷医・蜆ｪ蜈育噪縺ｫ菴ｿ逕ｨ
                     if (configuration?.AddonMetadata != null && configuration.AddonMetadata.ContainsKey(addonId))
                     {
                         var savedAddon = configuration.AddonMetadata[addonId];
-                        // フォルダパスと有効状態を更新
+                        // 繝輔か繝ｫ繝繝代せ縺ｨ譛牙柑迥ｶ諷九ｒ譖ｴ譁ｰ
                         savedAddon.FolderPath = directory;
-                        // IsGmaFileはメタデータから保持するか、実際のファイルをチェック
+                        // IsGmaFile縺ｯ繝｡繧ｿ繝・・繧ｿ縺九ｉ菫晄戟縺吶ｋ縺九∝ｮ滄圀縺ｮ繝輔ぃ繧､繝ｫ繧偵メ繧ｧ繝・け
                         if (!savedAddon.IsGmaFile)
                         {
                             savedAddon.IsGmaFile = IsGmaAddonRuntime(addonId);
@@ -915,44 +929,44 @@ namespace GmodAddonManager.Core.Services
                     }
                     else
                     {
-                        // メタデータがない場合は新規スキャン
+                        // 繝｡繧ｿ繝・・繧ｿ縺後↑縺・ｴ蜷医・譁ｰ隕上せ繧ｭ繝｣繝ｳ
                         var addon = await ScanAddonAsync(directory);
                         if (addon != null)
                         {
-                            // 実際のファイルをチェックしてGMAかどうか判定
+                            // 螳滄圀縺ｮ繝輔ぃ繧､繝ｫ繧偵メ繧ｧ繝・け縺励※GMA縺九←縺・°蛻､螳・
                             addon.IsGmaFile = IsGmaAddonRuntime(addonId);
-                            // 新しいアドオンのメタデータを保存
+                            // 譁ｰ縺励＞繧｢繝峨が繝ｳ縺ｮ繝｡繧ｿ繝・・繧ｿ繧剃ｿ晏ｭ・
                             configuration.AddonMetadata[addonId] = addon;
                             addons.Add(addon);
                         }
                     }
                 }
             }
-            
-            // 2. メタデータに保存されているが、まだ処理されていないアドオン（主にGMAファイル）を追加
+
+            // 2. 繝｡繧ｿ繝・・繧ｿ縺ｫ菫晏ｭ倥＆繧後※縺・ｋ縺後√∪縺蜃ｦ逅・＆繧後※縺・↑縺・い繝峨が繝ｳ・井ｸｻ縺ｫGMA繝輔ぃ繧､繝ｫ・峨ｒ霑ｽ蜉
             if (configuration?.AddonMetadata != null)
             {
                 foreach (var kvp in configuration.AddonMetadata)
                 {
                     if (!processedIds.Contains(kvp.Key))
                     {
-                        // アドオンが実際に存在するか確認
+                        // 繧｢繝峨が繝ｳ縺悟ｮ滄圀縺ｫ蟄伜惠縺吶ｋ縺狗｢ｺ隱・
                         bool addonExists = false;
-                        
-                        // GMAファイルの有効状態を更新
+
+                        // GMA繝輔ぃ繧､繝ｫ縺ｮ譛牙柑迥ｶ諷九ｒ譖ｴ譁ｰ
                         if (kvp.Value.IsGmaFile)
                         {
                             string gmaPath = null;
-                            
-                            // 管理フォルダを確認
+
+                            // 邂｡逅・ヵ繧ｩ繝ｫ繝繧堤｢ｺ隱・
                             string managedGmaPath = Path.Combine(addonsPath, $"{kvp.Key}.gma");
                             if (File.Exists(managedGmaPath))
                             {
                                 gmaPath = managedGmaPath;
                                 addonExists = true;
                             }
-                            
-                            // キャッシュマネージャーパスを確認
+
+                            // 繧ｭ繝｣繝・す繝･繝槭ロ繝ｼ繧ｸ繝｣繝ｼ繝代せ繧堤｢ｺ隱・
                             if (!addonExists && !string.IsNullOrEmpty(gmodCacheAddonsPath))
                             {
                                 gmaPath = Path.Combine(gmodCacheAddonsPath, $"{kvp.Key}.gma");
@@ -962,7 +976,7 @@ namespace GmodAddonManager.Core.Services
                                 }
                                 else
                                 {
-                                    // キャッシュパスを確認
+                                    // 繧ｭ繝｣繝・す繝･繝代せ繧堤｢ｺ隱・
                                     if (!string.IsNullOrEmpty(gmodCachePath))
                                     {
                                         gmaPath = Path.Combine(gmodCachePath, $"{kvp.Key}.gma");
@@ -977,20 +991,20 @@ namespace GmodAddonManager.Core.Services
                                     }
                                 }
                             }
-                            
+
                             kvp.Value.IsEnabled = !string.IsNullOrEmpty(gmaPath) && File.Exists(gmaPath);
                         }
                         else
                         {
-                            // ディレクトリタイプのアドオン
+                            // 繝・ぅ繝ｬ繧ｯ繝医Μ繧ｿ繧､繝励・繧｢繝峨が繝ｳ
                             string managedDirPath = Path.Combine(addonsPath, kvp.Key);
                             if (Directory.Exists(managedDirPath))
                             {
                                 addonExists = true;
                             }
                         }
-                        
-                        // 存在するアドオンのみ追加
+
+                        // 蟄伜惠縺吶ｋ繧｢繝峨が繝ｳ縺ｮ縺ｿ霑ｽ蜉
                         if (addonExists)
                         {
                             addons.Add(kvp.Value);
@@ -999,79 +1013,79 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
-            // 3. キャッシュディレクトリのGMAファイルをスキャン
+
+            // 3. 繧ｭ繝｣繝・す繝･繝・ぅ繝ｬ繧ｯ繝医Μ縺ｮGMA繝輔ぃ繧､繝ｫ繧偵せ繧ｭ繝｣繝ｳ
             errorHandler.HandleInfo($"Cache scan check - gmodCacheAddonsPath: {gmodCacheAddonsPath ?? "null"}, Exists: {(!string.IsNullOrEmpty(gmodCacheAddonsPath) && Directory.Exists(gmodCacheAddonsPath))}", "ScanWorkshopFolderAsync");
-            
+
             if (!string.IsNullOrEmpty(gmodCacheAddonsPath) && Directory.Exists(gmodCacheAddonsPath))
             {
                 errorHandler.HandleInfo($"Scanning cache directory: {gmodCacheAddonsPath}", "ScanWorkshopFolderAsync");
                 var gmaFiles = Directory.GetFiles(gmodCacheAddonsPath, "*.gma");
-                
+
                 foreach (var gmaFile in gmaFiles)
                 {
                     string addonId = Path.GetFileNameWithoutExtension(gmaFile);
-                    
-                    // すでに処理済みの場合はスキップ
+
+                    // 縺吶〒縺ｫ蜃ｦ逅・ｸ医∩縺ｮ蝣ｴ蜷医・繧ｹ繧ｭ繝・・
                     if (processedIds.Contains(addonId))
                         continue;
-                        
+
                     processedIds.Add(addonId);
-                    
-                    // メタデータがある場合は使用
+
+                    // 繝｡繧ｿ繝・・繧ｿ縺後≠繧句ｴ蜷医・菴ｿ逕ｨ
                     if (configuration?.AddonMetadata != null && configuration.AddonMetadata.ContainsKey(addonId))
                     {
                         var savedAddon = configuration.AddonMetadata[addonId];
                         savedAddon.FolderPath = gmaFile;
-                        savedAddon.IsGmaFile = true;  // 必ずGMAファイルとしてマーク
+                        savedAddon.IsGmaFile = true;  // 蠢・★GMA繝輔ぃ繧､繝ｫ縺ｨ縺励※繝槭・繧ｯ
                         savedAddon.IsEnabled = File.Exists(gmaFile);
-                        
-                        // メタデータを更新して保存
+
+                        // 繝｡繧ｿ繝・・繧ｿ繧呈峩譁ｰ縺励※菫晏ｭ・
                         configuration.AddonMetadata[addonId] = savedAddon;
-                        
+
                         addons.Add(savedAddon);
                     }
                     else
                     {
-                        // 新規GMAファイルの場合
+                        // 譁ｰ隕秀MA繝輔ぃ繧､繝ｫ縺ｮ蝣ｴ蜷・
                         var addon = new WorkshopAddon(addonId, gmaFile);
                         addon.IsGmaFile = true;
                         addon.IsEnabled = true;
-                        
-                        // GMAファイルからメタデータを読み取る
+
+                        // GMA繝輔ぃ繧､繝ｫ縺九ｉ繝｡繧ｿ繝・・繧ｿ繧定ｪｭ縺ｿ蜿悶ｋ
                         ReadGmaMetadata(gmaFile, addon);
-                        
+
                         if (string.IsNullOrWhiteSpace(addon.Title))
                         {
                             addon.Title = $"Workshop-{addonId}";
                         }
-                        
+
                         var fileInfo = new FileInfo(gmaFile);
                         addon.Size = fileInfo.Length;
                         addon.LastUpdated = fileInfo.LastWriteTimeUtc;
-                        
-                        // メタデータに保存
+
+                        // 繝｡繧ｿ繝・・繧ｿ縺ｫ菫晏ｭ・
                         if (configuration != null)
                         {
                             configuration.AddonMetadata[addonId] = addon;
                         }
-                        
+
                         addons.Add(addon);
                     }
                 }
-                
+
                 errorHandler.HandleInfo($"Found {gmaFiles.Length} GMA files in cache directory", "ScanWorkshopFolderAsync");
             }
 
-            // 4. Workshopから削除されたアドオンのクリーンアップ
+            // 4. Workshop縺九ｉ蜑企勁縺輔ｌ縺溘い繝峨が繝ｳ縺ｮ繧ｯ繝ｪ繝ｼ繝ｳ繧｢繝・・
             var deletedAddonIds = await CleanupDeletedWorkshopAddonsAsync(addons);
-            
-            // 削除されたアドオンをリストから除外
+
+            // 蜑企勁縺輔ｌ縺溘い繝峨が繝ｳ繧偵Μ繧ｹ繝医°繧蛾勁螟・
             if (deletedAddonIds.Count > 0)
             {
                 addons = addons.Where(a => !deletedAddonIds.Contains(a.Id)).ToList();
             }
-            
+
             return addons;
         }
 
@@ -1091,6 +1105,12 @@ namespace GmodAddonManager.Core.Services
                     var addonId = Path.GetFileName(directory);
                     if (!long.TryParse(addonId, out _))
                     {
+                        continue;
+                    }
+
+                    if (!DirectoryHasAddonPayload(directory, "ScanWorkshopFolderSoftAsync"))
+                    {
+                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "ScanWorkshopFolderSoftAsync");
                         continue;
                     }
 
@@ -1165,7 +1185,7 @@ namespace GmodAddonManager.Core.Services
                     else
                     {
                         var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
-                        if (Directory.Exists(workshopDirPath))
+                        if (DirectoryHasAddonPayload(workshopDirPath, "ScanWorkshopFolderSoftAsync"))
                         {
                             addonExists = true;
                             kvp.Value.FolderPath = workshopDirPath;
@@ -1237,18 +1257,24 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
+            var deletedAddonIds = await CleanupDeletedWorkshopAddonsAsync(addons);
+            if (deletedAddonIds.Count > 0)
+            {
+                addons = addons.Where(a => !deletedAddonIds.Contains(a.Id)).ToList();
+            }
+
             await EnsureAllAddonsInSubscribeAssetAsync();
 
             return addons;
         }
-        
+
         /// <summary>
         /// Scans for truly new addons in the workshop folder that haven't been migrated yet
         /// </summary>
         public async Task<List<WorkshopAddon>> ScanForNewAddonsAsync()
         {
             var newAddons = new List<WorkshopAddon>();
-            
+
             // First, try to get addon IDs from Steam Workshop cache (much faster)
             var cachedAddonIds = new HashSet<string>();
             try
@@ -1264,44 +1290,50 @@ namespace GmodAddonManager.Core.Services
             {
                 errorHandler.HandleWarning($"Failed to read Steam Workshop cache: {ex.Message}", "ScanForNewAddonsAsync");
             }
-            
+
             // Scan actual workshop folder for directories
             var workshopDirs = Directory.GetDirectories(workshopPath)
                 .Where(d => !Path.GetFileName(d).StartsWith("."))
                 .ToList();
-            
+
             foreach (var dir in workshopDirs)
             {
                 string dirName = Path.GetFileName(dir);
-                
+
                 // Check if it's a valid addon ID
                 if (!long.TryParse(dirName, out _))
                     continue;
-                    
+
+                if (!DirectoryHasAddonPayload(dir, "ScanForNewAddonsAsync"))
+                {
+                    errorHandler.HandleInfo($"Skipping empty workshop directory: {dir}", "ScanForNewAddonsAsync");
+                    continue;
+                }
+
                 // Check if we already know about this addon
                 if (configuration.AddonMetadata.ContainsKey(dirName))
                     continue;
-                    
+
                 // Check if it's a junction (already managed)
                 if (junctionService.IsJunction(dir))
                     continue;
-                    
+
                 // This is a new, unmanaged addon
                 var addon = new WorkshopAddon
                 {
                     Id = dirName,
                     Title = $"Workshop-{dirName}",
                     IsEnabled = true, // It's in the workshop folder, so it's enabled
-                    IsGmaFile = IsGmaAddonRuntime(dirName) // 実際のファイルをチェック
+                    IsGmaFile = IsGmaAddonRuntime(dirName) // 螳滄圀縺ｮ繝輔ぃ繧､繝ｫ繧偵メ繧ｧ繝・け
                 };
-                
+
                 // Try to get more info
                 try
                 {
                     var dirInfo = new DirectoryInfo(dir);
                     addon.Size = await CalculateDirectorySizeAsync(dirInfo);
                     addon.LastUpdated = dirInfo.LastWriteTimeUtc;
-                    
+
                     // Look for GMA files to get metadata
                     var gmaFiles = Directory.GetFiles(dir, "*.gma");
                     if (gmaFiles.Length > 0)
@@ -1314,17 +1346,17 @@ namespace GmodAddonManager.Core.Services
                     // Failed to read GMA metadata - continue with basic addon info
                     errorHandler?.HandleWarning($"Failed to read GMA metadata for addon {addon.Id}", "ReadGmaMetadata");
                 }
-                
+
                 newAddons.Add(addon);
             }
-            
+
             // Check for addon IDs from Steam cache that don't have directories yet
             if (cachedAddonIds.Any())
             {
                 var existingDirNames = new HashSet<string>(workshopDirs.Select(d => Path.GetFileName(d)));
                 var missingAddonIds = cachedAddonIds.Except(existingDirNames)
                     .Where(id => !configuration.AddonMetadata.ContainsKey(id));
-                
+
                 foreach (var addonId in missingAddonIds)
                 {
                     // This addon is subscribed but not yet downloaded/visible
@@ -1336,7 +1368,7 @@ namespace GmodAddonManager.Core.Services
                         IsGmaFile = false,
                         NeedsTitleUpdate = true // Mark for future update when available
                     };
-                    
+
                     // Try to get details from Steam cache
                     try
                     {
@@ -1354,28 +1386,28 @@ namespace GmodAddonManager.Core.Services
                         // Failed to read from Steam cache - not critical, continue without cache data
                         errorHandler?.HandleInfo($"Failed to read Steam cache for addon {addonId}", "ReadSteamCache");
                     }
-                    
+
                     newAddons.Add(addon);
                 }
             }
-            
+
             // Also scan cache folder for new GMA files
             if (!string.IsNullOrEmpty(gmodCachePath) && Directory.Exists(gmodCachePath))
             {
                 var gmaFiles = Directory.GetFiles(gmodCachePath, "*.gma");
-                
+
                 foreach (var gmaFile in gmaFiles)
                 {
                     string addonId = Path.GetFileNameWithoutExtension(gmaFile);
-                    
+
                     // Check if it's a valid addon ID
                     if (!long.TryParse(addonId, out _))
                         continue;
-                        
+
                     // Check if we already know about this addon
                     if (configuration.AddonMetadata.ContainsKey(addonId))
                         continue;
-                        
+
                     // This is a new GMA addon
                     var addon = new WorkshopAddon
                     {
@@ -1386,45 +1418,50 @@ namespace GmodAddonManager.Core.Services
                         IsGmaFile = true,
                         IsEnabled = true
                     };
-                    
+
                     // Try to read metadata
                     ReadGmaMetadata(gmaFile, addon);
-                    
+
                     newAddons.Add(addon);
                 }
             }
-            
+
             return newAddons;
         }
 
         public async Task<WorkshopAddon> ScanAddonAsync(string addonPath)
         {
             string addonId = Path.GetFileName(addonPath);
-            
+
             if (!long.TryParse(addonId, out _))
             {
                 return null;
             }
 
+            if (!DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
+            {
+                return null;
+            }
+
             var addon = new WorkshopAddon(addonId, addonPath);
-            
+
             string junctionPath = Path.Combine(workshopPath, addonId);
             addon.IsEnabled = Directory.Exists(junctionPath) && junctionService.IsJunction(junctionPath);
 
             string gmaPath = Path.Combine(addonPath, "*.gma");
             var gmaFiles = await Task.Run(() => Directory.GetFiles(addonPath, "*.gma"));
-            
+
             if (gmaFiles.Length > 0)
             {
                 ReadGmaMetadata(gmaFiles[0], addon);
             }
             else
             {
-                // GMAファイルがない場合はSteam APIからタイトルを取得してみる
+                // GMA繝輔ぃ繧､繝ｫ縺後↑縺・ｴ蜷医・Steam API縺九ｉ繧ｿ繧､繝医Ν繧貞叙蠕励＠縺ｦ縺ｿ繧・
                 // No GMA file found - will try Steam API
             }
-            
-            // タイトルが空の場合はWorkshop IDを使用
+
+            // 繧ｿ繧､繝医Ν縺檎ｩｺ縺ｮ蝣ｴ蜷医・Workshop ID繧剃ｽｿ逕ｨ
             if (string.IsNullOrWhiteSpace(addon.Title))
             {
                 addon.Title = $"Workshop-{addonId}";
@@ -1444,14 +1481,14 @@ namespace GmodAddonManager.Core.Services
                 using (var stream = new FileStream(gmaPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8))
                 {
-                    // ファイルが最小限のサイズを持っているか確認
+                    // 繝輔ぃ繧､繝ｫ縺梧怙蟆城剞縺ｮ繧ｵ繧､繧ｺ繧呈戟縺｣縺ｦ縺・ｋ縺狗｢ｺ隱・
                     if (stream.Length < 22) // GMAD(4) + version(1) + steamId(8) + timestamp(8) + requiredContentCount(1) = 22 bytes minimum
                     {
                         errorHandler.HandleWarning($"GMA file {gmaPath} is too small to be valid", "ReadGmaMetadata");
                         return;
                     }
 
-                    // マジックナンバーをバイト配列として読み取り
+                    // 繝槭ず繝・け繝翫Φ繝舌・繧偵ヰ繧､繝磯・蛻励→縺励※隱ｭ縺ｿ蜿悶ｊ
                     var magicBytes = reader.ReadBytes(4);
                     var magic = System.Text.Encoding.ASCII.GetString(magicBytes);
                     if (!magic.Equals("GMAD", StringComparison.Ordinal))
@@ -1460,25 +1497,25 @@ namespace GmodAddonManager.Core.Services
                     }
 
                     byte version = reader.ReadByte();
-                    
+
                     ulong steamId = reader.ReadUInt64();
                     ulong timestamp = reader.ReadUInt64();
-                    
-                    // タイムスタンプをDateTimeに変換
+
+                    // 繧ｿ繧､繝繧ｹ繧ｿ繝ｳ繝励ｒDateTime縺ｫ螟画鋤
                     if (timestamp > 0)
                     {
                         addon.LastUpdated = DateTimeOffset.FromUnixTimeSeconds((long)timestamp).DateTime;
                     }
-                    
-                    // Required content の個数を読み取り、各要素をスキップ
+
+                    // Required content 縺ｮ蛟区焚繧定ｪｭ縺ｿ蜿悶ｊ縲∝推隕∫ｴ繧偵せ繧ｭ繝・・
                     byte requiredContentCount = reader.ReadByte();
                     for (int i = 0; i < requiredContentCount; i++)
                     {
-                        ReadNullTerminatedString(reader); // 読み捨て
+                        ReadNullTerminatedString(reader); // 隱ｭ縺ｿ謐ｨ縺ｦ
                     }
 
                     string name = ReadNullTerminatedString(reader);
-                    // タイトルが短すぎる場合や特定のプレフィックスの場合は無効とみなす
+                    // 繧ｿ繧､繝医Ν縺檎洒縺吶℃繧句ｴ蜷医ｄ迚ｹ螳壹・繝励Ξ繝輔ぅ繝・け繧ｹ縺ｮ蝣ｴ蜷医・辟｡蜉ｹ縺ｨ縺ｿ縺ｪ縺・
                     if (!string.IsNullOrEmpty(name) && !name.StartsWith("tag", StringComparison.OrdinalIgnoreCase))
                     {
                         addon.Title = name;
@@ -1489,7 +1526,7 @@ namespace GmodAddonManager.Core.Services
                     {
                         addon.Description = description;
                     }
-                    
+
                     string author = ReadNullTerminatedString(reader);
                     if (!string.IsNullOrEmpty(author))
                     {
@@ -1503,8 +1540,8 @@ namespace GmodAddonManager.Core.Services
                 string gmaName = Path.GetFileNameWithoutExtension(gmaPath);
                 addon.Title = gmaName;
             }
-            
-            // タイトルが空の場合はGMAファイル名を使用
+
+            // 繧ｿ繧､繝医Ν縺檎ｩｺ縺ｮ蝣ｴ蜷医・GMA繝輔ぃ繧､繝ｫ蜷阪ｒ菴ｿ逕ｨ
             if (string.IsNullOrWhiteSpace(addon.Title))
             {
                 addon.Title = Path.GetFileNameWithoutExtension(gmaPath);
@@ -1520,7 +1557,7 @@ namespace GmodAddonManager.Core.Services
                 while ((b = reader.ReadByte()) != 0)
                 {
                     bytes.Add(b);
-                    // 安全のため、文字列が長すぎる場合は中断
+                    // 螳牙・縺ｮ縺溘ａ縲∵枚蟄怜・縺碁聞縺吶℃繧句ｴ蜷医・荳ｭ譁ｭ
                     if (bytes.Count > 1024)
                     {
                         break;
@@ -1529,22 +1566,22 @@ namespace GmodAddonManager.Core.Services
             }
             catch (EndOfStreamException)
             {
-                // ストリームの終端に達した場合は、これまでに読み取ったバイトを返す
-                // GMAファイルが不完全な場合やフォーマットが異なる場合に発生する可能性がある
+                // 繧ｹ繝医Μ繝ｼ繝縺ｮ邨らｫｯ縺ｫ驕斐＠縺溷ｴ蜷医・縲√％繧後∪縺ｧ縺ｫ隱ｭ縺ｿ蜿悶▲縺溘ヰ繧､繝医ｒ霑斐☆
+                // GMA繝輔ぃ繧､繝ｫ縺御ｸ榊ｮ悟・縺ｪ蝣ｴ蜷医ｄ繝輔か繝ｼ繝槭ャ繝医′逡ｰ縺ｪ繧句ｴ蜷医↓逋ｺ逕溘☆繧句庄閭ｽ諤ｧ縺後≠繧・
             }
             return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
         }
-        
-        // GMAファイルからタイトルのみを高速に読み取る専用メソッド
+
+        // GMA繝輔ぃ繧､繝ｫ縺九ｉ繧ｿ繧､繝医Ν縺ｮ縺ｿ繧帝ｫ倬溘↓隱ｭ縺ｿ蜿悶ｋ蟆ら畑繝｡繧ｽ繝・ラ
         private async Task<string> ReadGmaTitleOnlyAsync(string gmaPath)
         {
             try
             {
-                // FileShare.Readで他のプロセスとの競合を回避
+                // FileShare.Read縺ｧ莉悶・繝励Ο繧ｻ繧ｹ縺ｨ縺ｮ遶ｶ蜷医ｒ蝗樣∩
                 using (var fs = new FileStream(gmaPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var br = new BinaryReader(fs, System.Text.Encoding.UTF8))
                 {
-                    // ファイルが最小限のサイズを持っているか確認
+                    // 繝輔ぃ繧､繝ｫ縺梧怙蟆城剞縺ｮ繧ｵ繧､繧ｺ繧呈戟縺｣縺ｦ縺・ｋ縺狗｢ｺ隱・
                     if (fs.Length < 22) // GMAD(4) + version(1) + steamId(8) + timestamp(8) + requiredContentCount(1) = 22 bytes minimum
                     {
                         return null;
@@ -1555,18 +1592,18 @@ namespace GmodAddonManager.Core.Services
                     var magic = System.Text.Encoding.ASCII.GetString(magicBytes);
                     if (!magic.Equals("GMAD", StringComparison.Ordinal))
                         return null;
-                    
+
                     var version = br.ReadByte();
                     br.ReadUInt64(); // SteamID
                     br.ReadUInt64(); // Timestamp
                     var requiredContentCount = br.ReadByte();
-                    
+
                     // Skip required content if exists
                     for (int i = 0; i < requiredContentCount; i++)
                     {
-                        ReadNullTerminatedString(br); // 読み捨て
+                        ReadNullTerminatedString(br); // 隱ｭ縺ｿ謐ｨ縺ｦ
                     }
-                    
+
                     // Read title
                     var bytes = new List<byte>();
                     try
@@ -1580,17 +1617,17 @@ namespace GmodAddonManager.Core.Services
                     }
                     catch (EndOfStreamException)
                     {
-                        // ストリームの終端に達した場合は、これまでに読み取ったバイトを返す
+                        // 繧ｹ繝医Μ繝ｼ繝縺ｮ邨らｫｯ縺ｫ驕斐＠縺溷ｴ蜷医・縲√％繧後∪縺ｧ縺ｫ隱ｭ縺ｿ蜿悶▲縺溘ヰ繧､繝医ｒ霑斐☆
                     }
-                    
+
                     var title = System.Text.Encoding.UTF8.GetString(bytes.ToArray());
-                    
-                    // タイトルが特定のプレフィックスの場合は無効とみなす
+
+                    // 繧ｿ繧､繝医Ν縺檎音螳壹・繝励Ξ繝輔ぅ繝・け繧ｹ縺ｮ蝣ｴ蜷医・辟｡蜉ｹ縺ｨ縺ｿ縺ｪ縺・
                     if (!string.IsNullOrWhiteSpace(title) && !title.StartsWith("tag", StringComparison.OrdinalIgnoreCase))
                     {
                         return title;
                     }
-                    
+
                     return null;
                 }
             }
@@ -1600,20 +1637,20 @@ namespace GmodAddonManager.Core.Services
                 return null;
             }
         }
-        
-        // キャッシュアドオンの名前のみを高速に取得する新メソッド
+
+        // 繧ｭ繝｣繝・す繝･繧｢繝峨が繝ｳ縺ｮ蜷榊燕縺ｮ縺ｿ繧帝ｫ倬溘↓蜿門ｾ励☆繧区眠繝｡繧ｽ繝・ラ
         /// <summary>
-        /// バックグラウンドでアドオンのタイトルを更新する
+        /// 繝舌ャ繧ｯ繧ｰ繝ｩ繧ｦ繝ｳ繝峨〒繧｢繝峨が繝ｳ縺ｮ繧ｿ繧､繝医Ν繧呈峩譁ｰ縺吶ｋ
         /// </summary>
         public async Task UpdateAddonTitlesInBackgroundAsync()
         {
             await Task.Run(async () =>
             {
                 var addonsToUpdate = configuration.AddonMetadata
-                    .Where(kvp => kvp.Value.NeedsTitleUpdate || 
+                    .Where(kvp => kvp.Value.NeedsTitleUpdate ||
                            (kvp.Value.IsGmaFile && kvp.Value.Title.StartsWith("Workshop-")))
                     .ToList();
-                
+
                 foreach (var kvp in addonsToUpdate)
                 {
                     try
@@ -1628,8 +1665,8 @@ namespace GmodAddonManager.Core.Services
                                 {
                                     kvp.Value.Title = title;
                                     kvp.Value.NeedsTitleUpdate = false;
-                                    
-                                    // 設定を保存
+
+                                    // 險ｭ螳壹ｒ菫晏ｭ・
                                     await SaveConfigurationAsync();
                                 }
                             }
@@ -1637,86 +1674,86 @@ namespace GmodAddonManager.Core.Services
                     }
                     catch
                     {
-                        // エラーは無視して続行
+                        // 繧ｨ繝ｩ繝ｼ縺ｯ辟｡隕悶＠縺ｦ邯夊｡・
                     }
-                    
-                    // 少し待機して負荷を分散
+
+                    // 蟆代＠蠕・ｩ溘＠縺ｦ雋闕ｷ繧貞・謨｣
                     await Task.Delay(50);
                 }
             });
         }
-        
+
 	        public async Task UpdateCacheAddonTitlesAsync(IProgress<(int current, int total, string message)>? progress = null)
 	        {
             var cacheAddons = configuration.AddonMetadata
-                .Where(kvp => kvp.Value.IsGmaFile && 
+                .Where(kvp => kvp.Value.IsGmaFile &&
                        (kvp.Value.Title == kvp.Key || kvp.Value.Title.StartsWith("Workshop-")))
                 .ToList();
-            
+
             if (cacheAddons.Count == 0)
                 return;
-            
+
             int processed = 0;
             int total = cacheAddons.Count;
-            
-            // 並列処理でタイトルを読み取る
+
+            // 荳ｦ蛻怜・逅・〒繧ｿ繧､繝医Ν繧定ｪｭ縺ｿ蜿悶ｋ
             var titleTasks = cacheAddons.Select(async kvp =>
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
-                
-                // GMAファイルのパスを構築
+
+                // GMA繝輔ぃ繧､繝ｫ縺ｮ繝代せ繧呈ｧ狗ｯ・
                 string gmaPath = null;
-                
-                // まずキャッシュマネージャーパスを確認
+
+                // 縺ｾ縺壹く繝｣繝・す繝･繝槭ロ繝ｼ繧ｸ繝｣繝ｼ繝代せ繧堤｢ｺ隱・
                 if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
                 {
                     gmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
                     if (!File.Exists(gmaPath))
                         gmaPath = null;
                 }
-                
-                // 次にキャッシュパスを確認
+
+                // 谺｡縺ｫ繧ｭ繝｣繝・す繝･繝代せ繧堤｢ｺ隱・
                 if (gmaPath == null && !string.IsNullOrEmpty(gmodCachePath))
                 {
                     gmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
                     if (!File.Exists(gmaPath))
                         gmaPath = null;
                 }
-                
+
                 if (gmaPath != null && File.Exists(gmaPath))
                 {
-                    // タイトルのみを高速に読み取る
+                    // 繧ｿ繧､繝医Ν縺ｮ縺ｿ繧帝ｫ倬溘↓隱ｭ縺ｿ蜿悶ｋ
                     string title = await ReadGmaTitleOnlyAsync(gmaPath);
-                    
-                    if (!string.IsNullOrEmpty(title) && title != addonId && 
+
+                    if (!string.IsNullOrEmpty(title) && title != addonId &&
                         title.Length > 3 && !title.Equals("tag", StringComparison.OrdinalIgnoreCase))
                     {
                         return (addonId, title);
                     }
                 }
-                
+
                 return (addonId, (string)null);
             });
-            
+
             var results = await Task.WhenAll(titleTasks);
-            
-            // 結果を適用してプログレスを更新
+
+            // 邨先棡繧帝←逕ｨ縺励※繝励Ο繧ｰ繝ｬ繧ｹ繧呈峩譁ｰ
             foreach (var (addonId, title) in results)
             {
                 if (!string.IsNullOrEmpty(title))
                 {
                     var addon = configuration.AddonMetadata[addonId];
                     addon.Title = title;
-                    addon.NeedsTitleUpdate = false; // タイトル更新完了フラグをクリア
+                    addon.NeedsTitleUpdate = false; // 繧ｿ繧､繝医Ν譖ｴ譁ｰ螳御ｺ・ヵ繝ｩ繧ｰ繧偵け繝ｪ繧｢
                 }
-                
+
                 processed++;
                 var currentAddon = configuration.AddonMetadata[addonId];
                 progress?.Report((processed, total, $"Processing: {currentAddon.Title}"));
             }
-            
-            // 設定を保存
+
+            // 險ｭ螳壹ｒ菫晏ｭ・
             await SaveConfigurationAsync();
         }
 
@@ -1733,6 +1770,33 @@ namespace GmodAddonManager.Core.Services
                     return 0;
                 }
             });
+        }
+
+        private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
+        {
+            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                return Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories)
+                    .Any(filePath => !IsIgnoredAddonPresenceMarker(filePath));
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to inspect addon directory payload at {directoryPath}. Treating directory as present. {ex.Message}",
+                    operationName);
+                return true;
+            }
+        }
+
+        private static bool IsIgnoredAddonPresenceMarker(string filePath)
+        {
+            var fileName = Path.GetFileName(filePath);
+            return string.Equals(fileName, ".gam_disabled", StringComparison.OrdinalIgnoreCase);
         }
 
         private void ValidatePath(string path, string paramName)
@@ -1759,13 +1823,13 @@ namespace GmodAddonManager.Core.Services
             {
                 throw new ArgumentException($"Invalid path format: {path}", paramName, ex);
             }
-            
+
             // Check for any path traversal attempts
             if (path.Contains("..", StringComparison.Ordinal))
             {
                 throw new ArgumentException($"Path traversal detected in: {path}", paramName);
             }
-            
+
             // Check for Windows special paths
             if (path.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase) ||
@@ -1781,7 +1845,7 @@ namespace GmodAddonManager.Core.Services
                 bool isInManager = fullPath.StartsWith(managerPath, StringComparison.OrdinalIgnoreCase);
                 bool isInGmodCache = !string.IsNullOrEmpty(gmodCachePath) && fullPath.StartsWith(gmodCachePath, StringComparison.OrdinalIgnoreCase);
                 bool isInAppDirectory = fullPath.StartsWith(AppDomain.CurrentDomain.BaseDirectory, StringComparison.OrdinalIgnoreCase);
-                
+
                 if (!isInWorkshop && !isInManager && !isInGmodCache && !isInAppDirectory)
                 {
                     throw new ArgumentException($"Path is outside allowed directories: {path}", paramName);
@@ -1812,40 +1876,40 @@ namespace GmodAddonManager.Core.Services
             {
                 if (gmodAddonStateStore == null)
                 {
-                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableAddon");
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableAddon");
                 }
                 else
                 {
                     var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
                     if (!persisted)
                     {
-                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableAddon");
+                        errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableAddon");
                     }
                 }
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableAddon");
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableAddon");
             }
 
             // Remove any legacy stub directory first (for backward compatibility)
             bool removedStub = RemoveDisabledStub(workshopPath, addonId);
             TryRestoreMovedAsideWorkshopFolder(addonId);
-            
+
             // Check if this is a GMA file addon - both from metadata and runtime check
             var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
-            
+
             // Runtime check for GMA files in cache
             bool isGmaRuntime = IsGmaAddonRuntime(addonId);
 
-            // Soft mode: only toggle addons.txt / metadata (no filesystem operations)
+            // Soft mode: only toggle addonnomount.txt / metadata (no filesystem operations)
             // Exception: if we removed a disabled stub, fall through to restore workshop/cache presence.
             if (DisableMode == DisableMode.Soft && !removedStub)
             {
                 if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
                 {
                     errorHandler.HandleInfo(
-                        "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+                        "DisableMode=Soft: ON/OFF will only update garrysmod/cfg/addonnomount.txt (no workshop/cache file operations).",
                         "EnableAddon");
                 }
                 if (addonInfo != null)
@@ -1858,7 +1922,7 @@ namespace GmodAddonManager.Core.Services
                 }
                 return;
             }
-            
+
 	            if (isGmaRuntime || (addonInfo != null && addonInfo.IsGmaFile))
 	            {
 	                // Update metadata if mismatch detected
@@ -1867,7 +1931,7 @@ namespace GmodAddonManager.Core.Services
 	                    errorHandler.HandleWarning($"Addon {addonId} detected as GMA at runtime but metadata says otherwise. Updating metadata.", "EnableAddon");
 	                    addonInfo.IsGmaFile = true;
 	                }
-	                
+
 	                EnableGmaAddon(addonId);
 	                if (addonInfo != null)
 	                {
@@ -1886,37 +1950,37 @@ namespace GmodAddonManager.Core.Services
                 throw new DirectoryNotFoundException($"Addon not found: {addonId}");
             }
 
-            // 新方式: 通常のディレクトリを作成し、中のGMAファイルだけハードリンク化
+            // 譁ｰ譁ｹ蠑・ 騾壼ｸｸ縺ｮ繝・ぅ繝ｬ繧ｯ繝医Μ繧剃ｽ懈・縺励∽ｸｭ縺ｮGMA繝輔ぃ繧､繝ｫ縺縺代ワ繝ｼ繝峨Μ繝ｳ繧ｯ蛹・
             string sourceGmaPath = Path.Combine(sourcePath, $"{addonId}.gma");
-            
+
 	            if (File.Exists(sourceGmaPath))
 	            {
-	                // GMAファイルが存在する場合、新方式を使用
+	                // GMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医∵眠譁ｹ蠑上ｒ菴ｿ逕ｨ
 	                junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, sourceGmaPath);
 	            }
 	            else
 	            {
-                // GMAファイルがない場合は従来のジャンクション方式を使用
+                // GMA繝輔ぃ繧､繝ｫ縺後↑縺・ｴ蜷医・蠕捺擂縺ｮ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ譁ｹ蠑上ｒ菴ｿ逕ｨ
                 if (Directory.Exists(workshopAddonPath))
                 {
                     if (!junctionService.IsJunction(workshopAddonPath))
                     {
-                        // 実体フォルダが存在する場合、まず管理フォルダに移動
+                        // 螳滉ｽ薙ヵ繧ｩ繝ｫ繝縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医√∪縺夂ｮ｡逅・ヵ繧ｩ繝ｫ繝縺ｫ遘ｻ蜍・
                         errorHandler.HandleWarning($"Found real folder instead of junction for addon {addonId}. Converting to managed addon.", "EnableAddon");
-                        
+
                         string tempPath = workshopAddonPath + "_temp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
                         ValidatePath(tempPath, "tempPath");
                         Directory.Move(workshopAddonPath, tempPath);
-                        
+
                         try
                         {
-                            // 既存の管理フォルダとマージ
+                            // 譌｢蟄倥・邂｡逅・ヵ繧ｩ繝ｫ繝縺ｨ繝槭・繧ｸ
                             MergeDirectories(tempPath, sourcePath);
                             Directory.Delete(tempPath, true);
                         }
                         catch
                         {
-                            // 失敗した場合は元に戻す
+                            // 螟ｱ謨励＠縺溷ｴ蜷医・蜈・↓謌ｻ縺・
                             if (Directory.Exists(tempPath))
                             {
                                 Directory.Move(tempPath, workshopAddonPath);
@@ -1926,7 +1990,7 @@ namespace GmodAddonManager.Core.Services
                     }
 	                    else
 	                    {
-	                        // ジャンクションが既に存在する場合も、ターゲット整合性のためCreateJunctionに処理を委ねる
+	                        // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺梧里縺ｫ蟄伜惠縺吶ｋ蝣ｴ蜷医ｂ縲√ち繝ｼ繧ｲ繝・ヨ謨ｴ蜷域ｧ縺ｮ縺溘ａCreateJunction縺ｫ蜃ｦ逅・ｒ蟋斐・繧・
 	                    }
 	                }
 
@@ -1949,26 +2013,26 @@ namespace GmodAddonManager.Core.Services
             {
                 if (gmodAddonStateStore == null)
                 {
-                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableAddon");
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableAddon");
                 }
                 else
                 {
                     var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
                     if (!persisted)
                     {
-                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableAddon");
+                        errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableAddon");
                     }
                 }
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableAddon");
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableAddon");
             }
 
             if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
             {
                 errorHandler.HandleInfo(
-                    "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+                    "DisableMode=Soft: ON/OFF will only update garrysmod/cfg/addonnomount.txt (no workshop/cache file operations).",
                     "EnableAddon");
             }
 
@@ -1995,26 +2059,26 @@ namespace GmodAddonManager.Core.Services
             {
                 if (gmodAddonStateStore == null)
                 {
-                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "DisableAddon");
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "DisableAddon");
                 }
                 else
                 {
                     var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
                     if (!persisted)
                     {
-                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "DisableAddon");
+                        errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "DisableAddon");
                     }
                 }
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "DisableAddon");
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "DisableAddon");
             }
 
 	            var runtimeIsGma = IsGmaAddonRuntime(addonId);
 	            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
 	            var isGmaAddon = runtimeIsGma || (addonInfo?.IsGmaFile ?? false);
-	
+
 	            if (addonInfo != null)
 	            {
 	                addonInfo.IsEnabled = false;
@@ -2027,11 +2091,11 @@ namespace GmodAddonManager.Core.Services
 
 	            if (DisableMode == DisableMode.Soft)
 	            {
-	                // ソフト無効化: ファイル構造は残し、addons.txtとメタデータのみ更新
+	                // 繧ｽ繝輔ヨ辟｡蜉ｹ蛹・ 繝輔ぃ繧､繝ｫ讒矩縺ｯ谿九＠縲∥ddons.txt縺ｨ繝｡繧ｿ繝・・繧ｿ縺ｮ縺ｿ譖ｴ譁ｰ
 	                return;
 	            }
-	
-	            // ハード無効化: 先にGMAの管理コピーを確保してから削除/移動する（戻らない問題の防止）
+
+	            // 繝上・繝臥┌蜉ｹ蛹・ 蜈医↓GMA縺ｮ邂｡逅・さ繝斐・繧堤｢ｺ菫昴＠縺ｦ縺九ｉ蜑企勁/遘ｻ蜍輔☆繧具ｼ域綾繧峨↑縺・撫鬘後・髦ｲ豁｢・・
 	            if (isGmaAddon)
 	            {
 	                try
@@ -2051,7 +2115,7 @@ namespace GmodAddonManager.Core.Services
 	                    return;
 	                }
 	            }
-	
+
 	            if (UnsubscribeOnHardDisable)
 	            {
 	                TryUnsubscribeFromWorkshop(addonId);
@@ -2073,20 +2137,20 @@ namespace GmodAddonManager.Core.Services
             {
                 if (gmodAddonStateStore == null)
                 {
-                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "DisableAddon");
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "DisableAddon");
                 }
                 else
                 {
                     var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
                     if (!persisted)
                     {
-                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "DisableAddon");
+                        errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "DisableAddon");
                     }
                 }
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "DisableAddon");
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "DisableAddon");
             }
 
             var runtimeIsGma = IsGmaAddonRuntime(addonId);
@@ -2107,35 +2171,35 @@ namespace GmodAddonManager.Core.Services
             {
                 if (gmodAddonStateStore == null)
                 {
-                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addons.txt will not be updated.", "EnableGmaAddon");
+                    errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableGmaAddon");
                 }
                 else
                 {
                     var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
                     if (!persisted)
                     {
-                        errorHandler.HandleWarning($"Failed to persist addon state to addons.txt for {addonId}.", "EnableGmaAddon");
+                        errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableGmaAddon");
                     }
                 }
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addons.txt for {addonId}: {ex.Message}", "EnableGmaAddon");
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableGmaAddon");
             }
-            
+
 		            // Remove any legacy stub directory first (for backward compatibility)
 		            RemoveDisabledStub(workshopPath, addonId);
 		            TryRestoreMovedAsideWorkshopFolder(addonId);
 
 		            var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) ? configuration.AddonMetadata[addonId] : null;
 
-			            // Soft mode: do not touch workshop/cache files; addons.txt is enough.
+			            // Soft mode: do not touch workshop/cache files; addonnomount.txt is enough.
 			            if (DisableMode == DisableMode.Soft)
 			            {
 			                if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
 			                {
 			                    errorHandler.HandleInfo(
-			                        "DisableMode=Soft: ON/OFF will only update garrysmod/settings/addons.txt (no workshop/cache file operations).",
+			                        "DisableMode=Soft: ON/OFF will only update garrysmod/cfg/addonnomount.txt (no workshop/cache file operations).",
 			                        "EnableGmaAddon");
 			                }
 			                if (addonInfo != null)
@@ -2145,7 +2209,7 @@ namespace GmodAddonManager.Core.Services
 			                }
 		                return;
 		            }
-		
+
 		            var sourceGmaPath = ResolveGmaSourcePath(addonId, addonInfo);
 	            if (sourceGmaPath == null)
 	            {
@@ -2154,10 +2218,10 @@ namespace GmodAddonManager.Core.Services
 	                    "EnableGmaAddon");
 	                return;
 	            }
-	
+
 	            var managedGmaPath = EnsureManagedGmaAvailable(addonId, addonInfo, sourceGmaPath);
 	            var primaryGmaPath = managedGmaPath ?? sourceGmaPath;
-	
+
 	            EnsureWorkshopStructureForGma(addonId, primaryGmaPath);
 	            EnsureCacheStructureForGma(addonId, primaryGmaPath);
 
@@ -2224,11 +2288,11 @@ namespace GmodAddonManager.Core.Services
 		                candidates.Add(addonInfo.FolderPath);
 		            }
 
-		            // Workshopの生データ（信頼できるソース）
+		            // Workshop縺ｮ逕溘ョ繝ｼ繧ｿ・井ｿ｡鬆ｼ縺ｧ縺阪ｋ繧ｽ繝ｼ繧ｹ・・
 		            candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.gma"));
 		            candidates.Add(Path.Combine(workshopPath, addonId, $"{addonId}.cache"));
 
-		            // 管理フォルダ（優先）
+		            // 邂｡逅・ヵ繧ｩ繝ｫ繝・亥━蜈茨ｼ・
 		            if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
 		            {
 		                candidates.Add(Path.Combine(gmodCacheAddonsPath, addonId + ".gma"));
@@ -2237,7 +2301,7 @@ namespace GmodAddonManager.Core.Services
 		            candidates.Add(Path.Combine(addonsPath, addonId, $"{addonId}.gma"));
 		            candidates.Add(Path.Combine(addonsPath, $"{addonId}.gma"));
 
-		            // GModキャッシュ（最後の手段）
+		            // GMod繧ｭ繝｣繝・す繝･・域怙蠕後・謇区ｮｵ・・
 		            if (!string.IsNullOrEmpty(gmodCachePath))
 		            {
 		                candidates.Add(Path.Combine(gmodCachePath, addonId + ".gma"));
@@ -2402,13 +2466,13 @@ namespace GmodAddonManager.Core.Services
 		                return false;
 		            }
 		        }
-		
+
 		        private string? EnsureManagedGmaAvailable(string addonId, WorkshopAddon? addonInfo, string? preferredSourcePath = null)
 		        {
 		            try
 		            {
 		                string managedGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
-		
+
 		                ValidatePath(managedGmaPath, "managedGmaPath");
 
 		                long? managedLength = null;
@@ -2424,7 +2488,7 @@ namespace GmodAddonManager.Core.Services
 		                        try { File.Delete(managedGmaPath); } catch { }
 		                    }
 		                }
-		
+
 		                string? source = null;
 		                if (!string.IsNullOrEmpty(preferredSourcePath))
 		                {
@@ -2441,7 +2505,7 @@ namespace GmodAddonManager.Core.Services
 		                        // Ignore invalid preferred path
 		                    }
 		                }
-		
+
 		                source ??= ResolveGmaSourcePath(addonId, addonInfo);
 
 		                // If we already have a valid managed copy and can't locate a better source, keep it.
@@ -2449,7 +2513,7 @@ namespace GmodAddonManager.Core.Services
 		                {
 		                    return managedLength.HasValue ? managedGmaPath : null;
 		                }
-		
+
 		                if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(managedGmaPath), StringComparison.OrdinalIgnoreCase))
 		                {
 		                    return managedGmaPath;
@@ -2460,7 +2524,7 @@ namespace GmodAddonManager.Core.Services
 		                {
 		                    return managedGmaPath;
 		                }
-		
+
 		                var managedDirectory = Path.GetDirectoryName(managedGmaPath);
 		                if (!string.IsNullOrEmpty(managedDirectory) && !Directory.Exists(managedDirectory))
 		                {
@@ -2472,7 +2536,7 @@ namespace GmodAddonManager.Core.Services
 		                    try { File.SetAttributes(managedGmaPath, FileAttributes.Normal); } catch { }
 		                    File.Delete(managedGmaPath);
 		                }
-		
+
                         if (AreSameDrive(source, managedGmaPath))
                         {
                             if (!CreateHardLinkSafe(managedGmaPath, source))
@@ -2522,21 +2586,21 @@ namespace GmodAddonManager.Core.Services
 	            {
 	                ValidatePath(sourceGmaPath, "sourceGmaPath");
 	                ValidatePath(destinationPath, "destinationPath");
-	
+
 	                if (!LooksLikeGmaFile(sourceGmaPath))
 	                {
 	                    errorHandler.HandleWarning($"Source GMA for addon {addonId} is invalid or missing: {sourceGmaPath}", context);
 	                    return;
 	                }
-	
+
 	                var destinationDirectory = Path.GetDirectoryName(destinationPath);
 	                if (!string.IsNullOrEmpty(destinationDirectory) && !Directory.Exists(destinationDirectory))
 	                {
 	                    Directory.CreateDirectory(destinationDirectory);
 	                }
-	
+
 	                var sameDrive = AreSameDrive(sourceGmaPath, destinationPath);
-	
+
 	                if (File.Exists(destinationPath))
 	                {
 	                    bool isOk = false;
@@ -2551,16 +2615,16 @@ namespace GmodAddonManager.Core.Services
 	                            isOk = new FileInfo(destinationPath).Length == new FileInfo(sourceGmaPath).Length;
 	                        }
 	                    }
-	
+
 	                    if (isOk)
 	                    {
 	                        return;
 	                    }
-	
+
 	                    try { File.SetAttributes(destinationPath, FileAttributes.Normal); } catch { }
 	                    File.Delete(destinationPath);
 	                }
-	
+
                     if (sameDrive)
                     {
                         if (!CreateHardLinkSafe(destinationPath, sourceGmaPath))
@@ -2587,17 +2651,17 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleWarning($"Failed to ensure GMA file for addon {addonId}: {ex.Message}", context);
                 }
             }
-	
+
 	        private void EnsureCacheStructureForGma(string addonId, string sourceGmaPath)
 	        {
 	            if (string.IsNullOrEmpty(gmodCachePath))
 	            {
 	                return;
 	            }
-	
+
 	            string cacheGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
 	            ValidatePath(cacheGmaPath, "cacheGmaPath");
-	
+
 	            EnsureGmaFileLinkedOrCopied(addonId, cacheGmaPath, sourceGmaPath, "EnableGmaAddon");
 	        }
 
@@ -2780,7 +2844,7 @@ namespace GmodAddonManager.Core.Services
 	                errorHandler.HandleWarning($"Failed to ensure workshop GMA for addon {addonId}: {ex.Message}", "EnableGmaAddon");
 	            }
 	        }
-        
+
         /// <summary>
         /// Remove stub directory before enabling an addon
         /// </summary>
@@ -2791,7 +2855,7 @@ namespace GmodAddonManager.Core.Services
             {
                 string stubPath = Path.Combine(workshopPath, addonId);
                 string markerPath = Path.Combine(stubPath, ".gam_disabled");
-                
+
                 // Only remove if it's a GAM stub directory
                 if (Directory.Exists(stubPath) && File.Exists(markerPath))
                 {
@@ -2800,7 +2864,7 @@ namespace GmodAddonManager.Core.Services
                         File.SetAttributes(file, FileAttributes.Normal);
                         File.Delete(file);
                     }
-                    
+
                     Directory.Delete(stubPath, true);
                     errorHandler.HandleInfo($"Removed stub directory for addon {addonId}", "RemoveDisabledStub");
                     removed = true;
@@ -2817,7 +2881,7 @@ namespace GmodAddonManager.Core.Services
         public List<string> GetEnabledAddons()
         {
             var enabledAddons = new List<string>();
-            
+
             // Check workshop folder for junctions
             var directories = Directory.GetDirectories(workshopPath)
                 .Where(d => !Path.GetFileName(d).StartsWith("."));
@@ -2851,17 +2915,17 @@ namespace GmodAddonManager.Core.Services
         {
             if (DisableMode == DisableMode.Soft && gmodAddonStateStore != null)
             {
-                var softStates = gmodAddonStateStore.GetAllStates();
+                var disabledIds = gmodAddonStateStore.GetDisabledIds();
                 var softSnapshotStates = new Dictionary<string, bool>(StringComparer.Ordinal);
 
                 foreach (var addonId in configuration.AddonMetadata.Keys
                              .Where(id => id != "*")
                              .OrderBy(id => id, StringComparer.Ordinal))
                 {
-                    softSnapshotStates[addonId] = softStates.TryGetValue(addonId, out var softEnabled) && softEnabled;
+                    softSnapshotStates[addonId] = !disabledIds.Contains(addonId);
                 }
 
-                return BuildSnapshot(softSnapshotStates, "actual:addons.txt");
+                return BuildSnapshot(softSnapshotStates, "actual:addonnomount.txt");
             }
 
             var enabledAddons = new HashSet<string>(GetEnabledAddons(), StringComparer.Ordinal);
@@ -2958,7 +3022,7 @@ namespace GmodAddonManager.Core.Services
 
         private string GetExpectedScopeLabel(bool assetSpecific)
         {
-            var suffix = DisableMode == DisableMode.Soft ? "addons.txt" : "actual";
+            var suffix = DisableMode == DisableMode.Soft ? "addonnomount.txt" : "actual";
             return assetSpecific ? $"expected:asset:{suffix}" : $"expected:{suffix}";
         }
 
@@ -3148,22 +3212,22 @@ namespace GmodAddonManager.Core.Services
                 try
                 {
                     string json = await Task.Run(() => File.ReadAllText(configPath));
-                    
+
                     // Validate JSON before deserialization
                     if (string.IsNullOrWhiteSpace(json))
                     {
                         throw new InvalidOperationException("Configuration file is empty");
                     }
-                    
+
                     try
                     {
                         // Parse JSON first to validate structure
                         var jsonObj = Newtonsoft.Json.Linq.JObject.Parse(json);
-                        
+
                         // Deserialize with error handling
                         configuration = JsonConvert.DeserializeObject<Configuration>(json, new JsonSerializerSettings
                         {
-                            Error = (sender, args) => 
+                            Error = (sender, args) =>
                             {
                                 // Log error but don't throw - allows partial deserialization
                                 args.ErrorContext.Handled = true;
@@ -3174,16 +3238,16 @@ namespace GmodAddonManager.Core.Services
                     {
                         throw new InvalidOperationException($"Invalid configuration file format: {ex.Message}", ex);
                     }
-                    
-                    // configurationがnullの場合は新規作成
+
+                    // configuration縺系ull縺ｮ蝣ｴ蜷医・譁ｰ隕丈ｽ懈・
                     if (configuration == null)
                     {
                         configuration = new Configuration();
                     }
-                    
+
                     // Migrate system asset names from Japanese to English
                     MigrateSystemAssetNames();
-                    
+
                     // Fix any invalid CurrentVersion values
                     FixInvalidCurrentVersions();
                 }
@@ -3194,11 +3258,11 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private void MigrateSystemAssetNames()
         {
             // Find and update Subscribe asset
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.IsSystem && (a.Name == "サブスクライブ" || a.Name == "Subscribe"));
+            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.IsSystem && (a.Name == "繧ｵ繝悶せ繧ｯ繝ｩ繧､繝・" || a.Name == "Subscribe"));
             if (subscribeAsset != null)
             {
                 subscribeAsset.Name = "Subscribe";
@@ -3207,9 +3271,9 @@ namespace GmodAddonManager.Core.Services
                     subscribeAsset.Id = "subscribe-system-asset";
                 }
             }
-            
-            // Find and update Junction asset  
-            var junctionAsset = configuration.Assets.FirstOrDefault(a => a.IsSystem && (a.Name == "ジャンクション" || a.Name == "Junction"));
+
+            // Find and update Junction asset
+            var junctionAsset = configuration.Assets.FirstOrDefault(a => a.IsSystem && (a.Name == "繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ" || a.Name == "Junction"));
             if (junctionAsset != null)
             {
                 junctionAsset.Name = "Junction";
@@ -3219,19 +3283,19 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private void FixInvalidCurrentVersions()
         {
             foreach (var asset in configuration.Assets)
             {
-                // CurrentVersionが-1の場合、0に修正
+                // CurrentVersion縺・1縺ｮ蝣ｴ蜷医・縺ｫ菫ｮ豁｣
                 if (asset.CurrentVersion == -1)
                 {
                     // [AddonManager] Fixing invalid CurrentVersion -1 for asset '{asset.Name}' to 0
                     asset.CurrentVersion = 0;
                 }
-                
-                // インポートベースラインがある場合でも、CurrentVersionは0以上であるべき
+
+                // 繧､繝ｳ繝昴・繝医・繝ｼ繧ｹ繝ｩ繧､繝ｳ縺後≠繧句ｴ蜷医〒繧ゅ，urrentVersion縺ｯ0莉･荳翫〒縺ゅｋ縺ｹ縺・
                 if (asset.CurrentVersion < 0)
                 {
                     // [AddonManager] Fixing negative CurrentVersion {asset.CurrentVersion} for asset '{asset.Name}' to 0
@@ -3243,30 +3307,30 @@ namespace GmodAddonManager.Core.Services
         public async Task SaveConfigurationAsync()
         {
             RequestSave();
-            await Task.CompletedTask; // 非同期メソッドを維持
+            await Task.CompletedTask; // 髱槫酔譛溘Γ繧ｽ繝・ラ繧堤ｶｭ謖・
         }
-        
+
         /// <summary>
-        /// 設定を即座に保存（デバウンスを無視）
+        /// 險ｭ螳壹ｒ蜊ｳ蠎ｧ縺ｫ菫晏ｭ假ｼ医ョ繝舌え繝ｳ繧ｹ繧堤┌隕厄ｼ・
         /// </summary>
         public async Task SaveConfigurationImmediatelyAsync()
         {
             errorHandler.HandleInfo($"SaveConfigurationImmediatelyAsync: Starting immediate save. Current assets count: {configuration.Assets.Count}", "SaveConfiguration");
-            
-            // デバウンスタイマーをキャンセル
+
+            // 繝・ヰ繧ｦ繝ｳ繧ｹ繧ｿ繧､繝槭・繧偵く繝｣繝ｳ繧ｻ繝ｫ
             lock (_saveLock)
             {
                 _saveDebounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 _saveRequested = false;
             }
-            
-            // 即座に保存
+
+            // 蜊ｳ蠎ｧ縺ｫ菫晏ｭ・
             await SaveConfigurationInternalAsync();
             errorHandler.HandleInfo("SaveConfigurationImmediatelyAsync: Save completed", "SaveConfiguration");
         }
-        
+
         /// <summary>
-        /// 保存リクエストをキューし、デバウンスする
+        /// 菫晏ｭ倥Μ繧ｯ繧ｨ繧ｹ繝医ｒ繧ｭ繝･繝ｼ縺励√ョ繝舌え繝ｳ繧ｹ縺吶ｋ
         /// </summary>
         private void RequestSave()
         {
@@ -3276,9 +3340,9 @@ namespace GmodAddonManager.Core.Services
                 _saveDebounceTimer.Change(_saveDebounceMilliseconds, Timeout.Infinite);
             }
         }
-        
+
         /// <summary>
-        /// 保留中の保存を実行
+        /// 菫晉蕗荳ｭ縺ｮ菫晏ｭ倥ｒ螳溯｡・
         /// </summary>
         private async Task ExecutePendingSaveAsync()
         {
@@ -3289,9 +3353,9 @@ namespace GmodAddonManager.Core.Services
             }
             await SaveConfigurationInternalAsync();
         }
-        
+
         /// <summary>
-        /// 実際の保存処理
+        /// 螳滄圀縺ｮ菫晏ｭ伜・逅・
         /// </summary>
         private async Task SaveConfigurationInternalAsync()
         {
@@ -3302,7 +3366,7 @@ namespace GmodAddonManager.Core.Services
             {
                 try
                 {
-                    // configurationのスナップショットを作成してシリアライズ
+                    // configuration縺ｮ繧ｹ繝翫ャ繝励す繝ｧ繝・ヨ繧剃ｽ懈・縺励※繧ｷ繝ｪ繧｢繝ｩ繧､繧ｺ
                     lock (_saveLock)
                     {
                         // Create a manual snapshot to avoid "collection was modified" errors
@@ -3334,7 +3398,7 @@ namespace GmodAddonManager.Core.Services
                             JunctionHistory = junctionHistorySnapshot
                         };
 
-                        // シリアライズ
+                        // 繧ｷ繝ｪ繧｢繝ｩ繧､繧ｺ
                         json = JsonConvert.SerializeObject(configCopy, Formatting.Indented);
                     }
                     break; // Success, exit retry loop
@@ -3360,14 +3424,14 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                // アトミックな保存処理
+                // 繧｢繝医Α繝・け縺ｪ菫晏ｭ伜・逅・
                 var tempPath = configPath + ".tmp";
                 var backupPath = configPath + ".bak";
 
-                // 1. 一時ファイルに書き込み
+                // 1. 荳譎ゅヵ繧｡繧､繝ｫ縺ｫ譖ｸ縺崎ｾｼ縺ｿ
                 await Task.Run(() => File.WriteAllText(tempPath, json));
 
-                // 2. 現在のファイルが存在する場合はバックアップ
+                // 2. 迴ｾ蝨ｨ縺ｮ繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医・繝舌ャ繧ｯ繧｢繝・・
                 if (File.Exists(configPath))
                 {
                     File.Replace(tempPath, configPath, backupPath);
@@ -3383,7 +3447,7 @@ namespace GmodAddonManager.Core.Services
             {
                 errorHandler.HandleError(ex, "Failed to save configuration", ErrorSeverity.Error);
 
-                // 一時ファイルの削除を試みる
+                // 荳譎ゅヵ繧｡繧､繝ｫ縺ｮ蜑企勁繧定ｩｦ縺ｿ繧・
                 try
                 {
                     var tempPath = configPath + ".tmp";
@@ -3399,17 +3463,17 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         /// <summary>
-        /// デバウンス時間を設定
+        /// 繝・ヰ繧ｦ繝ｳ繧ｹ譎る俣繧定ｨｭ螳・
         /// </summary>
         public int SaveDebounceMilliseconds
         {
             get => _saveDebounceMilliseconds;
             set
             {
-                if (value < 100) value = 100; // 最小100ms
-                if (value > 10000) value = 10000; // 最大10秒
+                if (value < 100) value = 100; // 譛蟆・00ms
+                if (value > 10000) value = 10000; // 譛螟ｧ10遘・
                 _saveDebounceMilliseconds = value;
             }
         }
@@ -3430,9 +3494,9 @@ namespace GmodAddonManager.Core.Services
             var asset = new Asset(name);
             configuration.Assets.Add(asset);
             errorHandler.HandleInfo($"CreateAsset: Asset created with ID: {asset.Id}, Total assets: {configuration.Assets.Count}", "CreateAsset");
-            
-            // Undo記録
-            undoManager.RecordAction(new UndoAction(UndoActionType.AssetCreated, $"アセット「{name}」を作成")
+
+            // Undo險倬鹸
+            undoManager.RecordAction(new UndoAction(UndoActionType.AssetCreated, $"Asset '{name}' created")
             {
                 AssetId = asset.Id,
                 AssetName = name
@@ -3444,8 +3508,8 @@ namespace GmodAddonManager.Core.Services
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset != null)
             {
-                // Undo記録
-                undoManager.RecordAction(new UndoAction(UndoActionType.AssetDeleted, $"アセット「{asset.Name}」を削除")
+                // Undo險倬鹸
+                undoManager.RecordAction(new UndoAction(UndoActionType.AssetDeleted, $"Asset '{asset.Name}' deleted")
                 {
                     AssetId = assetId,
                     AssetName = asset.Name,
@@ -3453,7 +3517,7 @@ namespace GmodAddonManager.Core.Services
                     AffectedAddonIds = new List<string>(asset.Addons),
                     PreviousAddonStates = new Dictionary<string, AddonState>(asset.AddonStates)
                 });
-                
+
                 configuration.Assets.Remove(asset);
             }
         }
@@ -3468,15 +3532,15 @@ namespace GmodAddonManager.Core.Services
                 var beforeHash = ComputeStateHash(beforeSnapshot);
                 var stopwatch = Stopwatch.StartNew();
 
-                // Undo記録
-                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) 
-                    ? configuration.AddonMetadata[addonId] 
+                // Undo險倬鹸
+                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId)
+                    ? configuration.AddonMetadata[addonId]
                     : null;
                 var addonName = addonInfo?.Title ?? addonId;
-                
+
                 undoManager.RecordAction(new UndoAction(
                     UndoActionType.AddonAddedToAsset,
-                    $"「{addonName}」を「{asset.Name}」に追加")
+                    $"Added addon '{addonName}' to asset '{asset.Name}'")
                 {
                     AssetId = assetId,
                     AssetName = asset.Name,
@@ -3484,34 +3548,34 @@ namespace GmodAddonManager.Core.Services
                     AddonName = addonName,
                     AddonState = state
                 });
-                
-                // ジャンクションアセットに追加する場合
+
+                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺ｫ霑ｽ蜉縺吶ｋ蝣ｴ蜷・
                 if (assetId == "junction-system-asset")
                 {
-                    // 元のアセットを記録
+                    // 蜈・・繧｢繧ｻ繝・ヨ繧定ｨ倬鹸
                     var sourceAssets = new List<string>();
                     foreach (var sourceAsset in configuration.Assets)
                     {
-                        if (sourceAsset.Id != "junction-system-asset" && 
+                        if (sourceAsset.Id != "junction-system-asset" &&
                             (sourceAsset.Addons.Contains(addonId) || sourceAsset.ContainsAllAddons()))
                         {
                             sourceAssets.Add(sourceAsset.Id);
                         }
                     }
-                    
+
                     if (sourceAssets.Count > 0)
                     {
                         configuration.JunctionHistory[addonId] = sourceAssets;
                     }
-                    
-                    // 他のアセットから削除
+
+                    // 莉悶・繧｢繧ｻ繝・ヨ縺九ｉ蜑企勁
                     foreach (var otherAsset in configuration.Assets)
                     {
                         if (otherAsset.Id != "junction-system-asset")
                         {
                             if (otherAsset.ContainsAllAddons())
                             {
-                                // 全アドオンを含むアセットの場合は、除外状態に設定
+                                // 蜈ｨ繧｢繝峨が繝ｳ繧貞性繧繧｢繧ｻ繝・ヨ縺ｮ蝣ｴ蜷医・縲・勁螟也憾諷九↓險ｭ螳・
                                 otherAsset.AddonStates[addonId] = AddonState.Excluded;
                             }
                             else
@@ -3521,7 +3585,7 @@ namespace GmodAddonManager.Core.Services
                         }
                     }
                 }
-                
+
                 try
                 {
                     asset.AddAddon(addonId, state);
@@ -3568,30 +3632,30 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        // バッチ処理用メソッド - 大量のアドオンを効率的に追加
+        // 繝舌ャ繝∝・逅・畑繝｡繧ｽ繝・ラ - 螟ｧ驥上・繧｢繝峨が繝ｳ繧貞柑邇・噪縺ｫ霑ｽ蜉
         public void AddAddonsToAssetBatch(string assetId, List<string> addonIds, AddonState state = AddonState.Enabled)
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset != null && !asset.ContainsAllAddons() && addonIds.Count > 0)
             {
-                // Undo記録（バッチ全体で1つ）
+                // Undo險倬鹸・医ヰ繝・メ蜈ｨ菴薙〒1縺､・・
                 undoManager.RecordAction(new UndoAction(
                     UndoActionType.AddonAddedToAsset,
-                    $"{addonIds.Count}個のアドオンを「{asset.Name}」に追加")
+                    $"Added {addonIds.Count} addons to asset '{asset.Name}'")
                 {
                     AssetId = assetId,
                     AssetName = asset.Name,
-                    AddonId = string.Join(",", addonIds), // 複数のIDをカンマ区切りで保存
+                    AddonId = string.Join(",", addonIds), // 隍・焚縺ｮID繧偵き繝ｳ繝槫玄蛻・ｊ縺ｧ菫晏ｭ・
                     AddonState = state
                 });
-                
-                // 全てのアドオンを追加（状態更新なし）
+
+                // 蜈ｨ縺ｦ縺ｮ繧｢繝峨が繝ｳ繧定ｿｽ蜉・育憾諷区峩譁ｰ縺ｪ縺暦ｼ・
                 foreach (var addonId in addonIds)
                 {
                     asset.AddAddon(addonId, state);
                 }
-                
-                // 最後に一度だけ状態を更新
+
+                // 譛蠕後↓荳蠎ｦ縺縺醍憾諷九ｒ譖ｴ譁ｰ
                 UpdateAddonStates();
             }
         }
@@ -3606,18 +3670,18 @@ namespace GmodAddonManager.Core.Services
                 var beforeHash = ComputeStateHash(beforeSnapshot);
                 var stopwatch = Stopwatch.StartNew();
 
-                // 現在の状態を記録
+                // 迴ｾ蝨ｨ縺ｮ迥ｶ諷九ｒ險倬鹸
                 var currentState = asset.GetAddonState(addonId);
-                
-                // Undo記録
-                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) 
-                    ? configuration.AddonMetadata[addonId] 
+
+                // Undo險倬鹸
+                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId)
+                    ? configuration.AddonMetadata[addonId]
                     : null;
                 var addonName = addonInfo?.Title ?? addonId;
-                
+
                 undoManager.RecordAction(new UndoAction(
                     UndoActionType.AddonRemovedFromAsset,
-                    $"「{addonName}」を「{asset.Name}」から削除")
+                    $"Removed addon '{addonName}' from asset '{asset.Name}'")
                 {
                     AssetId = assetId,
                     AssetName = asset.Name,
@@ -3625,7 +3689,7 @@ namespace GmodAddonManager.Core.Services
                     AddonName = addonName,
                     AddonState = currentState
                 });
-                
+
                 try
                 {
                     asset.RemoveAddon(addonId);
@@ -3676,9 +3740,9 @@ namespace GmodAddonManager.Core.Services
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
-            
-            // Undo記録
-            undoManager.RecordAction(new UndoAction(UndoActionType.AssetEnabled, $"アセット「{asset.Name}」を有効化")
+
+            // Undo險倬鹸
+            undoManager.RecordAction(new UndoAction(UndoActionType.AssetEnabled, $"Enabled asset '{asset.Name}'")
             {
                 AssetId = assetId,
                 AssetName = asset.Name,
@@ -3686,22 +3750,22 @@ namespace GmodAddonManager.Core.Services
             });
 
             asset.Enabled = true;
-            
-            // アセット内のすべてのアドオンを有効化
-            var addonIds = asset.ContainsAllAddons() 
+
+            // 繧｢繧ｻ繝・ヨ蜀・・縺吶∋縺ｦ縺ｮ繧｢繝峨が繝ｳ繧呈怏蜉ｹ蛹・
+            var addonIds = asset.ContainsAllAddons()
                 ? configuration.AddonMetadata.Keys.ToList()
                 : asset.Addons.ToList();
-                
+
             foreach (var addonId in addonIds)
             {
-                // 除外されているアドオンはスキップ
+                // 髯､螟悶＆繧後※縺・ｋ繧｢繝峨が繝ｳ縺ｯ繧ｹ繧ｭ繝・・
                 if (asset.GetAddonState(addonId) != AddonState.Excluded)
                 {
                     asset.SetAddonState(addonId, AddonState.Enabled);
                 }
             }
-            
-            // アドオン状態を更新
+
+            // 繧｢繝峨が繝ｳ迥ｶ諷九ｒ譖ｴ譁ｰ
             await UpdateAddonStatesAsync();
         }
 
@@ -3709,9 +3773,9 @@ namespace GmodAddonManager.Core.Services
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
-            
-            // Undo記録
-            undoManager.RecordAction(new UndoAction(UndoActionType.AssetDisabled, $"アセット「{asset.Name}」を無効化")
+
+            // Undo險倬鹸
+            undoManager.RecordAction(new UndoAction(UndoActionType.AssetDisabled, $"Disabled asset '{asset.Name}'")
             {
                 AssetId = assetId,
                 AssetName = asset.Name,
@@ -3719,22 +3783,22 @@ namespace GmodAddonManager.Core.Services
             });
 
             asset.Enabled = false;
-            
-            // アセット内のすべてのアドオンを無効化
-            var addonIds = asset.ContainsAllAddons() 
+
+            // 繧｢繧ｻ繝・ヨ蜀・・縺吶∋縺ｦ縺ｮ繧｢繝峨が繝ｳ繧堤┌蜉ｹ蛹・
+            var addonIds = asset.ContainsAllAddons()
                 ? configuration.AddonMetadata.Keys.ToList()
                 : asset.Addons.ToList();
-                
+
             foreach (var addonId in addonIds)
             {
-                // 現在の状態が除外でない場合のみ無効化
+                // 迴ｾ蝨ｨ縺ｮ迥ｶ諷九′髯､螟悶〒縺ｪ縺・ｴ蜷医・縺ｿ辟｡蜉ｹ蛹・
                 if (asset.GetAddonState(addonId) != AddonState.Excluded)
                 {
                     asset.SetAddonState(addonId, AddonState.Disabled);
                 }
             }
-            
-            // アドオン状態を更新
+
+            // 繧｢繝峨が繝ｳ迥ｶ諷九ｒ譖ｴ譁ｰ
             await UpdateAddonStatesAsync();
         }
 
@@ -3890,16 +3954,16 @@ namespace GmodAddonManager.Core.Services
 
         public string GetWorkshopPath() => workshopPath;
         public string GetManagerPath() => managerPath;
-        
+
         public SteamWorkshopService GetSteamWorkshopService() => steamWorkshopService;
-        
+
         public IIconResolver GetWorkshopIconResolver()
         {
-            var field = steamWorkshopService.GetType().GetField("_iconResolver", 
+            var field = steamWorkshopService.GetType().GetField("_iconResolver",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             return field?.GetValue(steamWorkshopService) as IIconResolver;
         }
-        
+
         public string GetThumbnailCachePath()
         {
             var path = Path.Combine(managerPath, "thumbnails");
@@ -3910,9 +3974,9 @@ namespace GmodAddonManager.Core.Services
             }
             return path;
         }
-        
+
         /// <summary>
-        /// 全アドオンの有効/無効状態を更新
+        /// 蜈ｨ繧｢繝峨が繝ｳ縺ｮ譛牙柑/辟｡蜉ｹ迥ｶ諷九ｒ譖ｴ譁ｰ
         /// </summary>
         public async Task UpdateAddonStatesAsync()
         {
@@ -4687,24 +4751,24 @@ namespace GmodAddonManager.Core.Services
             var finalMatch = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
             return new StateMatchResult(currentSnapshot, expectedSnapshot, finalMatch, stopwatch.ElapsedMilliseconds, metrics);
         }
-        
+
         /// <summary>
-        /// 全アドオンの有効/無効状態を更新（同期版 - 内部使用）
+        /// 蜈ｨ繧｢繝峨が繝ｳ縺ｮ譛牙柑/辟｡蜉ｹ迥ｶ諷九ｒ譖ｴ譁ｰ・亥酔譛溽沿 - 蜀・Κ菴ｿ逕ｨ・・
         /// </summary>
         private void UpdateAddonStates()
         {
             var allAddonIds = configuration.AddonMetadata.Keys.ToList();
-            
+
             foreach (var addonId in allAddonIds)
             {
-                // "*" は特殊な値なのでスキップ
+                // "*" 縺ｯ迚ｹ谿翫↑蛟､縺ｪ縺ｮ縺ｧ繧ｹ繧ｭ繝・・
                 if (addonId == "*")
                 {
                     continue;
                 }
-                
+
                 var finalState = CalculateFinalAddonState(addonId);
-                
+
                 try
                 {
                     if (finalState)
@@ -4727,9 +4791,9 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         /// <summary>
-        /// アドオンの最終的な有効/無効状態を計算
+        /// 繧｢繝峨が繝ｳ縺ｮ譛邨ら噪縺ｪ譛牙柑/辟｡蜉ｹ迥ｶ諷九ｒ險育ｮ・
         /// </summary>
         private bool CalculateFinalAddonState(string addonId)
         {
@@ -4743,7 +4807,7 @@ namespace GmodAddonManager.Core.Services
             IReadOnlyList<Asset> enabledAssets,
             Asset? subscribeAsset)
         {
-            // 除外されているかチェック
+            // 髯､螟悶＆繧後※縺・ｋ縺九メ繧ｧ繝・け
             foreach (var asset in enabledAssets)
             {
                 if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
@@ -4751,12 +4815,12 @@ namespace GmodAddonManager.Core.Services
                     var state = asset.GetAddonState(addonId);
                     if (state == AddonState.Excluded)
                     {
-                        return false; // 除外されている場合は必ず無効
+                        return false; // 髯､螟悶＆繧後※縺・ｋ蝣ｴ蜷医・蠢・★辟｡蜉ｹ
                     }
                 }
             }
 
-            // サブスクライブアセットの状態をチェック
+            // 繧ｵ繝悶せ繧ｯ繝ｩ繧､繝悶い繧ｻ繝・ヨ縺ｮ迥ｶ諷九ｒ繝√ぉ繝・け
             bool isInSubscribe = false;
             bool isSubscribeEnabled = false;
             AddonState subscribeState = AddonState.Disabled;
@@ -4771,7 +4835,7 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            // 他のアセットで有効になっているかチェック
+            // 莉悶・繧｢繧ｻ繝・ヨ縺ｧ譛牙柑縺ｫ縺ｪ縺｣縺ｦ縺・ｋ縺九メ繧ｧ繝・け
             foreach (var asset in enabledAssets)
             {
                 if (asset.IsSystem) continue;
@@ -4782,11 +4846,11 @@ namespace GmodAddonManager.Core.Services
 
                     if (state == AddonState.Enabled)
                     {
-                        return true; // 有効状態のアセットがあれば有効
+                        return true; // 譛牙柑迥ｶ諷九・繧｢繧ｻ繝・ヨ縺後≠繧後・譛牙柑
                     }
                     else if (state == AddonState.Disabled)
                     {
-                        // 無効の場合、サブスクライブアセットが有効な場合のみサブスクライブに依存
+                        // 辟｡蜉ｹ縺ｮ蝣ｴ蜷医√し繝悶せ繧ｯ繝ｩ繧､繝悶い繧ｻ繝・ヨ縺梧怏蜉ｹ縺ｪ蝣ｴ蜷医・縺ｿ繧ｵ繝悶せ繧ｯ繝ｩ繧､繝悶↓萓晏ｭ・
                         if (isInSubscribe && isSubscribeEnabled && subscribeState != AddonState.Excluded)
                         {
                             return true;
@@ -4795,19 +4859,19 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            // どのアセットにも含まれていない、または全て無効の場合
-            // サブスクライブアセットの状態に従う
+            // 縺ｩ縺ｮ繧｢繧ｻ繝・ヨ縺ｫ繧ょ性縺ｾ繧後※縺・↑縺・√∪縺溘・蜈ｨ縺ｦ辟｡蜉ｹ縺ｮ蝣ｴ蜷・
+            // 繧ｵ繝悶せ繧ｯ繝ｩ繧､繝悶い繧ｻ繝・ヨ縺ｮ迥ｶ諷九↓蠕薙≧
             if (subscribeAsset != null)
             {
-                // サブスクライブアセットが有効で、かつアドオンが有効状態の場合のみtrue
+                // 繧ｵ繝悶せ繧ｯ繝ｩ繧､繝悶い繧ｻ繝・ヨ縺梧怏蜉ｹ縺ｧ縲√°縺､繧｢繝峨が繝ｳ縺梧怏蜉ｹ迥ｶ諷九・蝣ｴ蜷医・縺ｿtrue
                 return isSubscribeEnabled && isInSubscribe && subscribeState == AddonState.Enabled;
             }
 
             return false;
         }
-        
+
         /// <summary>
-        /// アドオンの状態を設定
+        /// 繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九ｒ險ｭ螳・
         /// </summary>
         public void SetAddonState(string assetId, string addonId, AddonState state)
         {
@@ -4819,18 +4883,18 @@ namespace GmodAddonManager.Core.Services
                 var beforeHash = ComputeStateHash(beforeSnapshot);
                 var stopwatch = Stopwatch.StartNew();
 
-                // 現在の状態を記録
+                // 迴ｾ蝨ｨ縺ｮ迥ｶ諷九ｒ險倬鹸
                 var previousState = asset.GetAddonState(addonId);
-                
-                // Undo記録
-                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) 
-                    ? configuration.AddonMetadata[addonId] 
+
+                // Undo險倬鹸
+                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId)
+                    ? configuration.AddonMetadata[addonId]
                     : null;
                 var addonName = addonInfo?.Title ?? addonId;
-                
+
                 undoManager.RecordAction(new UndoAction(
-                    UndoActionType.AddonStateChanged, 
-                    $"「{addonName}」の状態を{GetStateDisplayName(state)}に変更")
+                    UndoActionType.AddonStateChanged,
+                    $"Changed addon '{addonName}' to {GetStateDisplayName(state)}")
                 {
                     AssetId = assetId,
                     AssetName = asset.Name,
@@ -4839,11 +4903,11 @@ namespace GmodAddonManager.Core.Services
                     PreviousAddonState = previousState,
                     NewAddonState = state
                 });
-                
+
                 asset.SetAddonState(addonId, state);
                 try
                 {
-                    // 単一のアドオンの状態だけを更新（軽量化）
+                    // 蜊倅ｸ縺ｮ繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九□縺代ｒ譖ｴ譁ｰ・郁ｻｽ驥丞喧・・
                     UpdateSingleAddonState(addonId);
 
                     stopwatch.Stop();
@@ -4886,42 +4950,42 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private string GetStateDisplayName(AddonState state)
         {
             switch (state)
             {
-                case AddonState.Enabled: return "有効";
-                case AddonState.Disabled: return "無効";
-                case AddonState.Excluded: return "除外";
+                case AddonState.Enabled: return "Enabled";
+                case AddonState.Disabled: return "Disabled";
+                case AddonState.Excluded: return "Excluded";
                 default: return state.ToString();
             }
         }
-        
+
         /// <summary>
-        /// 単一のアドオンの状態を更新
+        /// 蜊倅ｸ縺ｮ繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九ｒ譖ｴ譁ｰ
         /// </summary>
         private void UpdateSingleAddonState(string addonId)
         {
             try
             {
-                // "*" は特殊な値なのでスキップ（デバッグレベルでログ）
+                // "*" 縺ｯ迚ｹ谿翫↑蛟､縺ｪ縺ｮ縺ｧ繧ｹ繧ｭ繝・・・医ョ繝舌ャ繧ｰ繝ｬ繝吶Ν縺ｧ繝ｭ繧ｰ・・
                 if (addonId == "*")
                 {
-                    // ワイルドカードは正常な動作なので、警告ではなくデバッグレベルでログ
+                    // 繝ｯ繧､繝ｫ繝峨き繝ｼ繝峨・豁｣蟶ｸ縺ｪ蜍穂ｽ懊↑縺ｮ縺ｧ縲∬ｭｦ蜻翫〒縺ｯ縺ｪ縺上ョ繝舌ャ繧ｰ繝ｬ繝吶Ν縺ｧ繝ｭ繧ｰ
                     errorHandler.HandleInfo("Skipping wildcard addon ID '*' (this is normal behavior)", "UpdateSingleAddonState");
                     return;
                 }
-                
-                // アドオンIDが実際に存在するか確認
+
+                // 繧｢繝峨が繝ｳID縺悟ｮ滄圀縺ｫ蟄伜惠縺吶ｋ縺狗｢ｺ隱・
                 if (!configuration.AddonMetadata.ContainsKey(addonId))
                 {
                     errorHandler.HandleWarning($"Addon not found: {addonId}", "UpdateSingleAddonState");
                     return;
                 }
-                
+
                 var finalState = CalculateFinalAddonState(addonId);
-                
+
                 if (finalState)
                 {
                     EnableAddon(addonId);
@@ -4941,14 +5005,14 @@ namespace GmodAddonManager.Core.Services
                 errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
             }
         }
-        
+
         /// <summary>
-        /// Undoマネージャーを取得
+        /// Undo繝槭ロ繝ｼ繧ｸ繝｣繝ｼ繧貞叙蠕・
         /// </summary>
         public UndoManager GetUndoManager() => undoManager;
-        
+
         /// <summary>
-        /// 最後の操作を元に戻す
+        /// 譛蠕後・謫堺ｽ懊ｒ蜈・↓謌ｻ縺・
         /// </summary>
         public async Task<bool> UndoLastActionAsync()
         {
@@ -4976,16 +5040,16 @@ namespace GmodAddonManager.Core.Services
                 switch (action.Type)
                 {
                     case UndoActionType.AssetCreated:
-                        // 作成されたアセットを削除
+                        // 菴懈・縺輔ｌ縺溘い繧ｻ繝・ヨ繧貞炎髯､
                         if (action.AssetId != null)
                         {
                             configuration.Assets.RemoveAll(a => a.Id == action.AssetId);
                             await SaveConfigurationAsync();
                         }
                         break;
-                        
+
                     case UndoActionType.AssetDeleted:
-                        // 削除されたアセットを復元
+                        // 蜑企勁縺輔ｌ縺溘い繧ｻ繝・ヨ繧貞ｾｩ蜈・
                         if (action.DeletedAsset != null)
                         {
                             configuration.Assets.Add(action.DeletedAsset);
@@ -4993,10 +5057,10 @@ namespace GmodAddonManager.Core.Services
                             UpdateAddonStates();
                         }
                         break;
-                        
+
                     case UndoActionType.AssetEnabled:
                     case UndoActionType.AssetDisabled:
-                        // アセットの有効/無効を元に戻す
+                        // 繧｢繧ｻ繝・ヨ縺ｮ譛牙柑/辟｡蜉ｹ繧貞・縺ｫ謌ｻ縺・
                         if (action.AssetId != null)
                         {
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
@@ -5008,9 +5072,9 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
                         break;
-                        
+
                     case UndoActionType.AddonStateChanged:
-                        // アドオンの状態を元に戻す
+                        // 繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九ｒ蜈・↓謌ｻ縺・
                         if (action.AssetId != null && action.AddonId != null && action.PreviousAddonState.HasValue)
                         {
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
@@ -5022,9 +5086,9 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
                         break;
-                        
+
                     case UndoActionType.AddonAddedToAsset:
-                        // アドオンをアセットから削除
+                        // 繧｢繝峨が繝ｳ繧偵い繧ｻ繝・ヨ縺九ｉ蜑企勁
                         if (action.AssetId != null && action.AddonId != null)
                         {
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
@@ -5036,9 +5100,9 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
                         break;
-                        
+
                     case UndoActionType.AddonRemovedFromAsset:
-                        // アドオンをアセットに追加
+                        // 繧｢繝峨が繝ｳ繧偵い繧ｻ繝・ヨ縺ｫ霑ｽ蜉
                         if (action.AssetId != null && action.AddonId != null)
                         {
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
@@ -5051,7 +5115,7 @@ namespace GmodAddonManager.Core.Services
                         }
                         break;
                 }
-                
+
                 success = true;
                 return true;
             }
@@ -5092,24 +5156,24 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         /// <summary>
-        /// ジャンクションアセットが存在することを確認
+        /// 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺悟ｭ伜惠縺吶ｋ縺薙→繧堤｢ｺ隱・
         /// </summary>
         private void EnsureJunctionAssetExists()
         {
             var junctionAsset = configuration.Assets.FirstOrDefault(a => a.Id == "junction-system-asset");
             if (junctionAsset == null)
             {
-                junctionAsset = new Asset("ジャンクション", true);
+                junctionAsset = new Asset("繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ", true);
                 junctionAsset.Id = "junction-system-asset";
                 junctionAsset.Enabled = false;
                 configuration.Assets.Add(junctionAsset);
             }
         }
-        
+
         /// <summary>
-        /// ジャンクション状態のアドオンを検出してジャンクションアセットを更新
+        /// 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ迥ｶ諷九・繧｢繝峨が繝ｳ繧呈､懷・縺励※繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ繧呈峩譁ｰ
         /// </summary>
         public async Task UpdateJunctionAssetAsync()
         {
@@ -5117,12 +5181,12 @@ namespace GmodAddonManager.Core.Services
             {
                 var junctionAsset = configuration.Assets.FirstOrDefault(a => a.Id == "junction-system-asset");
                 if (junctionAsset == null) return;
-                
-                // 全アドオンをチェック
+
+                // 蜈ｨ繧｢繝峨が繝ｳ繧偵メ繧ｧ繝・け
                 var allAddons = configuration.AddonMetadata;
                 var orphanedAddons = new List<string>();
-                
-                // 他のアセットに属しているアドオンを収集
+
+                // 莉悶・繧｢繧ｻ繝・ヨ縺ｫ螻槭＠縺ｦ縺・ｋ繧｢繝峨が繝ｳ繧貞庶髮・
                 var addonsInOtherAssets = new HashSet<string>();
                 foreach (var asset in configuration.Assets)
                 {
@@ -5130,7 +5194,7 @@ namespace GmodAddonManager.Core.Services
                     {
                         if (asset.ContainsAllAddons())
                         {
-                            // 全アドオンを含むアセットがある場合は、全てのアドオンが管理されている
+                            // 蜈ｨ繧｢繝峨が繝ｳ繧貞性繧繧｢繧ｻ繝・ヨ縺後≠繧句ｴ蜷医・縲∝・縺ｦ縺ｮ繧｢繝峨が繝ｳ縺檎ｮ｡逅・＆繧後※縺・ｋ
                             addonsInOtherAssets.UnionWith(allAddons.Keys);
                         }
                         else
@@ -5139,27 +5203,27 @@ namespace GmodAddonManager.Core.Services
                         }
                     }
                 }
-                
-                // どのアセットにも属していないアドオンを探す
+
+                // 縺ｩ縺ｮ繧｢繧ｻ繝・ヨ縺ｫ繧ょｱ槭＠縺ｦ縺・↑縺・い繝峨が繝ｳ繧呈爾縺・
                 foreach (var addon in allAddons)
                 {
                     if (!addonsInOtherAssets.Contains(addon.Key))
                     {
                         var addonPath = Path.Combine(workshopPath, addon.Key);
                         var sourcePath = Path.Combine(addonsPath, addon.Key);
-                        
-                        // アドオンが実際に存在するかチェック
+
+                        // 繧｢繝峨が繝ｳ縺悟ｮ滄圀縺ｫ蟄伜惠縺吶ｋ縺九メ繧ｧ繝・け
                         bool addonExists = false;
-                        
+
                         // Check if it's a GMA file addon
                         if (addon.Value.IsGmaFile)
                         {
                             string gmaCachePath = Path.Combine(gmodCachePath ?? "", addon.Key + ".gma");
                             string gmaSourcePath = Path.Combine(addonsPath, addon.Key + ".gma");
-                            
-                            // GMAファイルが管理フォルダまたはキャッシュに存在するか確認
+
+                            // GMA繝輔ぃ繧､繝ｫ縺檎ｮ｡逅・ヵ繧ｩ繝ｫ繝縺ｾ縺溘・繧ｭ繝｣繝・す繝･縺ｫ蟄伜惠縺吶ｋ縺狗｢ｺ隱・
                             addonExists = File.Exists(gmaSourcePath) || File.Exists(gmaCachePath);
-                            
+
                             // GMA file exists in managed folder = disabled
                             if (addonExists && File.Exists(gmaSourcePath) && !File.Exists(gmaCachePath))
                             {
@@ -5168,96 +5232,96 @@ namespace GmodAddonManager.Core.Services
                         }
                         else
                         {
-                            // ソースディレクトリが存在するかチェック
-                            addonExists = Directory.Exists(sourcePath) || 
+                            // 繧ｽ繝ｼ繧ｹ繝・ぅ繝ｬ繧ｯ繝医Μ縺悟ｭ伜惠縺吶ｋ縺九メ繧ｧ繝・け
+                            addonExists = Directory.Exists(sourcePath) ||
                                         (Directory.Exists(addonPath) && !junctionService.IsJunction(addonPath));
-                            
+
                             if (addonExists && Directory.Exists(sourcePath))
                             {
-                                // ジャンクションの存在をチェック
+                                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蟄伜惠繧偵メ繧ｧ繝・け
                                 bool hasJunction = Directory.Exists(addonPath) && junctionService.IsJunction(addonPath);
-                                
-                                // どのアセットにも属しておらず、ジャンクションが存在しない = 孤立した無効化アドオン
+
+                                // 縺ｩ縺ｮ繧｢繧ｻ繝・ヨ縺ｫ繧ょｱ槭＠縺ｦ縺翫ｉ縺壹√ず繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺悟ｭ伜惠縺励↑縺・= 蟄､遶九＠縺溽┌蜉ｹ蛹悶い繝峨が繝ｳ
                                 if (!hasJunction)
                                 {
                                     orphanedAddons.Add(addon.Key);
                                 }
                             }
                         }
-                        
-                        // アドオンが存在しない場合はスキップ（Workshopから削除された）
+
+                        // 繧｢繝峨が繝ｳ縺悟ｭ伜惠縺励↑縺・ｴ蜷医・繧ｹ繧ｭ繝・・・・orkshop縺九ｉ蜑企勁縺輔ｌ縺滂ｼ・
                         if (!addonExists)
                         {
                             continue;
                         }
                     }
                 }
-                
-                // ジャンクションアセットを更新（明示的に追加されたものは保持）
-                // 孤立したアドオンのみを追加
+
+                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ繧呈峩譁ｰ・域・遉ｺ逧・↓霑ｽ蜉縺輔ｌ縺溘ｂ縺ｮ縺ｯ菫晄戟・・
+                // 蟄､遶九＠縺溘い繝峨が繝ｳ縺ｮ縺ｿ繧定ｿｽ蜉
                 foreach (var addonId in orphanedAddons)
                 {
-                    // "*" は特殊な値なので追加しない
+                    // "*" 縺ｯ迚ｹ谿翫↑蛟､縺ｪ縺ｮ縺ｧ霑ｽ蜉縺励↑縺・
                     if (addonId == "*")
                     {
                         errorHandler.HandleWarning("Skipping wildcard '*' addon", "UpdateJunctionAsset");
                         continue;
                     }
-                    
+
                     if (!junctionAsset.Addons.Contains(addonId))
                     {
                         junctionAsset.AddAddon(addonId, AddonState.Disabled);
                     }
                 }
-                
-                // ジャンクションアセットから削除すべきアドオンを特定
-                // ただし、手動で追加されたアドオンは保持する
+
+                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺九ｉ蜑企勁縺吶∋縺阪い繝峨が繝ｳ繧堤音螳・
+                // 縺溘□縺励∵焔蜍輔〒霑ｽ蜉縺輔ｌ縺溘い繝峨が繝ｳ縺ｯ菫晄戟縺吶ｋ
                 var toRemove = new List<string>();
                 foreach (var addonId in junctionAsset.Addons)
                 {
-                    // "*" は特殊な値なのでスキップ
+                    // "*" 縺ｯ迚ｹ谿翫↑蛟､縺ｪ縺ｮ縺ｧ繧ｹ繧ｭ繝・・
                     if (addonId == "*")
                     {
                         errorHandler.HandleWarning("Removing wildcard '*' from junction asset", "UpdateJunctionAsset");
                         toRemove.Add(addonId);
                         continue;
                     }
-                    
-                    // 他のアセットに存在し、かつ孤立していないアドオンのみ削除対象
-                    // ただし、AddonStatesに記録されている（手動追加された）アドオンは削除しない
-                    if (addonsInOtherAssets.Contains(addonId) && 
-                        !orphanedAddons.Contains(addonId) && 
+
+                    // 莉悶・繧｢繧ｻ繝・ヨ縺ｫ蟄伜惠縺励√°縺､蟄､遶九＠縺ｦ縺・↑縺・い繝峨が繝ｳ縺ｮ縺ｿ蜑企勁蟇ｾ雎｡
+                    // 縺溘□縺励、ddonStates縺ｫ險倬鹸縺輔ｌ縺ｦ縺・ｋ・域焔蜍戊ｿｽ蜉縺輔ｌ縺滂ｼ峨い繝峨が繝ｳ縺ｯ蜑企勁縺励↑縺・
+                    if (addonsInOtherAssets.Contains(addonId) &&
+                        !orphanedAddons.Contains(addonId) &&
                         !junctionAsset.AddonStates.ContainsKey(addonId))
                     {
                         toRemove.Add(addonId);
                     }
                 }
-                
+
                 foreach (var addonId in toRemove)
                 {
                     junctionAsset.RemoveAddon(addonId);
                 }
-                
+
             }
             catch (Exception ex)
             {
                 errorHandler.HandleError(ex, "Failed to update junction asset", ErrorSeverity.Warning);
             }
         }
-        
+
         /// <summary>
-        /// ジャンクションアドオンを元のアセットに戻す
+        /// 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繝峨が繝ｳ繧貞・縺ｮ繧｢繧ｻ繝・ヨ縺ｫ謌ｻ縺・
         /// </summary>
         public void RestoreAddonFromJunction(string addonId)
         {
-            // ジャンクションアセットから削除
+            // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺九ｉ蜑企勁
             var junctionAsset = configuration.Assets.FirstOrDefault(a => a.Id == "junction-system-asset");
             if (junctionAsset != null)
             {
                 junctionAsset.RemoveAddon(addonId);
             }
-            
-            // 元のアセットに戻す
+
+            // 蜈・・繧｢繧ｻ繝・ヨ縺ｫ謌ｻ縺・
             if (configuration.JunctionHistory.TryGetValue(addonId, out var sourceAssetIds))
             {
                 foreach (var assetId in sourceAssetIds)
@@ -5267,7 +5331,7 @@ namespace GmodAddonManager.Core.Services
                     {
                         if (asset.ContainsAllAddons())
                         {
-                            // 全アドオンを含むアセットの場合は、除外状態を解除
+                            // 蜈ｨ繧｢繝峨が繝ｳ繧貞性繧繧｢繧ｻ繝・ヨ縺ｮ蝣ｴ蜷医・縲・勁螟也憾諷九ｒ隗｣髯､
                             asset.AddonStates.Remove(addonId);
                         }
                         else
@@ -5276,16 +5340,16 @@ namespace GmodAddonManager.Core.Services
                         }
                     }
                 }
-                
-                // 履歴から削除
+
+                // 螻･豁ｴ縺九ｉ蜑企勁
                 configuration.JunctionHistory.Remove(addonId);
             }
-            
+
             UpdateAddonStates();
         }
-        
+
         /// <summary>
-        /// アドオンの元のアセットを取得
+        /// 繧｢繝峨が繝ｳ縺ｮ蜈・・繧｢繧ｻ繝・ヨ繧貞叙蠕・
         /// </summary>
         public List<string> GetAddonSourceAssets(string addonId)
         {
@@ -5295,19 +5359,18 @@ namespace GmodAddonManager.Core.Services
             }
             return new List<string>();
         }
-        
+
         /// <summary>
-        /// 移行中に既存ディレクトリが見つかった場合の処理
+        /// 遘ｻ陦御ｸｭ縺ｫ譌｢蟄倥ョ繧｣繝ｬ繧ｯ繝医Μ縺瑚ｦ九▽縺九▲縺溷ｴ蜷医・蜃ｦ逅・
         /// </summary>
         private void HandleExistingDirectoryDuringMigration(string directory, string targetPath, string dirName)
         {
-            // 実体フォルダが存在する場合、管理フォルダに移動してからジャンクション作成
-            errorHandler.HandleWarning($"Found real folder instead of junction for addon {dirName} during migration. Converting to managed addon.", "MigrateExistingAddons");
-            
+            // 螳滉ｽ薙ヵ繧ｩ繝ｫ繝縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医∫ｮ｡逅・ヵ繧ｩ繝ｫ繝縺ｫ遘ｻ蜍輔＠縺ｦ縺九ｉ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ菴懈・
+
             string tempPath = directory + "_temp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
             Directory.Move(directory, tempPath);
             bool movedToTarget = false;
-            
+
             try
             {
                 if (!Directory.Exists(targetPath))
@@ -5349,7 +5412,7 @@ namespace GmodAddonManager.Core.Services
                     }
                     catch (Exception ex)
                     {
-                        // ロールバックは難しいので、テンポラリを残して警告に留める
+                        // 繝ｭ繝ｼ繝ｫ繝舌ャ繧ｯ縺ｯ髮｣縺励＞縺ｮ縺ｧ縲√ユ繝ｳ繝昴Λ繝ｪ繧呈ｮ九＠縺ｦ隴ｦ蜻翫↓逡吶ａ繧・
                         errorHandler.HandleError(ex,
                             $"Failed to merge addon {dirName} contents into managed folder. Leaving temp folder: {tempPath}",
                             ErrorSeverity.Warning);
@@ -5358,7 +5421,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch
             {
-                // 失敗した場合は元に戻す
+                // 螟ｱ謨励＠縺溷ｴ蜷医・蜈・↓謌ｻ縺・
                 EnsureWorkshopPathAvailableForRestore(directory);
 
                 if (Directory.Exists(tempPath) && !Directory.Exists(directory))
@@ -5374,106 +5437,106 @@ namespace GmodAddonManager.Core.Services
         }
 
         /// <summary>
-        /// ディレクトリをマージする
+        /// 繝・ぅ繝ｬ繧ｯ繝医Μ繧偵・繝ｼ繧ｸ縺吶ｋ
         /// </summary>
         private void MergeDirectories(string source, string destination)
         {
             ValidatePath(source, "source");
             ValidatePath(destination, "destination");
-            
+
             foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
             {
-                // .NET Standard 2.0対応のため手動で相対パスを計算
+                // .NET Standard 2.0蟇ｾ蠢懊・縺溘ａ謇句虚縺ｧ逶ｸ蟇ｾ繝代せ繧定ｨ育ｮ・
                 string relativePath = file.Substring(source.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 string destFile = Path.Combine(destination, relativePath);
                 ValidatePath(destFile, "destFile");
-                
+
                 Directory.CreateDirectory(Path.GetDirectoryName(destFile));
-                
+
                 if (File.Exists(destFile))
                 {
                     File.Delete(destFile);
                 }
-                
+
                 File.Move(file, destFile);
             }
         }
-        
+
         public async Task ResetManagerAsync()
         {
             errorHandler.HandleInfo("Starting full reset of addon manager", "ResetManager");
-            
-            // RestoreOriginalStateAsyncを使用して、すべてのアドオンを元の状態に戻す
+
+            // RestoreOriginalStateAsync繧剃ｽｿ逕ｨ縺励※縲√☆縺ｹ縺ｦ縺ｮ繧｢繝峨が繝ｳ繧貞・縺ｮ迥ｶ諷九↓謌ｻ縺・
             await RestoreOriginalStateAsync();
-            
-            // 設定を再初期化
+
+            // 險ｭ螳壹ｒ蜀榊・譛溷喧
             configuration = new Configuration();
-            
-            // ディレクトリを再作成して初期化
+
+            // 繝・ぅ繝ｬ繧ｯ繝医Μ繧貞・菴懈・縺励※蛻晄悄蛹・
             await InitializeAsync();
-            
+
             errorHandler.HandleInfo("Full reset completed successfully", "ResetManager");
         }
-        
+
         public async Task RestoreOriginalStateAsync()
         {
             errorHandler.HandleInfo("Starting RestoreOriginalStateAsync", "RestoreOriginalState");
-            
-            // ステップ1: すべてのジャンクション/ハードリンクを削除
+
+            // 繧ｹ繝・ャ繝・: 縺吶∋縺ｦ縺ｮ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ/繝上・繝峨Μ繝ｳ繧ｯ繧貞炎髯､
             await RemoveAllJunctionsAndHardLinksAsync();
-            
-            // ステップ2: 管理ディレクトリからファイルを元の場所に戻す
+
+            // 繧ｹ繝・ャ繝・: 邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ縺九ｉ繝輔ぃ繧､繝ｫ繧貞・縺ｮ蝣ｴ謇縺ｫ謌ｻ縺・
             await RestoreManagedAddonsAsync();
-            
-            // ステップ3: 管理ディレクトリとキャッシュディレクトリを削除
+
+            // 繧ｹ繝・ャ繝・: 邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ縺ｨ繧ｭ繝｣繝・す繝･繝・ぅ繝ｬ繧ｯ繝医Μ繧貞炎髯､
             await CleanupManagerDirectoriesAsync();
-            
-            // ステップ4: 設定ファイルを削除（完全にクリーンな状態に）
+
+            // 繧ｹ繝・ャ繝・: 險ｭ螳壹ヵ繧｡繧､繝ｫ繧貞炎髯､・亥ｮ悟・縺ｫ繧ｯ繝ｪ繝ｼ繝ｳ縺ｪ迥ｶ諷九↓・・
             if (File.Exists(configPath))
             {
                 ValidatePath(configPath, "configPath");
                 File.Delete(configPath);
             }
-            
+
             if (File.Exists(pendingPath))
             {
                 ValidatePath(pendingPath, "pendingPath");
                 File.Delete(pendingPath);
             }
-            
+
             errorHandler.HandleInfo("RestoreOriginalStateAsync completed successfully", "RestoreOriginalState");
         }
-        
+
         private async Task RemoveAllJunctionsAndHardLinksAsync()
         {
             errorHandler.HandleInfo("Removing all junctions and hard links", "RemoveAllJunctionsAndHardLinks");
-            
-            // Workshopパス内のすべてのエントリをチェック
+
+            // Workshop繝代せ蜀・・縺吶∋縺ｦ縺ｮ繧ｨ繝ｳ繝医Μ繧偵メ繧ｧ繝・け
             foreach (var entry in Directory.GetDirectories(workshopPath))
             {
                 var dirName = Path.GetFileName(entry);
-                
+
                 try
                 {
-                    // ジャンクションの場合は削除
+                    // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蝣ｴ蜷医・蜑企勁
                     if (junctionService.IsJunction(entry))
                     {
                         errorHandler.HandleInfo($"Removing junction: {dirName}", "RemoveAllJunctionsAndHardLinks");
                         junctionService.RemoveJunction(entry);
                     }
-                    // 通常のディレクトリでGMAハードリンクを含む可能性がある場合
+                    // 騾壼ｸｸ縺ｮ繝・ぅ繝ｬ繧ｯ繝医Μ縺ｧGMA繝上・繝峨Μ繝ｳ繧ｯ繧貞性繧蜿ｯ閭ｽ諤ｧ縺後≠繧句ｴ蜷・
                     else
                     {
                         var gmaPath = Path.Combine(entry, $"{dirName}.gma");
                         if (File.Exists(gmaPath))
                         {
-                            // ハードリンクかどうかチェックして削除
+                            // 繝上・繝峨Μ繝ｳ繧ｯ縺九←縺・°繝√ぉ繝・け縺励※蜑企勁
                             var managedGmaPath = Path.Combine(addonsPath, dirName, $"{dirName}.gma");
                             if (File.Exists(managedGmaPath) && junctionService.IsHardLink(gmaPath, managedGmaPath))
                             {
                                 errorHandler.HandleInfo($"Removing hard link: {gmaPath}", "RemoveAllJunctionsAndHardLinks");
                                 junctionService.RemoveHardLink(gmaPath);
-                                // 空のディレクトリも削除
+                                // 遨ｺ縺ｮ繝・ぅ繝ｬ繧ｯ繝医Μ繧ょ炎髯､
                                 if (!Directory.GetFileSystemEntries(entry).Any())
                                 {
                                     Directory.Delete(entry);
@@ -5487,8 +5550,8 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleError(ex, $"Failed to process directory: {dirName}", ErrorSeverity.Warning);
                 }
             }
-            
-            // キャッシュディレクトリ内のハードリンクも削除
+
+            // 繧ｭ繝｣繝・す繝･繝・ぅ繝ｬ繧ｯ繝医Μ蜀・・繝上・繝峨Μ繝ｳ繧ｯ繧ょ炎髯､
             if (!string.IsNullOrEmpty(gmodCachePath) && Directory.Exists(gmodCachePath))
             {
                 foreach (var gmaFile in Directory.GetFiles(gmodCachePath, "*.gma"))
@@ -5496,7 +5559,7 @@ namespace GmodAddonManager.Core.Services
                     var fileName = Path.GetFileName(gmaFile);
                     var addonId = Path.GetFileNameWithoutExtension(fileName);
                     var managedGmaPath = Path.Combine(gmodCacheAddonsPath ?? "", $"{addonId}.gma");
-                    
+
                     if (File.Exists(managedGmaPath) && junctionService.IsHardLink(gmaFile, managedGmaPath))
                     {
                         try
@@ -5512,12 +5575,12 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private async Task RestoreManagedAddonsAsync()
         {
             errorHandler.HandleInfo("Restoring managed addons to original locations", "RestoreManagedAddons");
-            
-            // 管理ディレクトリ内のすべてのアドオンを元の場所に戻す
+
+            // 邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ蜀・・縺吶∋縺ｦ縺ｮ繧｢繝峨が繝ｳ繧貞・縺ｮ蝣ｴ謇縺ｫ謌ｻ縺・
             if (Directory.Exists(addonsPath))
             {
                 foreach (var managedAddonPath in Directory.GetDirectories(addonsPath))
@@ -5526,10 +5589,10 @@ namespace GmodAddonManager.Core.Services
                     var originalPath = Path.Combine(workshopPath, addonId);
                     ValidatePath(managedAddonPath, "managedAddonPath");
                     ValidatePath(originalPath, "originalPath");
-                    
+
                     try
                     {
-                        // 元の場所にディレクトリが存在しない場合のみ移動
+                        // 蜈・・蝣ｴ謇縺ｫ繝・ぅ繝ｬ繧ｯ繝医Μ縺悟ｭ伜惠縺励↑縺・ｴ蜷医・縺ｿ遘ｻ蜍・
                         if (!Directory.Exists(originalPath))
                         {
                             errorHandler.HandleInfo($"Moving addon {addonId} back to workshop", "RestoreManagedAddons");
@@ -5537,7 +5600,7 @@ namespace GmodAddonManager.Core.Services
                         }
                         else
                         {
-                            // 既に存在する場合はマージ処理
+                            // 譌｢縺ｫ蟄伜惠縺吶ｋ蝣ｴ蜷医・繝槭・繧ｸ蜃ｦ逅・
                             errorHandler.HandleInfo($"Merging addon {addonId} back to workshop", "RestoreManagedAddons");
                             MergeDirectories(managedAddonPath, originalPath);
                             Directory.Delete(managedAddonPath, true);
@@ -5549,8 +5612,8 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
-            // キャッシュ管理ディレクトリ内のGMAファイルも元の場所に戻す
+
+            // 繧ｭ繝｣繝・す繝･邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ蜀・・GMA繝輔ぃ繧､繝ｫ繧ょ・縺ｮ蝣ｴ謇縺ｫ謌ｻ縺・
             if (!string.IsNullOrEmpty(gmodCacheAddonsPath) && Directory.Exists(gmodCacheAddonsPath))
             {
                 foreach (var gmaFile in Directory.GetFiles(gmodCacheAddonsPath, "*.gma"))
@@ -5559,7 +5622,7 @@ namespace GmodAddonManager.Core.Services
                     var originalPath = Path.Combine(gmodCachePath, fileName);
                     ValidatePath(gmaFile, "gmaFile");
                     ValidatePath(originalPath, "originalPath");
-                    
+
                     try
                     {
                         if (!File.Exists(originalPath))
@@ -5575,12 +5638,12 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private async Task CleanupManagerDirectoriesAsync()
         {
             errorHandler.HandleInfo("Cleaning up manager directories", "CleanupManagerDirectories");
-            
-            // 管理ディレクトリを削除
+
+            // 邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ繧貞炎髯､
             if (Directory.Exists(managerPath))
             {
                 try
@@ -5594,8 +5657,8 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleError(ex, "Failed to delete manager directory", ErrorSeverity.Warning);
                 }
             }
-            
-            // キャッシュ管理ディレクトリを削除
+
+            // 繧ｭ繝｣繝・す繝･邂｡逅・ョ繧｣繝ｬ繧ｯ繝医Μ繧貞炎髯､
             if (!string.IsNullOrEmpty(gmodCacheManagerPath) && Directory.Exists(gmodCacheManagerPath))
             {
                 try
@@ -5610,7 +5673,7 @@ namespace GmodAddonManager.Core.Services
                 }
             }
         }
-        
+
         private async Task DisableAllAddonsAsync()
         {
             var allAddons = configuration.AddonMetadata.Keys.ToList();
@@ -5633,16 +5696,16 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch
                 {
-                    // エラーは無視して続行
+                    // 繧ｨ繝ｩ繝ｼ縺ｯ辟｡隕悶＠縺ｦ邯夊｡・
                 }
             }
         }
-        
+
         /// <summary>
-        /// リソースのクリーンアップ
+        /// 繝ｪ繧ｽ繝ｼ繧ｹ縺ｮ繧ｯ繝ｪ繝ｼ繝ｳ繧｢繝・・
         /// </summary>
         /// <summary>
-        /// 未完了の操作をチェックして復旧オプションを提供
+        /// 譛ｪ螳御ｺ・・謫堺ｽ懊ｒ繝√ぉ繝・け縺励※蠕ｩ譌ｧ繧ｪ繝励す繝ｧ繝ｳ繧呈署萓・
         /// </summary>
         private async Task CheckIncompleteOperationsAsync()
         {
@@ -5650,32 +5713,32 @@ namespace GmodAddonManager.Core.Services
             if (incompleteLogs.Count > 0)
             {
                 errorHandler.HandleWarning($"Found {incompleteLogs.Count} incomplete operations from previous session", "CheckIncompleteOperations");
-                
-                // ここでUIに通知するか、自動復旧を試みる
-                // 現時点では警告のみ
+
+                // 縺薙％縺ｧUI縺ｫ騾夂衍縺吶ｋ縺九∬・蜍募ｾｩ譌ｧ繧定ｩｦ縺ｿ繧・
+                // 迴ｾ譎らせ縺ｧ縺ｯ隴ｦ蜻翫・縺ｿ
                 foreach (var log in incompleteLogs)
                 {
                     errorHandler.HandleWarning(
                         $"Incomplete {log.Type} operation from {log.StartTime:yyyy-MM-dd HH:mm:ss} with {log.Items.Count} items",
                         "IncompleteOperation"
                     );
-                    
-                    // 操作をクリーンアップ（必要に応じて復旧処理を追加）
+
+                    // 謫堺ｽ懊ｒ繧ｯ繝ｪ繝ｼ繝ｳ繧｢繝・・・亥ｿ・ｦ√↓蠢懊§縺ｦ蠕ｩ譌ｧ蜃ｦ逅・ｒ霑ｽ蜉・・
                     operationLogManager.RemoveLog(log.Id);
                 }
             }
         }
-        
+
         /// <summary>
-        /// システムの整合性をチェックして修復
+        /// 繧ｷ繧ｹ繝・Β縺ｮ謨ｴ蜷域ｧ繧偵メ繧ｧ繝・け縺励※菫ｮ蠕ｩ
         /// </summary>
 	        private async Task ValidateSystemIntegrityAsync()
 	        {
 	            errorHandler.HandleInfo("Starting system integrity check...", "ValidateSystemIntegrity");
-            
+
             var repairCount = 0;
-            
-            // 1. 設定ファイルのバックアップチェック
+
+            // 1. 險ｭ螳壹ヵ繧｡繧､繝ｫ縺ｮ繝舌ャ繧ｯ繧｢繝・・繝√ぉ繝・け
             var backupPath = configPath + ".bak";
             if (!File.Exists(backupPath) && File.Exists(configPath))
             {
@@ -5690,23 +5753,23 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleWarning($"Failed to create configuration backup", "ValidateAndRepairConfiguration");
                 }
             }
-            
-	            // 2. ジャンクション/ハードリンクの検証
+
+	            // 2. 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ/繝上・繝峨Μ繝ｳ繧ｯ縺ｮ讀懆ｨｼ
 	            foreach (var kvp in configuration.AddonMetadata.ToList())
 	            {
 	                var addon = kvp.Value;
 	                var addonId = kvp.Key;
-	                
+
 	                try
 	                {
 	                    if (addon.IsGmaFile)
 	                    {
-	                        // GMAファイルのハードリンクチェック
+	                        // GMA繝輔ぃ繧､繝ｫ縺ｮ繝上・繝峨Μ繝ｳ繧ｯ繝√ぉ繝・け
 	                        if (!string.IsNullOrEmpty(gmodCachePath))
 	                        {
 	                            var cachePath = Path.Combine(gmodCachePath, addonId + ".gma");
-	                            
-	                            // 有効化されるべきアドオンのみ、キャッシュ側のリンク欠損を修復する
+
+	                            // 譛牙柑蛹悶＆繧後ｋ縺ｹ縺阪い繝峨が繝ｳ縺ｮ縺ｿ縲√く繝｣繝・す繝･蛛ｴ縺ｮ繝ｪ繝ｳ繧ｯ谺謳阪ｒ菫ｮ蠕ｩ縺吶ｋ
 	                            var shouldBeEnabled = CalculateFinalAddonState(addonId);
 	                            if (shouldBeEnabled && !File.Exists(cachePath))
 	                            {
@@ -5725,16 +5788,16 @@ namespace GmodAddonManager.Core.Services
 	                    }
 	                    else
 	                    {
-	                        // フォルダアドオンのジャンクションチェック（Workshop側にリンクがあるのが正）
+	                        // 繝輔か繝ｫ繝繧｢繝峨が繝ｳ縺ｮ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繝√ぉ繝・け・・orkshop蛛ｴ縺ｫ繝ｪ繝ｳ繧ｯ縺後≠繧九・縺梧ｭ｣・・
 	                        var workshopAddonPath = Path.Combine(workshopPath, addonId);
 	                        var managedAddonPath = Path.Combine(addonsPath, addonId);
 
-	                        // 期待される最終状態に基づいて修復（起動直後にUpdateAddonStatesAsyncも走るため、ここは安全側に寄せる）
+	                        // 譛溷ｾ・＆繧後ｋ譛邨ら憾諷九↓蝓ｺ縺･縺・※菫ｮ蠕ｩ・郁ｵｷ蜍慕峩蠕後↓UpdateAddonStatesAsync繧りｵｰ繧九◆繧√√％縺薙・螳牙・蛛ｴ縺ｫ蟇・○繧具ｼ・
 	                        var shouldBeEnabled = CalculateFinalAddonState(addonId);
 
 	                        if (shouldBeEnabled)
 	                        {
-	                            // 管理フォルダ実体がある場合のみ、Workshop側の欠損を補う
+	                            // 邂｡逅・ヵ繧ｩ繝ｫ繝螳滉ｽ薙′縺ゅｋ蝣ｴ蜷医・縺ｿ縲仝orkshop蛛ｴ縺ｮ谺謳阪ｒ陬懊≧
 	                            if (Directory.Exists(managedAddonPath))
 	                            {
 	                                if (!Directory.Exists(workshopAddonPath))
@@ -5745,12 +5808,12 @@ namespace GmodAddonManager.Core.Services
 	                                }
 	                                else if (junctionService.IsJunction(workshopAddonPath))
 	                                {
-	                                    // 既にジャンクションなら、CreateJunctionの同一ターゲット判定に任せて整合性を取る
+	                                    // 譌｢縺ｫ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺ｪ繧峨，reateJunction縺ｮ蜷御ｸ繧ｿ繝ｼ繧ｲ繝・ヨ蛻､螳壹↓莉ｻ縺帙※謨ｴ蜷域ｧ繧貞叙繧・
 	                                    CreateJunctionWithMetrics(workshopAddonPath, managedAddonPath);
 	                                }
 	                                else
 	                                {
-	                                    // まずGAMのスタブ(.gam_disabled)なら安全に差し替え可能
+	                                    // 縺ｾ縺哦AM縺ｮ繧ｹ繧ｿ繝・.gam_disabled)縺ｪ繧牙ｮ牙・縺ｫ蟾ｮ縺玲崛縺亥庄閭ｽ
 	                                    if (RemoveDisabledStub(workshopPath, addonId))
 	                                    {
 	                                        errorHandler.HandleWarning($"Repairing workshop stub for {addonId}", "ValidateSystemIntegrity");
@@ -5759,7 +5822,7 @@ namespace GmodAddonManager.Core.Services
 	                                    }
 	                                    else
 	                                    {
-	                                        // 空ディレクトリ（移行失敗などで残ることがある）なら安全に差し替える
+	                                        // 遨ｺ繝・ぅ繝ｬ繧ｯ繝医Μ・育ｧｻ陦悟､ｱ謨励↑縺ｩ縺ｧ谿九ｋ縺薙→縺後≠繧具ｼ峨↑繧牙ｮ牙・縺ｫ蟾ｮ縺玲崛縺医ｋ
 	                                        bool isEmpty = false;
 	                                        try
 	                                        {
@@ -5779,7 +5842,7 @@ namespace GmodAddonManager.Core.Services
 	                                        }
 	                                        else
 	                                        {
-	                                            // 実体フォルダ（Steamが生成/再DL等）の場合は自動で移動・削除せず警告のみ
+	                                            // 螳滉ｽ薙ヵ繧ｩ繝ｫ繝・・team縺檎函謌・蜀好L遲会ｼ峨・蝣ｴ蜷医・閾ｪ蜍輔〒遘ｻ蜍輔・蜑企勁縺帙★隴ｦ蜻翫・縺ｿ
 	                                            errorHandler.HandleWarning(
 	                                                $"Workshop path for addon {addonId} exists but is not a junction; skipping automatic repair to avoid data loss.",
 	                                                "ValidateSystemIntegrity");
@@ -5790,7 +5853,7 @@ namespace GmodAddonManager.Core.Services
 	                        }
 	                        else
 	                        {
-	                            // 無効なのにWorkshop側にジャンクションが残っている場合は削除（実体フォルダは触らない）
+	                            // 辟｡蜉ｹ縺ｪ縺ｮ縺ｫWorkshop蛛ｴ縺ｫ繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺梧ｮ九▲縺ｦ縺・ｋ蝣ｴ蜷医・蜑企勁・亥ｮ滉ｽ薙ヵ繧ｩ繝ｫ繝縺ｯ隗ｦ繧峨↑縺・ｼ・
 	                            if (Directory.Exists(workshopAddonPath) && junctionService.IsJunction(workshopAddonPath))
 	                            {
 	                                errorHandler.HandleWarning($"Removing unexpected workshop junction for {addonId}", "ValidateSystemIntegrity");
@@ -5805,7 +5868,7 @@ namespace GmodAddonManager.Core.Services
 	                    errorHandler.HandleError(ex, $"Failed to validate addon {addonId}", ErrorSeverity.Warning);
                 }
             }
-            
+
             if (repairCount > 0)
             {
                 errorHandler.HandleInfo($"System integrity check completed. Repaired {repairCount} issues.", "ValidateSystemIntegrity");
@@ -5814,10 +5877,10 @@ namespace GmodAddonManager.Core.Services
             {
                 errorHandler.HandleInfo("System integrity check completed. No issues found.", "ValidateSystemIntegrity");
             }
-            
+
             await Task.CompletedTask;
         }
-        
+
         public void Dispose()
         {
             if (_sessionLogged != 0)
@@ -5825,7 +5888,7 @@ namespace GmodAddonManager.Core.Services
                 LogExperimentEvent("SessionEnd", eventScope: "system", result: "success");
             }
 
-            // 未保存データを即座に保存
+            // 譛ｪ菫晏ｭ倥ョ繝ｼ繧ｿ繧貞叉蠎ｧ縺ｫ菫晏ｭ・
             _saveDebounceTimer?.Change(Timeout.Infinite, Timeout.Infinite);
             if (_saveRequested)
             {
@@ -5833,15 +5896,18 @@ namespace GmodAddonManager.Core.Services
             }
             _saveDebounceTimer?.Dispose();
         }
-        
+
         #region Hard Link Utilities
-        
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
-        
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern uint GetFileAttributes(string lpFileName);
-        
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr CreateFile(
             string lpFileName,
@@ -5851,22 +5917,24 @@ namespace GmodAddonManager.Core.Services
             uint dwCreationDisposition,
             uint dwFlagsAndAttributes,
             IntPtr hTemplateFile);
-        
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetFileInformationByHandle(
             IntPtr hFile,
             out BY_HANDLE_FILE_INFORMATION lpFileInformation);
-        
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct FILETIME
         {
             public uint dwLowDateTime;
             public uint dwHighDateTime;
         }
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct BY_HANDLE_FILE_INFORMATION
         {
@@ -5881,13 +5949,13 @@ namespace GmodAddonManager.Core.Services
             public uint FileIndexHigh;
             public uint FileIndexLow;
         }
-        
+
         private const uint GENERIC_READ = 0x80000000;
         private const uint FILE_SHARE_READ = 0x00000001;
         private const uint FILE_SHARE_WRITE = 0x00000002;
         private const uint OPEN_EXISTING = 3;
         private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
-        
+
         private bool CreateHardLinkSafe(string linkPath, string targetPath)
         {
             try
@@ -5895,17 +5963,17 @@ namespace GmodAddonManager.Core.Services
                 // Validate paths before proceeding
                 ValidatePath(linkPath, "linkPath");
                 ValidatePath(targetPath, "targetPath");
-                
+
                 // Ensure target exists
                 if (!File.Exists(targetPath))
                     return false;
-                    
+
                 // Delete existing link if present
                 if (File.Exists(linkPath))
                 {
                     File.Delete(linkPath);
                 }
-                
+
                 // Create hard link
                 var created = CreateHardLink(linkPath, targetPath, IntPtr.Zero);
                 if (created)
@@ -5920,7 +5988,7 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
         }
-        
+
         private bool IsHardLink(string path1, string path2)
         {
             try
@@ -5930,31 +5998,31 @@ namespace GmodAddonManager.Core.Services
 
                 IntPtr handle1 = IntPtr.Zero;
                 IntPtr handle2 = IntPtr.Zero;
-                
+
                 try
                 {
-                    // ファイルハンドルを取得
+                    // 繝輔ぃ繧､繝ｫ繝上Φ繝峨Ν繧貞叙蠕・
                     handle1 = CreateFile(path1, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         IntPtr.Zero, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-                    
+
                     if (handle1.ToInt64() == -1)
                         return false;
-                        
+
                     handle2 = CreateFile(path2, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         IntPtr.Zero, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-                    
+
                     if (handle2.ToInt64() == -1)
                         return false;
-                    
+
                     BY_HANDLE_FILE_INFORMATION info1, info2;
-                    
+
                     if (!GetFileInformationByHandle(handle1, out info1) ||
                         !GetFileInformationByHandle(handle2, out info2))
                     {
                         return false;
                     }
 
-                    // 同じボリューム、同じFileIndexなら同一ファイル（ハードリンク）
+                    // 蜷後§繝懊Μ繝･繝ｼ繝縲∝酔縺炉ileIndex縺ｪ繧牙酔荳繝輔ぃ繧､繝ｫ・医ワ繝ｼ繝峨Μ繝ｳ繧ｯ・・
                     return info1.VolumeSerialNumber == info2.VolumeSerialNumber &&
                            info1.FileIndexHigh == info2.FileIndexHigh &&
                            info1.FileIndexLow == info2.FileIndexLow;
@@ -5972,7 +6040,7 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
         }
-        
+
         private bool AreSameDrive(string path1, string path2)
         {
             try
@@ -5986,27 +6054,27 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
         }
-        
+
         #endregion
-        
+
         /// <summary>
-        /// 既存のメタデータを修復する
+        /// 譌｢蟄倥・繝｡繧ｿ繝・・繧ｿ繧剃ｿｮ蠕ｩ縺吶ｋ
         /// </summary>
         public async Task RepairAddonMetadataAsync()
         {
             errorHandler.HandleInfo("Starting addon metadata repair...", "RepairAddonMetadata");
-            
+
             bool metadataUpdated = false;
-            
+
             foreach (var kvp in configuration.AddonMetadata.ToList())
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
                 bool needsUpdate = false;
-                
-                // 1. FolderPathがキャッシュディレクトリのGMAファイルを指している場合
-                if (!string.IsNullOrEmpty(addon.FolderPath) && 
-                    addon.FolderPath.EndsWith(".gma") && 
+
+                // 1. FolderPath縺後く繝｣繝・す繝･繝・ぅ繝ｬ繧ｯ繝医Μ縺ｮGMA繝輔ぃ繧､繝ｫ繧呈欠縺励※縺・ｋ蝣ｴ蜷・
+                if (!string.IsNullOrEmpty(addon.FolderPath) &&
+                    addon.FolderPath.EndsWith(".gma") &&
                     (addon.FolderPath.Contains(gmodCachePath) || addon.FolderPath.Contains(gmodCacheAddonsPath)))
                 {
                     if (!addon.IsGmaFile)
@@ -6016,13 +6084,13 @@ namespace GmodAddonManager.Core.Services
                         errorHandler.HandleInfo($"Fixed IsGmaFile flag for {addonId}", "RepairAddonMetadata");
                     }
                 }
-                
-                // 2. FolderPathが通常のディレクトリを指しているが、実際にはキャッシュにGMAファイルが存在する場合
+
+                // 2. FolderPath縺碁壼ｸｸ縺ｮ繝・ぅ繝ｬ繧ｯ繝医Μ繧呈欠縺励※縺・ｋ縺後∝ｮ滄圀縺ｫ縺ｯ繧ｭ繝｣繝・す繝･縺ｫGMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷・
                 if (!addon.IsGmaFile && !string.IsNullOrEmpty(addon.FolderPath) && !addon.FolderPath.EndsWith(".gma"))
                 {
-                    // キャッシュ内のGMAファイルをチェック
+                    // 繧ｭ繝｣繝・す繝･蜀・・GMA繝輔ぃ繧､繝ｫ繧偵メ繧ｧ繝・け
                     string gmaPath = null;
-                    
+
                     if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
                     {
                         gmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
@@ -6031,7 +6099,7 @@ namespace GmodAddonManager.Core.Services
                             gmaPath = null;
                         }
                     }
-                    
+
                     if (gmaPath == null && !string.IsNullOrEmpty(gmodCachePath))
                     {
                         gmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
@@ -6040,23 +6108,23 @@ namespace GmodAddonManager.Core.Services
                             gmaPath = null;
                         }
                     }
-                    
+
                     if (gmaPath != null)
                     {
-                        // GMAファイルが存在する場合、メタデータを修正
+                        // GMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医√Γ繧ｿ繝・・繧ｿ繧剃ｿｮ豁｣
                         addon.FolderPath = gmaPath;
                         addon.IsGmaFile = true;
                         needsUpdate = true;
                         errorHandler.HandleInfo($"Fixed path and IsGmaFile flag for {addonId}", "RepairAddonMetadata");
                     }
                 }
-                
-                // 3. IsGmaFileがtrueだが、FolderPathが正しくない場合
+
+                // 3. IsGmaFile縺荊rue縺縺後：olderPath縺梧ｭ｣縺励￥縺ｪ縺・ｴ蜷・
                 if (addon.IsGmaFile)
                 {
-                    // 正しいGMAファイルパスを探す
+                    // 豁｣縺励＞GMA繝輔ぃ繧､繝ｫ繝代せ繧呈爾縺・
                     string correctGmaPath = null;
-                    
+
                     if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
                     {
                         correctGmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
@@ -6065,7 +6133,7 @@ namespace GmodAddonManager.Core.Services
                             correctGmaPath = null;
                         }
                     }
-                    
+
                     if (correctGmaPath == null && !string.IsNullOrEmpty(gmodCachePath))
                     {
                         correctGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
@@ -6074,7 +6142,7 @@ namespace GmodAddonManager.Core.Services
                             correctGmaPath = null;
                         }
                     }
-                    
+
                     if (correctGmaPath != null && addon.FolderPath != correctGmaPath)
                     {
                         addon.FolderPath = correctGmaPath;
@@ -6082,8 +6150,8 @@ namespace GmodAddonManager.Core.Services
                         errorHandler.HandleInfo($"Fixed GMA file path for {addonId}", "RepairAddonMetadata");
                     }
                 }
-                
-                // 4. 通常のアドオンのFolderPathチェック
+
+                // 4. 騾壼ｸｸ縺ｮ繧｢繝峨が繝ｳ縺ｮFolderPath繝√ぉ繝・け
                 if (!addon.IsGmaFile)
                 {
                     string correctPath = Path.Combine(addonsPath, addonId);
@@ -6094,14 +6162,14 @@ namespace GmodAddonManager.Core.Services
                         errorHandler.HandleInfo($"Fixed folder path for {addonId}", "RepairAddonMetadata");
                     }
                 }
-                
+
                 if (needsUpdate)
                 {
                     configuration.AddonMetadata[addonId] = addon;
                     metadataUpdated = true;
                 }
             }
-            
+
             if (metadataUpdated)
             {
                 await SaveConfigurationAsync();
@@ -6112,37 +6180,37 @@ namespace GmodAddonManager.Core.Services
                 errorHandler.HandleInfo("Addon metadata repair completed - no changes needed", "RepairAddonMetadata");
             }
         }
-        
+
         /// <summary>
-        /// 重複アドオンをクリーンアップする（同じIDでディレクトリとGMAの両方が存在する場合）
+        /// 驥崎､・い繝峨が繝ｳ繧偵け繝ｪ繝ｼ繝ｳ繧｢繝・・縺吶ｋ・亥酔縺露D縺ｧ繝・ぅ繝ｬ繧ｯ繝医Μ縺ｨGMA縺ｮ荳｡譁ｹ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷茨ｼ・
         /// </summary>
         public async Task CleanupDuplicateAddonsAsync()
         {
             errorHandler.HandleInfo("Starting duplicate addon cleanup...", "CleanupDuplicateAddons");
-            
+
             var duplicatesFound = new List<string>();
             var cleanupOperations = new List<(string addonId, string action)>();
-            
-            // 1. 同じアドオンIDで複数の形式が存在するケースを検出
+
+            // 1. 蜷後§繧｢繝峨が繝ｳID縺ｧ隍・焚縺ｮ蠖｢蠑上′蟄伜惠縺吶ｋ繧ｱ繝ｼ繧ｹ繧呈､懷・
             var addonGroups = configuration.AddonMetadata
                 .GroupBy(kvp => kvp.Key)
                 .Where(g => g.Count() > 1)
                 .ToList();
-            
-            // 実際には、configuration.AddonMetadataは辞書なので重複キーはないが、
-            // 同じアドオンIDでディレクトリとGMAの両方が存在する場合を検出する
+
+            // 螳滄圀縺ｫ縺ｯ縲…onfiguration.AddonMetadata縺ｯ霎樊嶌縺ｪ縺ｮ縺ｧ驥崎､・く繝ｼ縺ｯ縺ｪ縺・′縲・
+            // 蜷後§繧｢繝峨が繝ｳID縺ｧ繝・ぅ繝ｬ繧ｯ繝医Μ縺ｨGMA縺ｮ荳｡譁ｹ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医ｒ讀懷・縺吶ｋ
             foreach (var kvp in configuration.AddonMetadata.ToList())
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
-                
-                // ディレクトリ形式のアドオンの場合
+
+                // 繝・ぅ繝ｬ繧ｯ繝医Μ蠖｢蠑上・繧｢繝峨が繝ｳ縺ｮ蝣ｴ蜷・
                 if (!addon.IsGmaFile)
                 {
-                    // 同じIDのGMAファイルが存在するかチェック
+                    // 蜷後§ID縺ｮGMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ縺九メ繧ｧ繝・け
                     string? gmaPath = null;
-                    
-                    // キャッシュフォルダ内のGMAファイルをチェック
+
+                    // 繧ｭ繝｣繝・す繝･繝輔か繝ｫ繝蜀・・GMA繝輔ぃ繧､繝ｫ繧偵メ繧ｧ繝・け
                     if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
                     {
                         gmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
@@ -6151,7 +6219,7 @@ namespace GmodAddonManager.Core.Services
                             gmaPath = null;
                         }
                     }
-                    
+
                     if (gmaPath == null && !string.IsNullOrEmpty(gmodCachePath))
                     {
                         gmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
@@ -6160,19 +6228,19 @@ namespace GmodAddonManager.Core.Services
                             gmaPath = null;
                         }
                     }
-                    
-                    // GMAファイルが存在する場合は重複として検出
+
+                    // GMA繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医・驥崎､・→縺励※讀懷・
                     if (gmaPath != null)
                     {
                         duplicatesFound.Add(addonId);
-                        
-                        // 2. GMA形式を優先し、ディレクトリ形式をバックアップまたは削除
+
+                        // 2. GMA蠖｢蠑上ｒ蜆ｪ蜈医＠縲√ョ繧｣繝ｬ繧ｯ繝医Μ蠖｢蠑上ｒ繝舌ャ繧ｯ繧｢繝・・縺ｾ縺溘・蜑企勁
                         string directoryPath = addon.FolderPath;
                         if (!string.IsNullOrEmpty(directoryPath) && Directory.Exists(directoryPath))
                         {
                             try
                             {
-                                // ジャンクションを削除（有効化されている場合）
+                                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧貞炎髯､・域怏蜉ｹ蛹悶＆繧後※縺・ｋ蝣ｴ蜷茨ｼ・
                                 if (addon.IsEnabled)
                                 {
                                     string junctionPath = Path.Combine(workshopPath, addonId);
@@ -6181,26 +6249,26 @@ namespace GmodAddonManager.Core.Services
                                         junctionService.RemoveJunction(junctionPath);
                                     }
                                 }
-                                
-                                // ディレクトリを削除
+
+                                // 繝・ぅ繝ｬ繧ｯ繝医Μ繧貞炎髯､
                                 Directory.Delete(directoryPath, true);
                                 cleanupOperations.Add((addonId, $"Deleted duplicate directory"));
-                                
+
                                 errorHandler.HandleInfo($"Deleted duplicate directory addon {addonId}", "CleanupDuplicateAddons");
-                                
-                                // 3. メタデータを更新（GMA形式に切り替え）
+
+                                // 3. 繝｡繧ｿ繝・・繧ｿ繧呈峩譁ｰ・・MA蠖｢蠑上↓蛻・ｊ譖ｿ縺茨ｼ・
                                 addon.IsGmaFile = true;
                                 addon.FolderPath = gmaPath;
-                                
-                                // GMAファイルから最新のメタデータを読み込む
+
+                                // GMA繝輔ぃ繧､繝ｫ縺九ｉ譛譁ｰ縺ｮ繝｡繧ｿ繝・・繧ｿ繧定ｪｭ縺ｿ霎ｼ繧
                                 ReadGmaMetadata(gmaPath, addon);
-                                
-                                // GMA形式のアドオンを有効化（元々有効だった場合）
+
+                                // GMA蠖｢蠑上・繧｢繝峨が繝ｳ繧呈怏蜉ｹ蛹厄ｼ亥・縲・怏蜉ｹ縺縺｣縺溷ｴ蜷茨ｼ・
                                 if (addon.IsEnabled)
                                 {
                                     EnableGmaAddon(addonId);
                                 }
-                                
+
                                 configuration.AddonMetadata[addonId] = addon;
                             }
                             catch (Exception ex)
@@ -6211,18 +6279,18 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
-            // 設定を保存
+
+            // 險ｭ螳壹ｒ菫晏ｭ・
             if (duplicatesFound.Count > 0)
             {
                 await SaveConfigurationAsync();
-                
+
                 var summary = $"Cleanup completed. Found {duplicatesFound.Count} duplicate addons.";
                 if (cleanupOperations.Count > 0)
                 {
                     summary += "\nOperations performed:\n" + string.Join("\n", cleanupOperations.Select(op => $"- {op.addonId}: {op.action}"));
                 }
-                
+
                 errorHandler.HandleInfo(summary, "CleanupDuplicateAddons");
             }
             else
@@ -6230,47 +6298,47 @@ namespace GmodAddonManager.Core.Services
                 errorHandler.HandleInfo("No duplicate addons found.", "CleanupDuplicateAddons");
             }
         }
-        
+
         /// <summary>
-        /// 既存のジャンクションから新しいハードリンク方式へ移行
+        /// 譌｢蟄倥・繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺九ｉ譁ｰ縺励＞繝上・繝峨Μ繝ｳ繧ｯ譁ｹ蠑上∈遘ｻ陦・
         /// </summary>
         public async Task MigrateToHardLinkSystemAsync()
         {
             errorHandler.HandleInfo("Starting migration from junction to hard link system...", "MigrateToHardLinkSystem");
-            
+
             int migratedCount = 0;
             int failedCount = 0;
             var failedAddons = new List<string>();
-            
-            // 全てのアドオンをチェック
+
+            // 蜈ｨ縺ｦ縺ｮ繧｢繝峨が繝ｳ繧偵メ繧ｧ繝・け
             foreach (var kvp in configuration.AddonMetadata.ToList())
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
-                
-                // GMAファイルアドオンはスキップ
+
+                // GMA繝輔ぃ繧､繝ｫ繧｢繝峨が繝ｳ縺ｯ繧ｹ繧ｭ繝・・
                 if (addon.IsGmaFile)
                 {
                     continue;
                 }
-                
+
                 string workshopAddonPath = Path.Combine(workshopPath, addonId);
                 string sourcePath = Path.Combine(addonsPath, addonId);
                 string sourceGmaPath = Path.Combine(sourcePath, $"{addonId}.gma");
-                
-                // ジャンクションが存在し、かつGMAファイルが管理フォルダに存在する場合
-                if (Directory.Exists(workshopAddonPath) && 
-                    junctionService.IsJunction(workshopAddonPath) && 
+
+                // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺悟ｭ伜惠縺励√°縺､GMA繝輔ぃ繧､繝ｫ縺檎ｮ｡逅・ヵ繧ｩ繝ｫ繝縺ｫ蟄伜惠縺吶ｋ蝣ｴ蜷・
+                if (Directory.Exists(workshopAddonPath) &&
+                    junctionService.IsJunction(workshopAddonPath) &&
                     File.Exists(sourceGmaPath))
                 {
                     try
                     {
-                        // 1. 既存のジャンクションを削除
+                        // 1. 譌｢蟄倥・繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧貞炎髯､
                         junctionService.RemoveJunction(workshopAddonPath);
-                        
-                        // 2. 新方式でアドオンを有効化
+
+                        // 2. 譁ｰ譁ｹ蠑上〒繧｢繝峨が繝ｳ繧呈怏蜉ｹ蛹・
                         junctionService.CreateWorkshopAddonStructure(workshopPath, addonId, sourceGmaPath);
-                        
+
                         migratedCount++;
                         errorHandler.HandleInfo($"Migrated addon {addonId} to hard link system", "MigrateToHardLinkSystem");
                     }
@@ -6279,8 +6347,8 @@ namespace GmodAddonManager.Core.Services
                         failedCount++;
                         failedAddons.Add(addonId);
                         errorHandler.HandleError(ex, $"Failed to migrate addon {addonId}", ErrorSeverity.Warning);
-                        
-                        // 失敗した場合はジャンクションを復元
+
+                        // 螟ｱ謨励＠縺溷ｴ蜷医・繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧貞ｾｩ蜈・
                         try
                         {
                             if (!Directory.Exists(workshopAddonPath))
@@ -6295,24 +6363,24 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            
-            // 結果のサマリーを表示
+
+            // 邨先棡縺ｮ繧ｵ繝槭Μ繝ｼ繧定｡ｨ遉ｺ
             string summary = $"Migration completed. Migrated: {migratedCount}, Failed: {failedCount}";
             if (failedAddons.Count > 0)
             {
                 summary += $"\nFailed addons: {string.Join(", ", failedAddons)}";
             }
-            
+
             errorHandler.HandleInfo(summary, "MigrateToHardLinkSystem");
-            
+
             if (migratedCount > 0)
             {
                 await SaveConfigurationAsync();
             }
         }
-        
+
         /// <summary>
-        /// Workshopから削除されたアドオンをクリーンアップ
+        /// Workshop縺九ｉ蜑企勁縺輔ｌ縺溘い繝峨が繝ｳ繧偵け繝ｪ繝ｼ繝ｳ繧｢繝・・
         /// </summary>
         private async Task<HashSet<string>> CleanupDeletedWorkshopAddonsAsync(List<WorkshopAddon> currentAddons)
         {
@@ -6321,41 +6389,41 @@ namespace GmodAddonManager.Core.Services
             {
                 var existingAddonIds = new HashSet<string>(currentAddons.Select(a => a.Id));
                 var toRemove = new List<string>();
-                
-                // メタデータに存在するが、実際のファイルが存在しないアドオンを検出
+
+                // 繝｡繧ｿ繝・・繧ｿ縺ｫ蟄伜惠縺吶ｋ縺後∝ｮ滄圀縺ｮ繝輔ぃ繧､繝ｫ縺悟ｭ伜惠縺励↑縺・い繝峨が繝ｳ繧呈､懷・
                 foreach (var kvp in configuration.AddonMetadata)
                 {
                     var addonId = kvp.Key;
                     var addon = kvp.Value;
-                    
+
                     bool fileExists = false;
-                    
+
                     if (addon.IsGmaFile)
                     {
-                        // GMAファイルの存在確認
+                        // GMA繝輔ぃ繧､繝ｫ縺ｮ蟄伜惠遒ｺ隱・
                         string managedGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
-                        string cacheGmaPath = !string.IsNullOrEmpty(gmodCachePath) ? 
+                        string cacheGmaPath = !string.IsNullOrEmpty(gmodCachePath) ?
                             Path.Combine(gmodCachePath, $"{addonId}.gma") : null;
-                        string cacheManagerGmaPath = !string.IsNullOrEmpty(gmodCacheAddonsPath) ? 
+                        string cacheManagerGmaPath = !string.IsNullOrEmpty(gmodCacheAddonsPath) ?
                             Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma") : null;
-                        
-                        fileExists = File.Exists(managedGmaPath) || 
+
+                        fileExists = File.Exists(managedGmaPath) ||
                                    (cacheGmaPath != null && File.Exists(cacheGmaPath)) ||
                                    (cacheManagerGmaPath != null && File.Exists(cacheManagerGmaPath));
                     }
                     else
                     {
-                        // ディレクトリの存在確認
+                        // 繝・ぅ繝ｬ繧ｯ繝医Μ縺ｮ蟄伜惠遒ｺ隱・
                         string managedDirPath = Path.Combine(addonsPath, addonId);
                         string workshopDirPath = Path.Combine(workshopPath, addonId);
-                        
-                        // 管理フォルダが存在する場合、空でないかチェック
+
+                        // 邂｡逅・ヵ繧ｩ繝ｫ繝縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医∫ｩｺ縺ｧ縺ｪ縺・°繝√ぉ繝・け
                         if (Directory.Exists(managedDirPath))
                         {
                             var hasFiles = Directory.GetFiles(managedDirPath, "*", SearchOption.AllDirectories).Any();
                             if (!hasFiles)
                             {
-                                // 空フォルダは削除
+                                // 遨ｺ繝輔か繝ｫ繝縺ｯ蜑企勁
                                 try
                                 {
                                     Directory.Delete(managedDirPath, true);
@@ -6374,54 +6442,56 @@ namespace GmodAddonManager.Core.Services
                         }
                         else
                         {
-                            fileExists = Directory.Exists(workshopDirPath) && !junctionService.IsJunction(workshopDirPath);
+                            fileExists = Directory.Exists(workshopDirPath) &&
+                                         !junctionService.IsJunction(workshopDirPath) &&
+                                         DirectoryHasAddonPayload(workshopDirPath, "CleanupDeletedWorkshopAddons");
                         }
                     }
-                    
+
                     if (!fileExists)
                     {
                         toRemove.Add(addonId);
                         errorHandler.HandleInfo($"Detected deleted workshop addon: {addonId}", "CleanupDeletedWorkshopAddons");
                     }
                 }
-                
-                // 削除されたアドオンをクリーンアップ
+
+                // 蜑企勁縺輔ｌ縺溘い繝峨が繝ｳ繧偵け繝ｪ繝ｼ繝ｳ繧｢繝・・
                 foreach (var addonId in toRemove)
                 {
-                    // メタデータから削除
+                    // 繝｡繧ｿ繝・・繧ｿ縺九ｉ蜑企勁
                     configuration.AddonMetadata.Remove(addonId);
-                    
-                    // 全てのアセットから削除（Subscribeアセットを含む）
+
+                    // 蜈ｨ縺ｦ縺ｮ繧｢繧ｻ繝・ヨ縺九ｉ蜑企勁・・ubscribe繧｢繧ｻ繝・ヨ繧貞性繧・・
                     foreach (var asset in configuration.Assets)
                     {
                         if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
                         {
                             asset.RemoveAddon(addonId);
-                            // アセットの状態からも削除
+                            // 繧｢繧ｻ繝・ヨ縺ｮ迥ｶ諷九°繧峨ｂ蜑企勁
                             if (asset.AddonStates.ContainsKey(addonId))
                             {
                                 asset.AddonStates.Remove(addonId);
                             }
                         }
                     }
-                    
-                    // ジャンクション履歴から削除
+
+                    // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ螻･豁ｴ縺九ｉ蜑企勁
                     configuration.JunctionHistory.Remove(addonId);
-                    
-                // Workshop配下の構造は変更しない（Steamの検証・再DL誘発を避ける）
-                    
-                    // 管理フォルダからアドオンファイルを削除
+
+                // Workshop驟堺ｸ九・讒矩縺ｯ螟画峩縺励↑縺・ｼ・team縺ｮ讀懆ｨｼ繝ｻ蜀好L隱倡匱繧帝∩縺代ｋ・・
+
+                    // 邂｡逅・ヵ繧ｩ繝ｫ繝縺九ｉ繧｢繝峨が繝ｳ繝輔ぃ繧､繝ｫ繧貞炎髯､
                     try
                     {
-                        // ディレクトリタイプのアドオン
+                        // 繝・ぅ繝ｬ繧ｯ繝医Μ繧ｿ繧､繝励・繧｢繝峨が繝ｳ
                         string managedDirPath = Path.Combine(addonsPath, addonId);
                         if (Directory.Exists(managedDirPath))
                         {
                             Directory.Delete(managedDirPath, true);
                             errorHandler.HandleInfo($"Deleted managed directory: {managedDirPath}", "CleanupDeletedWorkshopAddons");
                         }
-                        
-                        // GMAファイルタイプのアドオン
+
+                        // GMA繝輔ぃ繧､繝ｫ繧ｿ繧､繝励・繧｢繝峨が繝ｳ
                         string managedGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
                         if (File.Exists(managedGmaPath))
                         {
@@ -6433,13 +6503,13 @@ namespace GmodAddonManager.Core.Services
                     {
                         errorHandler.HandleError(ex, $"Failed to delete managed files for addon {addonId}", ErrorSeverity.Warning);
                     }
-                    
-                    // サムネイルキャッシュを削除
+
+                    // 繧ｵ繝繝阪う繝ｫ繧ｭ繝｣繝・す繝･繧貞炎髯､
                     try
                     {
                         string thumbnailCachePath = GetThumbnailCachePath();
                         string[] thumbnailPatterns = { $"{addonId}_thumb.jpg", $"{addonId}_thumb.png", $"{addonId}.*" };
-                        
+
                         foreach (var pattern in thumbnailPatterns)
                         {
                             var files = Directory.GetFiles(thumbnailCachePath, pattern);
@@ -6455,13 +6525,13 @@ namespace GmodAddonManager.Core.Services
                         errorHandler.HandleError(ex, $"Failed to delete thumbnail cache for addon {addonId}", ErrorSeverity.Warning);
                     }
                 }
-                
+
                 if (toRemove.Count > 0)
                 {
                     errorHandler.HandleInfo($"Cleaned up {toRemove.Count} deleted workshop addons", "CleanupDeletedWorkshopAddons");
                     await SaveConfigurationAsync();
-                    
-                    // 削除されたアドオンIDを返す
+
+                    // 蜑企勁縺輔ｌ縺溘い繝峨が繝ｳID繧定ｿ斐☆
                     foreach (var id in toRemove)
                     {
                         deletedAddonIds.Add(id);
@@ -6472,80 +6542,83 @@ namespace GmodAddonManager.Core.Services
             {
                 errorHandler.HandleError(ex, "Failed to cleanup deleted workshop addons", ErrorSeverity.Warning);
             }
-            
+
             return deletedAddonIds;
         }
-        
+
         /// <summary>
-        /// Steamでサブスクライブ解除されたアドオンを検出して削除
+        /// Steam縺ｧ繧ｵ繝悶せ繧ｯ繝ｩ繧､繝冶ｧ｣髯､縺輔ｌ縺溘い繝峨が繝ｳ繧呈､懷・縺励※蜑企勁
         /// </summary>
         private async Task CleanupUnsubscribedAddonsAsync()
         {
             var toDelete = new List<string>();
-            
+
             errorHandler.HandleInfo("Checking for unsubscribed addons...", "CleanupUnsubscribedAddons");
-            
+
             foreach (var kvp in configuration.AddonMetadata)
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
-                var workshopPath = Path.Combine(this.workshopPath, addonId);
-                
-                // ワークショップフォルダ側が完全に存在しない（ジャンクションも実体もGMAファイルも無い）
-                bool workshopExists = Directory.Exists(workshopPath) || File.Exists(workshopPath) || 
-                                    File.Exists(workshopPath + ".gma");
-                
+                var workshopAddonPath = Path.Combine(this.workshopPath, addonId);
+
+                // 繝ｯ繝ｼ繧ｯ繧ｷ繝ｧ繝・・繝輔か繝ｫ繝蛛ｴ縺悟ｮ悟・縺ｫ蟄伜惠縺励↑縺・ｼ医ず繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧ょｮ滉ｽ薙ｂGMA繝輔ぃ繧､繝ｫ繧ら┌縺・ｼ・
+                bool workshopExists = addon.IsGmaFile
+                    ? File.Exists(workshopAddonPath) ||
+                      File.Exists(workshopAddonPath + ".gma") ||
+                      DirectoryHasAddonPayload(workshopAddonPath, "CleanupUnsubscribedAddons")
+                    : DirectoryHasAddonPayload(workshopAddonPath, "CleanupUnsubscribedAddons");
+
                 if (!workshopExists)
                 {
-                    // 管理フォルダ側に実体が存在するかチェック
+                    // 邂｡逅・ヵ繧ｩ繝ｫ繝蛛ｴ縺ｫ螳滉ｽ薙′蟄伜惠縺吶ｋ縺九メ繧ｧ繝・け
                     bool managedExists = false;
-                    
+
                     if (addon.IsGmaFile)
                     {
-                        // GMAファイルの場合
+                        // GMA繝輔ぃ繧､繝ｫ縺ｮ蝣ｴ蜷・
                         string managedGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
-                        string cacheGmaPath = !string.IsNullOrEmpty(gmodCachePath) ? 
+                        string cacheGmaPath = !string.IsNullOrEmpty(gmodCachePath) ?
                             Path.Combine(gmodCachePath, $"{addonId}.gma") : null;
-                        string cacheManagerGmaPath = !string.IsNullOrEmpty(gmodCacheAddonsPath) ? 
+                        string cacheManagerGmaPath = !string.IsNullOrEmpty(gmodCacheAddonsPath) ?
                             Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma") : null;
-                        
-                        managedExists = File.Exists(managedGmaPath) || 
+
+                        managedExists = File.Exists(managedGmaPath) ||
                                       (cacheGmaPath != null && File.Exists(cacheGmaPath)) ||
                                       (cacheManagerGmaPath != null && File.Exists(cacheManagerGmaPath));
                     }
                     else
                     {
-                        // ディレクトリタイプの場合
+                        // 繝・ぅ繝ｬ繧ｯ繝医Μ繧ｿ繧､繝励・蝣ｴ蜷・
                         string managedDirPath = Path.Combine(addonsPath, addonId);
                         managedExists = Directory.Exists(managedDirPath);
                     }
-                    
+
                     if (managedExists)
                     {
-                        // ワークショップ側に無いが管理フォルダに存在 = サブスクライブ解除された
+                        // 繝ｯ繝ｼ繧ｯ繧ｷ繝ｧ繝・・蛛ｴ縺ｫ辟｡縺・′邂｡逅・ヵ繧ｩ繝ｫ繝縺ｫ蟄伜惠 = 繧ｵ繝悶せ繧ｯ繝ｩ繧､繝冶ｧ｣髯､縺輔ｌ縺・
                         toDelete.Add(addonId);
                         errorHandler.HandleInfo($"Detected unsubscribed addon: {addonId}", "CleanupUnsubscribedAddons");
                     }
                 }
             }
-            
-            // 検出されたアドオンを削除
+
+            // 讀懷・縺輔ｌ縺溘い繝峨が繝ｳ繧貞炎髯､
             foreach (var addonId in toDelete)
             {
                 try
                 {
-                    // 管理フォルダから削除
+                    // 邂｡逅・ヵ繧ｩ繝ｫ繝縺九ｉ蜑企勁
                     if (configuration.AddonMetadata[addonId].IsGmaFile)
                     {
-                        // GMAファイルを削除
+                        // GMA繝輔ぃ繧､繝ｫ繧貞炎髯､
                         string managedGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
                         if (File.Exists(managedGmaPath))
                         {
                             File.Delete(managedGmaPath);
                             errorHandler.HandleInfo($"Deleted managed GMA file: {managedGmaPath}", "CleanupUnsubscribedAddons");
                         }
-                        
-                        // キャッシュからも削除
+
+                        // 繧ｭ繝｣繝・す繝･縺九ｉ繧ょ炎髯､
                         if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
                         {
                             string cacheGmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
@@ -6558,7 +6631,7 @@ namespace GmodAddonManager.Core.Services
                     }
                     else
                     {
-                        // ディレクトリを削除
+                        // 繝・ぅ繝ｬ繧ｯ繝医Μ繧貞炎髯､
                         string managedDirPath = Path.Combine(addonsPath, addonId);
                         if (Directory.Exists(managedDirPath))
                         {
@@ -6566,11 +6639,11 @@ namespace GmodAddonManager.Core.Services
                             errorHandler.HandleInfo($"Deleted managed directory: {managedDirPath}", "CleanupUnsubscribedAddons");
                         }
                     }
-                    
-                    // メタデータから削除
+
+                    // 繝｡繧ｿ繝・・繧ｿ縺九ｉ蜑企勁
                     configuration.AddonMetadata.Remove(addonId);
-                    
-                    // 全てのアセットから削除
+
+                    // 蜈ｨ縺ｦ縺ｮ繧｢繧ｻ繝・ヨ縺九ｉ蜑企勁
                     foreach (var asset in configuration.Assets)
                     {
                         if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
@@ -6578,16 +6651,16 @@ namespace GmodAddonManager.Core.Services
                             asset.RemoveAddon(addonId);
                         }
                     }
-                    
-                    // ジャンクション履歴から削除
+
+                    // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ螻･豁ｴ縺九ｉ蜑企勁
                     configuration.JunctionHistory.Remove(addonId);
-                    
-                    // サムネイルキャッシュを削除
+
+                    // 繧ｵ繝繝阪う繝ｫ繧ｭ繝｣繝・す繝･繧貞炎髯､
                     try
                     {
                         string thumbnailCachePath = GetThumbnailCachePath();
                         string[] thumbnailPatterns = { $"{addonId}_thumb.jpg", $"{addonId}_thumb.png", $"{addonId}.*" };
-                        
+
                         foreach (var pattern in thumbnailPatterns)
                         {
                             var files = Directory.GetFiles(thumbnailCachePath, pattern);
@@ -6607,16 +6680,16 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleError(ex, $"Failed to cleanup unsubscribed addon {addonId}", ErrorSeverity.Warning);
                 }
             }
-            
+
             if (toDelete.Count > 0)
             {
                 errorHandler.HandleInfo($"Cleaned up {toDelete.Count} unsubscribed addons", "CleanupUnsubscribedAddons");
                 await SaveConfigurationAsync();
             }
         }
-        
+
         /// <summary>
-        /// キャッシュ管理の整合性チェックと修復
+        /// 繧ｭ繝｣繝・す繝･邂｡逅・・謨ｴ蜷域ｧ繝√ぉ繝・け縺ｨ菫ｮ蠕ｩ
         /// </summary>
         public async Task RepairCacheManagementAsync()
         {
@@ -6625,7 +6698,7 @@ namespace GmodAddonManager.Core.Services
 
             errorHandler.HandleInfo("Starting cache management repair...", "RepairCacheManagement");
 
-            // 管理フォルダが存在しない場合は作成
+            // 邂｡逅・ヵ繧ｩ繝ｫ繝縺悟ｭ伜惠縺励↑縺・ｴ蜷医・菴懈・
             if (!Directory.Exists(gmodCacheAddonsPath))
             {
                 try
@@ -6643,11 +6716,11 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            // 管理されていないGMAファイルを検出して移行
+            // 邂｡逅・＆繧後※縺・↑縺ЖMA繝輔ぃ繧､繝ｫ繧呈､懷・縺励※遘ｻ陦・
             var unmanagedGmaFiles = Directory.GetFiles(gmodCachePath, "*.gma")
                 .Where(f => {
                     var id = Path.GetFileNameWithoutExtension(f);
-                    return configuration.AddonMetadata.ContainsKey(id) && 
+                    return configuration.AddonMetadata.ContainsKey(id) &&
                            configuration.AddonMetadata[id].IsGmaFile;
                 })
                 .ToList();
@@ -6655,7 +6728,7 @@ namespace GmodAddonManager.Core.Services
             if (unmanagedGmaFiles.Any())
             {
                 errorHandler.HandleInfo($"Found {unmanagedGmaFiles.Count} unmanaged GMA files, repairing...", "RepairCacheManagement");
-                
+
                 foreach (var gmaFile in unmanagedGmaFiles)
                 {
                     try
@@ -6664,8 +6737,8 @@ namespace GmodAddonManager.Core.Services
                         string targetPath = Path.Combine(gmodCacheAddonsPath, Path.GetFileName(gmaFile));
                         ValidatePath(gmaFile, "gmaFile");
                         ValidatePath(targetPath, "targetPath");
-                        
-                        // 管理フォルダに移動
+
+                        // 邂｡逅・ヵ繧ｩ繝ｫ繝縺ｫ遘ｻ蜍・
                         if (!File.Exists(targetPath))
                         {
                             File.Move(gmaFile, targetPath);
@@ -6676,8 +6749,8 @@ namespace GmodAddonManager.Core.Services
                             File.Delete(gmaFile);
                             errorHandler.HandleInfo($"Deleted duplicate {fileName}.gma from cache", "RepairCacheManagement");
                         }
-                        
-                        // 有効状態を維持するためハードリンクを作成
+
+                        // 譛牙柑迥ｶ諷九ｒ邯ｭ謖√☆繧九◆繧√ワ繝ｼ繝峨Μ繝ｳ繧ｯ繧剃ｽ懈・
                         if (configuration.AddonMetadata[fileName].IsEnabled)
                         {
                             if (AreSameDrive(targetPath, gmaFile))
@@ -6709,17 +6782,17 @@ namespace GmodAddonManager.Core.Services
                         errorHandler.HandleError(ex, $"Failed to repair GMA file: {Path.GetFileName(gmaFile)}", ErrorSeverity.Warning);
                     }
                 }
-                
+
                 await SaveConfigurationAsync();
             }
             else
             {
                 errorHandler.HandleInfo("No unmanaged GMA files found", "RepairCacheManagement");
             }
-            
+
             errorHandler.HandleInfo("Cache management repair completed", "RepairCacheManagement");
         }
-        
+
         /// <summary>
         /// Runtime check to determine if an addon is a GMA file
         /// </summary>
@@ -6727,17 +6800,17 @@ namespace GmodAddonManager.Core.Services
         {
             if (string.IsNullOrEmpty(gmodCachePath))
                 return false;
-                
+
             // Check cache directory for GMA file
             string cacheGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
             if (File.Exists(cacheGmaPath))
                 return true;
-                
+
             // Check cache directory for .cache file (Garry's Mod sometimes uses .cache extension)
             string cacheCachePath = Path.Combine(gmodCachePath, $"{addonId}.cache");
             if (File.Exists(cacheCachePath) && LooksLikeGmaFile(cacheCachePath))
                 return true;
-                
+
             // Check managed cache directory for GMA file
             if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
             {
@@ -6750,12 +6823,12 @@ namespace GmodAddonManager.Core.Services
             string managedWorkshopGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
             if (File.Exists(managedWorkshopGmaPath))
                 return true;
-            
+
             // Legacy managed GMA location
             string legacyManagedWorkshopGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
             if (File.Exists(legacyManagedWorkshopGmaPath))
                 return true;
-            
+
             // Check workshop directory for GMA file structure
             string workshopAddonPath = Path.Combine(workshopPath, addonId);
             if (Directory.Exists(workshopAddonPath))
@@ -6764,10 +6837,10 @@ namespace GmodAddonManager.Core.Services
                 if (File.Exists(workshopGmaPath))
                     return true;
             }
-            
+
             return false;
         }
-        
+
         /// <summary>
         /// Force cleanup of cache files for disabled GMA addons
         /// </summary>
@@ -6775,16 +6848,16 @@ namespace GmodAddonManager.Core.Services
         {
             if (string.IsNullOrEmpty(gmodCachePath))
                 return;
-                
+
             errorHandler.HandleInfo("Starting force cleanup of disabled GMA cache files...", "ForceCleanupCache");
             int cleanedCount = 0;
-            
+
             // Get all disabled GMA addons
             var disabledGmaAddons = configuration.AddonMetadata
                 .Where(kvp => kvp.Value.IsGmaFile && !kvp.Value.IsEnabled)
                 .Select(kvp => kvp.Key)
                 .ToList();
-                
+
             foreach (var addonId in disabledGmaAddons)
             {
                 try
@@ -6805,7 +6878,7 @@ namespace GmodAddonManager.Core.Services
                             errorHandler.HandleWarning($"Failed to force delete {addonId}.gma: {ex.Message}", "ForceCleanupCache");
                         }
                     }
-                    
+
                     // Check for .cache file
                     string cacheCachePath = Path.Combine(gmodCachePath, $"{addonId}.cache");
                     if (File.Exists(cacheCachePath))
@@ -6828,29 +6901,29 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleError(ex, $"Error processing addon {addonId}", ErrorSeverity.Warning);
                 }
             }
-            
+
             errorHandler.HandleInfo($"Force cleanup completed. Cleaned {cleanedCount} cache files.", "ForceCleanupCache");
             await Task.CompletedTask;
         }
-        
+
         /// <summary>
-        /// Workshopからアドオンをサブスクライブする
+        /// Workshop縺九ｉ繧｢繝峨が繝ｳ繧偵し繝悶せ繧ｯ繝ｩ繧､繝悶☆繧・
         /// </summary>
         private async Task SubscribeToWorkshopAsync(string addonId)
         {
             try
             {
-                // Steam URLスキームを使用してサブスクライブ
+                // Steam URL繧ｹ繧ｭ繝ｼ繝繧剃ｽｿ逕ｨ縺励※繧ｵ繝悶せ繧ｯ繝ｩ繧､繝・
                 var url = $"steam://subscribe/4000/{addonId}";
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = url,
                     UseShellExecute = true
                 });
-                
-                // 少し待機（Steam処理のため）
+
+                // 蟆代＠蠕・ｩ滂ｼ・team蜃ｦ逅・・縺溘ａ・・
                 await Task.Delay(100);
-                
+
                 errorHandler.HandleInfo($"Subscribed to workshop addon: {addonId}", "WorkshopSubscribe");
             }
             catch (Exception ex)
@@ -6858,25 +6931,25 @@ namespace GmodAddonManager.Core.Services
                 errorHandler.HandleError(ex, $"Failed to subscribe to workshop addon {addonId}", ErrorSeverity.Warning);
             }
         }
-        
+
         /// <summary>
-        /// Workshopからアドオンのサブスクライブを解除する
+        /// Workshop縺九ｉ繧｢繝峨が繝ｳ縺ｮ繧ｵ繝悶せ繧ｯ繝ｩ繧､繝悶ｒ隗｣髯､縺吶ｋ
         /// </summary>
         private async Task UnsubscribeFromWorkshopAsync(string addonId)
         {
             try
             {
-                // Steam URLスキームを使用してサブスクライブ解除
+                // Steam URL繧ｹ繧ｭ繝ｼ繝繧剃ｽｿ逕ｨ縺励※繧ｵ繝悶せ繧ｯ繝ｩ繧､繝冶ｧ｣髯､
                 var url = $"steam://unsubscribe/4000/{addonId}";
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = url,
                     UseShellExecute = true
                 });
-                
-                // 少し待機（Steam処理のため）
+
+                // 蟆代＠蠕・ｩ滂ｼ・team蜃ｦ逅・・縺溘ａ・・
                 await Task.Delay(100);
-                
+
                 errorHandler.HandleInfo($"Unsubscribed from workshop addon: {addonId}", "WorkshopUnsubscribe");
             }
             catch (Exception ex)

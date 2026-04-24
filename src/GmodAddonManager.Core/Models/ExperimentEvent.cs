@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Newtonsoft.Json;
 
 namespace GmodAddonManager.Core.Models
@@ -5,7 +6,7 @@ namespace GmodAddonManager.Core.Models
     public class ExperimentEvent
     {
         [JsonProperty("schema_version")]
-        public string SchemaVersion { get; set; } = "2";
+        public string SchemaVersion { get; set; } = "3";
 
         [JsonProperty("strict_link_mode")]
         public bool? StrictLinkMode { get; set; }
@@ -69,6 +70,48 @@ namespace GmodAddonManager.Core.Models
 
         [JsonProperty("asset_id")]
         public string? AssetId { get; set; }
+
+        [JsonProperty("asset_label")]
+        public string? AssetLabel { get; set; }
+
+        [JsonProperty("asset_display_name")]
+        public string? AssetDisplayName { get; set; }
+
+        [JsonProperty("from_asset_ids")]
+        public List<string>? FromAssetIds { get; set; }
+
+        [JsonProperty("from_asset_labels")]
+        public List<string>? FromAssetLabels { get; set; }
+
+        [JsonProperty("from_asset_display_names")]
+        public List<string>? FromAssetDisplayNames { get; set; }
+
+        [JsonProperty("to_asset_id")]
+        public string? ToAssetId { get; set; }
+
+        [JsonProperty("to_asset_label")]
+        public string? ToAssetLabel { get; set; }
+
+        [JsonProperty("to_asset_display_name")]
+        public string? ToAssetDisplayName { get; set; }
+
+        [JsonProperty("parent_operation_id")]
+        public string? ParentOperationId { get; set; }
+
+        [JsonProperty("state_hash_scope")]
+        public string? StateHashScope { get; set; }
+
+        [JsonProperty("expected_hash_scope")]
+        public string? ExpectedHashScope { get; set; }
+
+        [JsonProperty("state_changed")]
+        public bool? StateChanged { get; set; }
+
+        [JsonProperty("from_asset_resolve_method")]
+        public string? FromAssetResolveMethod { get; set; }
+
+        [JsonProperty("to_asset_resolve_method")]
+        public string? ToAssetResolveMethod { get; set; }
 
         [JsonProperty("gmod_running")]
         public bool? GmodRunning { get; set; }

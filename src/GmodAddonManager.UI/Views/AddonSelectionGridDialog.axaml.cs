@@ -21,12 +21,12 @@ public class SelectableAddonGrid : INotifyPropertyChanged
     private bool isSelected;
     private Avalonia.Media.Imaging.Bitmap? thumbnailImage;
     private bool hasThumbnail;
-    
-    public string Id { get; set; }
-    public string Title { get; set; }
+
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
     public long Size { get; set; }
     public string FormattedSize => GetFormattedSize();
-    
+
     public bool IsSelected
     {
         get => isSelected;
@@ -39,7 +39,7 @@ public class SelectableAddonGrid : INotifyPropertyChanged
             }
         }
     }
-    
+
     public Avalonia.Media.Imaging.Bitmap? ThumbnailImage
     {
         get => thumbnailImage;
@@ -50,7 +50,7 @@ public class SelectableAddonGrid : INotifyPropertyChanged
             HasThumbnail = value != null;
         }
     }
-    
+
     public bool HasThumbnail
     {
         get => hasThumbnail;
@@ -60,7 +60,7 @@ public class SelectableAddonGrid : INotifyPropertyChanged
             OnPropertyChanged();
         }
     }
-    
+
     private string GetFormattedSize()
     {
         string[] sizes = { "B", "KB", "MB", "GB", "TB" };
@@ -73,9 +73,9 @@ public class SelectableAddonGrid : INotifyPropertyChanged
         }
         return $"{len:0.##} {sizes[order]}";
     }
-    
+
     public event PropertyChangedEventHandler? PropertyChanged;
-    
+
     protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -90,37 +90,55 @@ public partial class AddonSelectionGridDialog : Window
     private readonly ObservableCollection<SelectableAddonGrid> filteredAddons;
     private DispatcherTimer searchTimer;
 
-    public AddonSelectionGridDialog(AddonManager addonManager, Asset currentAsset)
+    public AddonSelectionGridDialog()
+    {
+        addonManager = null!;
+        currentAsset = null!;
+        allAddons = new ObservableCollection<SelectableAddonGrid>();
+        filteredAddons = new ObservableCollection<SelectableAddonGrid>();
+
+        InitializeComponent();
+
+        searchTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        searchTimer.Tick += OnSearchTimerTick;
+
+        SearchTextBox.TextChanged += OnSearchTextChanged;
+        AddonGrid.ItemsSource = filteredAddons;
+    }
+public AddonSelectionGridDialog(AddonManager addonManager, Asset currentAsset)
     {
         this.addonManager = addonManager;
         this.currentAsset = currentAsset;
         this.allAddons = new ObservableCollection<SelectableAddonGrid>();
         this.filteredAddons = new ObservableCollection<SelectableAddonGrid>();
-        
+
         InitializeComponent();
-        
+
         // 検索タイマーの設定
         searchTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(300)
         };
         searchTimer.Tick += OnSearchTimerTick;
-        
+
         // 検索ボックスのイベント設定
         SearchTextBox.TextChanged += OnSearchTextChanged;
-        
+
         // アドオングリッドの設定
         AddonGrid.ItemsSource = filteredAddons;
-        
+
         // データの読み込み
         LoadAddons();
-        
+
         // 選択状態の監視
         foreach (var addon in allAddons)
         {
             addon.PropertyChanged += OnAddonPropertyChanged;
         }
-        
+
         // サムネイルの非同期読み込み
         _ = LoadThumbnailsAsync();
     }
@@ -131,7 +149,7 @@ public partial class AddonSelectionGridDialog : Window
         var availableAddons = allAddonsDict.Values
             .Where(a => !currentAsset.Addons.Contains(a.Id))
             .OrderBy(a => a.Title);
-        
+
         foreach (var addon in availableAddons)
         {
             var selectableAddon = new SelectableAddonGrid
@@ -141,11 +159,11 @@ public partial class AddonSelectionGridDialog : Window
                 Size = addon.Size,
                 IsSelected = false
             };
-            
+
             allAddons.Add(selectableAddon);
             filteredAddons.Add(selectableAddon);
         }
-        
+
         UpdateSelectionText();
     }
 
@@ -181,9 +199,9 @@ public partial class AddonSelectionGridDialog : Window
     private void FilterAddons()
     {
         var searchText = SearchTextBox.Text?.ToLower() ?? "";
-        
+
         filteredAddons.Clear();
-        
+
         foreach (var addon in allAddons)
         {
             if (string.IsNullOrWhiteSpace(searchText) ||
@@ -201,7 +219,7 @@ public partial class AddonSelectionGridDialog : Window
         {
             var point = e.GetCurrentPoint(this);
             var isCtrlPressed = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-            
+
             if (point.Properties.IsLeftButtonPressed)
             {
                 if (isCtrlPressed)
@@ -232,10 +250,10 @@ public partial class AddonSelectionGridDialog : Window
     private void UpdateSelectionText()
     {
         var selectedCount = allAddons.Count(a => a.IsSelected);
-        SelectionText.Text = selectedCount > 0 
-            ? L.Format("SelectionStatus.Selected", selectedCount) 
+        SelectionText.Text = selectedCount > 0
+            ? L.Format("SelectionStatus.Selected", selectedCount)
             : L.Get("SelectionStatus.NoneSelected");
-        
+
         OkButton.IsEnabled = selectedCount > 0;
     }
 
@@ -261,7 +279,7 @@ public partial class AddonSelectionGridDialog : Window
             .Where(a => a.IsSelected)
             .Select(a => a.Id)
             .ToList();
-        
+
         Close(selectedIds);
     }
 
@@ -269,7 +287,7 @@ public partial class AddonSelectionGridDialog : Window
     {
         Close(null);
     }
-    
+
     protected override void OnClosed(EventArgs e)
     {
         // Unsubscribe from event handlers to prevent memory leaks
@@ -277,7 +295,7 @@ public partial class AddonSelectionGridDialog : Window
         {
             addon.PropertyChanged -= OnAddonPropertyChanged;
         }
-        
+
         base.OnClosed(e);
     }
 }

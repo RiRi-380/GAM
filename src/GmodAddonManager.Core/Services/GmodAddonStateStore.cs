@@ -214,16 +214,40 @@ namespace GmodAddonManager.Core.Services
 
                 var temp = noMountFilePath + ".tmp";
                 var content = BuildNoMountFileContent(disabledIds);
-                // Use UTF-8 without BOM - Source engine doesn't support BOM
-                File.WriteAllText(temp, content, new UTF8Encoding(false));
+                var utf8NoBom = new UTF8Encoding(false);
 
-                if (File.Exists(noMountFilePath))
+                try
                 {
-                    File.Replace(temp, noMountFilePath, null);
+                    // Use UTF-8 without BOM - Source engine doesn't support BOM
+                    File.WriteAllText(temp, content, utf8NoBom);
+
+                    if (File.Exists(noMountFilePath))
+                    {
+                        File.Replace(temp, noMountFilePath, null);
+                    }
+                    else
+                    {
+                        File.Move(temp, noMountFilePath);
+                    }
                 }
-                else
+                catch (UnauthorizedAccessException)
                 {
-                    File.Move(temp, noMountFilePath);
+                    // Fallback for environments where delete/replace is restricted (direct write).
+                    File.WriteAllText(noMountFilePath, content, utf8NoBom);
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(temp))
+                        {
+                            File.Delete(temp);
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore cleanup failures.
+                    }
                 }
             }
             catch (Exception ex)

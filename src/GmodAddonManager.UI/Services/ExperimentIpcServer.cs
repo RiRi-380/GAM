@@ -126,7 +126,11 @@ namespace GmodAddonManager.UI.Services
                         error = "missing_task_id";
                         return false;
                     }
-                    addonManager.LogTaskStart(payload.TaskId!, payload.Note);
+                    if (!addonManager.LogTaskStart(payload.TaskId!, out var taskStartError, payload.Note))
+                    {
+                        error = taskStartError ?? "task_start_failed";
+                        return false;
+                    }
                     return true;
                 case "task_end":
                     if (string.IsNullOrWhiteSpace(payload.TaskId))
@@ -134,13 +138,25 @@ namespace GmodAddonManager.UI.Services
                         error = "missing_task_id";
                         return false;
                     }
-                    addonManager.LogTaskEnd(payload.TaskId!, payload.ExpectedHash, payload.Success, payload.Note);
+                    if (!addonManager.LogTaskEnd(payload.TaskId!, out var taskEndError, payload.ExpectedHash, payload.Success, payload.Note))
+                    {
+                        error = taskEndError ?? "task_end_failed";
+                        return false;
+                    }
                     return true;
                 case "bl_start":
-                    addonManager.LogBlSwitchStart(payload.Method, payload.Note);
+                    if (!addonManager.LogBlSwitchStart(out var blStartError, payload.Method, payload.Note))
+                    {
+                        error = blStartError ?? "bl_start_failed";
+                        return false;
+                    }
                     return true;
                 case "bl_end":
-                    addonManager.LogBlSwitchEnd(payload.Method, payload.ExpectedHash, payload.Success, payload.Note);
+                    if (!addonManager.LogBlSwitchEnd(out var blEndError, payload.Method, payload.ExpectedHash, payload.Success, payload.Note))
+                    {
+                        error = blEndError ?? "bl_end_failed";
+                        return false;
+                    }
                     return true;
                 default:
                     error = "unknown_command";

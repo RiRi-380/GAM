@@ -152,7 +152,35 @@ public partial class App : Application
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"Creating AddonManager at: {DateTime.Now}\n");
 #endif
-                addonManager = new AddonManager(null, errorHandler);
+                var disableMode = settings.DisableMode;
+                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
+                {
+                    disableMode = DisableMode.Hard;
+                }
+
+                string? previewWorkshopPath = null;
+                string? previewAppDataPath = null;
+                if (IsPreviewMode())
+                {
+                    var previewRoot = GetPreviewRoot();
+                    previewWorkshopPath = Path.Combine(previewRoot, "steamapps", "workshop", "content", "4000");
+                    previewAppDataPath = Path.Combine(previewRoot, "appdata");
+                    Directory.CreateDirectory(previewWorkshopPath);
+                    Directory.CreateDirectory(previewAppDataPath);
+
+                    // Keep preview mode in soft disable to avoid file ops.
+                    disableMode = DisableMode.Soft;
+                    errorHandler.HandleInfo($"Preview mode enabled. WorkshopPath={previewWorkshopPath}", "App");
+                }
+
+                addonManager = new AddonManager(new AddonManagerOptions
+                {
+                    ErrorHandler = errorHandler,
+                    DisableMode = disableMode,
+                    CustomWorkshopPath = previewWorkshopPath,
+                    CustomAppDataPath = previewAppDataPath,
+                    DisableCacheScan = IsPreviewMode()
+                });
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
@@ -162,13 +190,8 @@ public partial class App : Application
 #endif
 
                 // 無効化モード設定を適用
-                addonManager.DisableMode = settings.DisableMode;
                 addonManager.UnsubscribeOnHardDisable = settings.UnsubscribeOnHardDisable;
                 addonManager.StrictLinkMode = settings.StrictLinkMode || addonManager.StrictLinkMode;
-                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
-                {
-                    addonManager.DisableMode = DisableMode.Hard;
-                }
                 
                 // WorkshopIconResolverの取得
                 workshopIconResolver = addonManager.GetWorkshopIconResolver() as WorkshopIconResolver;
@@ -534,5 +557,37 @@ public partial class App : Application
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPreviewMode()
+    {
+        if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_UI_PREVIEW")))
+        {
+            return true;
+        }
+
+        var args = Environment.GetCommandLineArgs();
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, "--preview", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetPreviewRoot()
+    {
+        var env = Environment.GetEnvironmentVariable("GAM_UI_PREVIEW_ROOT");
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            return env;
+        }
+
+        // Use a unique temp folder per run to avoid reusing cached preview config.
+        var runId = Guid.NewGuid().ToString("N");
+        return Path.Combine(Path.GetTempPath(), "GAM_UI_PREVIEW", runId);
     }
 }

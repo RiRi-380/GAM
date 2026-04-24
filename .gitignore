@@ -184,6 +184,12 @@ dist/
 last_update_check.txt
 *.bak
 
+# Local workspaces and generated experiment output
+.codex/
+.claude/
+experiment_logs/
+kp2025_results/
+
 # Personal/sensitive files
 *.private
 *.secret
@@ -203,14 +209,14 @@ test_output/
 Thumbs.db
 desktop.ini
 
-# Claude artifacts
-.claude/
-
 # Build output for release
+GAM-Setup.exe
 GAM-Setup-*.exe
 GAM-Portable-*.zip
+GAM-UpdateManifest-*.json
+GAM-UpdateManifest-*.sig
 
-# Release documentation (for AI use only)
+# Local release notes and command notes
 RELEASE_COMMANDS.md
 
 # Old release artifacts

@@ -6,7 +6,7 @@
 - Override path: `GAM_EXPERIMENT_LOG_PATH`
 
 ## Context Fields (required)
-- `schema_version`: schema version string (current: `2`).
+- `schema_version`: schema version string (current: `3`).
 - `event_scope`: `user` | `system` | `external`.
 - `monotonic_ms`: monotonic timestamp in milliseconds (Stopwatch-based).
 - `strict_link_mode`: boolean (`true`/`false`) indicating StrictLinkMode at log time.
@@ -29,6 +29,20 @@
 - `error_code`: machine-readable error code.
 - `operation_id`: correlates Start/End events.
 - `asset_id`: asset identifier when the target is an addon.
+- `asset_label`: short asset label (e.g., "A", "B").
+- `asset_display_name`: UI-facing asset name for reports.
+- `from_asset_ids`: list of asset ids before a switch.
+- `from_asset_labels`: list of asset labels before a switch.
+- `from_asset_display_names`: list of asset display names before a switch.
+- `to_asset_id`: target asset id for a switch.
+- `to_asset_label`: target asset label for a switch.
+- `to_asset_display_name`: target asset display name for a switch.
+- `parent_operation_id`: parent operation id (nested events).
+- `state_hash_scope`: scope for before/after hash (e.g., `actual`, `actual:addons.txt`).
+- `expected_hash_scope`: scope for expected hash.
+- `state_changed`: boolean flag if before/after hashes differ.
+- `from_asset_resolve_method`: resolution method for from_asset (e.g., `label_exact`).
+- `to_asset_resolve_method`: resolution method for to_asset.
 - `trial_index`: repetition index within the same condition.
 - `gmod_running`: boolean (true when GMod is running).
 - `pending_change_queued`: boolean (true when pending changes exist).

@@ -15,7 +15,6 @@ common=(
   --mode steamcmd
   --steamcmd-path "${GAM_STEAMCMD_PATH}"
   --steam-user "${GAM_STEAM_USER}"
-  --steam-password "${GAM_STEAM_PASSWORD}"
 )
 if [[ -n "${GAM_STEAM_GUARD:-}" ]]; then
   common+=(--steam-guard "${GAM_STEAM_GUARD}")

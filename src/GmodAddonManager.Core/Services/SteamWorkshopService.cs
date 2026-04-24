@@ -28,13 +28,15 @@ namespace GmodAddonManager.Core.Services
         {
             MaxConnectionsPerServer = 100, // CDNへの接続数を大幅増加
             UseProxy = false, // プロキシをバイパスして直接接続
-            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+            CheckCertificateRevocationList = true
         });
         private readonly SemaphoreSlim rateLimiter = new SemaphoreSlim(20, 20); // 並列数を増加
         private DateTime lastRequestTime = DateTime.MinValue;
         private const int MinRequestInterval = 50; // インターバルを短縮
         private const string SteamApiUrl = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
         private const long MaxCacheSizeBytes = 100L * 1024 * 1024; // 100MB
+        private const long MaxThumbnailBytes = 1024 * 1024;
         
         private readonly IIconResolver? _iconResolver;
 
@@ -118,7 +120,7 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<bool> DownloadThumbnailAsync(string url, string cachePath)
         {
-            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(cachePath))
+            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(cachePath) || !IsHttpsUrl(url))
             {
                 return false;
             }
@@ -131,19 +133,21 @@ namespace GmodAddonManager.Core.Services
                     Directory.CreateDirectory(directory);
                 }
 
-                var response = await httpClient.GetAsync(url);
+                using var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 if (!response.IsSuccessStatusCode)
                 {
                     return false;
                 }
 
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                if (!IsImageContentType(response) ||
+                    response.Content.Headers.ContentLength is long contentLength && contentLength > MaxThumbnailBytes)
+                {
+                    return false;
+                }
+
+                var imageBytes = await ReadContentWithLimitAsync(response.Content, MaxThumbnailBytes);
                 
                 // 画像が大きすぎる場合の警告（1MB以上）
-                if (imageBytes.Length > 1024 * 1024)
-                {
-                }
-                
                 // キャッシュサイズをチェックしてクリーンアップ
                 var cacheDir = Path.GetDirectoryName(cachePath);
                 if (!string.IsNullOrEmpty(cacheDir))
@@ -159,6 +163,46 @@ namespace GmodAddonManager.Core.Services
             {
                 return false;
             }
+        }
+
+        private static bool IsHttpsUrl(string url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                   uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        private static bool IsImageContentType(HttpResponseMessage response)
+        {
+            var mediaType = response.Content.Headers.ContentType?.MediaType;
+            return string.IsNullOrEmpty(mediaType) ||
+                   mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task<byte[]> ReadContentWithLimitAsync(HttpContent content, long maxBytes)
+        {
+            await using var stream = await content.ReadAsStreamAsync();
+            using var memory = new MemoryStream();
+            var buffer = new byte[8192];
+            long totalBytes = 0;
+
+            while (true)
+            {
+                var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                totalBytes += bytesRead;
+                if (totalBytes > maxBytes)
+                {
+                    throw new InvalidDataException($"Remote image exceeded {maxBytes} bytes.");
+                }
+
+                memory.Write(buffer, 0, bytesRead);
+            }
+
+            return memory.ToArray();
         }
 
         public async Task<WorkshopItemDetails?> GetWorkshopDetailsAsync(string workshopId)

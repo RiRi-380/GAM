@@ -16,12 +16,12 @@ namespace GmodAddonManager.UI.Views;
 public class SelectableAddon : INotifyPropertyChanged
 {
     private bool isSelected;
-    
-    public string Id { get; set; }
-    public string Title { get; set; }
+
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
     public long Size { get; set; }
     public string FormattedSize => GetFormattedSize();
-    
+
     public bool IsSelected
     {
         get => isSelected;
@@ -34,7 +34,7 @@ public class SelectableAddon : INotifyPropertyChanged
             }
         }
     }
-    
+
     private string GetFormattedSize()
     {
         string[] sizes = { "B", "KB", "MB", "GB", "TB" };
@@ -47,9 +47,9 @@ public class SelectableAddon : INotifyPropertyChanged
         }
         return $"{len:0.##} {sizes[order]}";
     }
-    
+
     public event PropertyChangedEventHandler? PropertyChanged;
-    
+
     protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -64,31 +64,49 @@ public partial class AddonSelectionDialog : Window
     private readonly ObservableCollection<SelectableAddon> filteredAddons;
     private DispatcherTimer searchTimer;
 
-    public AddonSelectionDialog(AddonManager addonManager, Asset currentAsset)
+    public AddonSelectionDialog()
+    {
+        addonManager = null!;
+        currentAsset = null!;
+        allAddons = new ObservableCollection<SelectableAddon>();
+        filteredAddons = new ObservableCollection<SelectableAddon>();
+
+        InitializeComponent();
+
+        searchTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        searchTimer.Tick += OnSearchTimerTick;
+
+        SearchTextBox.TextChanged += OnSearchTextChanged;
+        AddonList.ItemsSource = filteredAddons;
+    }
+public AddonSelectionDialog(AddonManager addonManager, Asset currentAsset)
     {
         this.addonManager = addonManager;
         this.currentAsset = currentAsset;
         this.allAddons = new ObservableCollection<SelectableAddon>();
         this.filteredAddons = new ObservableCollection<SelectableAddon>();
-        
+
         InitializeComponent();
-        
+
         // 検索タイマーの設定
         searchTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(300)
         };
         searchTimer.Tick += OnSearchTimerTick;
-        
+
         // 検索ボックスのイベント設定
         SearchTextBox.TextChanged += OnSearchTextChanged;
-        
+
         // アドオンリストの設定
         AddonList.ItemsSource = filteredAddons;
-        
+
         // データの読み込み
         LoadAddons();
-        
+
         // 選択状態の監視
         foreach (var addon in allAddons)
         {
@@ -102,7 +120,7 @@ public partial class AddonSelectionDialog : Window
         var availableAddons = allAddonsDict.Values
             .Where(a => !currentAsset.Addons.Contains(a.Id))
             .OrderBy(a => a.Title);
-        
+
         foreach (var addon in availableAddons)
         {
             var selectableAddon = new SelectableAddon
@@ -112,11 +130,11 @@ public partial class AddonSelectionDialog : Window
                 Size = addon.Size,
                 IsSelected = false
             };
-            
+
             allAddons.Add(selectableAddon);
             filteredAddons.Add(selectableAddon);
         }
-        
+
         UpdateSelectionText();
     }
 
@@ -135,9 +153,9 @@ public partial class AddonSelectionDialog : Window
     private void FilterAddons()
     {
         var searchText = SearchTextBox.Text?.ToLower() ?? "";
-        
+
         filteredAddons.Clear();
-        
+
         foreach (var addon in allAddons)
         {
             if (string.IsNullOrWhiteSpace(searchText) ||
@@ -160,10 +178,10 @@ public partial class AddonSelectionDialog : Window
     private void UpdateSelectionText()
     {
         var selectedCount = allAddons.Count(a => a.IsSelected);
-        SelectionText.Text = selectedCount > 0 
-            ? L.Format("Dialog.AddonsSelected", selectedCount) 
+        SelectionText.Text = selectedCount > 0
+            ? L.Format("Dialog.AddonsSelected", selectedCount)
             : L.Get("Dialog.SelectAddonsPrompt");
-        
+
         OkButton.IsEnabled = selectedCount > 0;
     }
 
@@ -189,7 +207,7 @@ public partial class AddonSelectionDialog : Window
             .Where(a => a.IsSelected)
             .Select(a => a.Id)
             .ToList();
-        
+
         Close(selectedIds);
     }
 
@@ -197,7 +215,7 @@ public partial class AddonSelectionDialog : Window
     {
         Close(null);
     }
-    
+
     protected override void OnClosed(EventArgs e)
     {
         // Unsubscribe from event handlers to prevent memory leaks
@@ -205,7 +223,7 @@ public partial class AddonSelectionDialog : Window
         {
             addon.PropertyChanged -= OnAddonPropertyChanged;
         }
-        
+
         base.OnClosed(e);
     }
 }

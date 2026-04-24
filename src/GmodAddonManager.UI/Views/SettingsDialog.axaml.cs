@@ -19,39 +19,39 @@ public partial class SettingsDialog : Window
     private readonly IDialogService dialogService;
     private AppSettings? currentSettings;
     private readonly UpdateService updateService;
-    
+
     public event EventHandler? ResetManagerRequested;
     public event EventHandler? RestoreOriginalRequested;
-    
+
     public SettingsDialog()
     {
         InitializeComponent();
         dialogService = new DialogService();
-        
+
         // UpdateServiceの初期化
         var version = System.Reflection.Assembly.GetExecutingAssembly()
             .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
             .InformationalVersion?.Split('-')[0] ?? "1.0.0";
         updateService = new UpdateService(version);
-        
+
         LoadCurrentSettings();
     }
-    
+
     private void LoadCurrentSettings()
     {
         currentSettings = AppSettings.Load();
-        
-        
+
+
         // ログの場所を表示
         var logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "GmodAddonManager", "logs"
         );
         LogLocationText.Text = logPath;
-        
+
         // 言語設定を反映
         LanguageComboBox.SelectedIndex = currentSettings.Language == "ja-JP" ? 0 : 1;
-        
+
         // コンソール表示設定を反映
         ShowConsoleCheckBox.IsChecked = currentSettings.ShowConsoleOnStartup;
 
@@ -59,23 +59,24 @@ public partial class SettingsDialog : Window
         SoftDisableRadio.IsChecked = currentSettings.DisableMode == DisableMode.Soft;
         HardDisableRadio.IsChecked = currentSettings.DisableMode == DisableMode.Hard;
         UnsubscribeCheckBox.IsChecked = currentSettings.UnsubscribeOnHardDisable;
-        
+
         // ComboBoxの選択変更イベントを設定
         LanguageComboBox.SelectionChanged += OnLanguageSelectionChanged;
     }
-    
+
     private void OnCancel(object? sender, RoutedEventArgs e)
     {
         Close();
     }
-    
+
     private async void OnSave(object? sender, RoutedEventArgs e)
     {
         if (currentSettings == null) return;
-        
+
         var needsRestart = false;
         var languageChanged = false;
-        
+        var disableModeChanged = false;
+
         // 言語が変更されたかチェック
         var newLanguage = LanguageComboBox.SelectedIndex == 0 ? "ja-JP" : "en-US";
         if (newLanguage != currentSettings.Language)
@@ -84,43 +85,59 @@ public partial class SettingsDialog : Window
             // 言語を即座に変更
             LocalizationManager.Instance.ChangeLanguage(newLanguage);
         }
-        
+
         // 設定を更新
         currentSettings.Language = newLanguage;
 
         // 無効化モード設定を更新
-        currentSettings.DisableMode = SoftDisableRadio.IsChecked == true ? DisableMode.Soft : DisableMode.Hard;
+        var newDisableMode = SoftDisableRadio.IsChecked == true ? DisableMode.Soft : DisableMode.Hard;
+        if (newDisableMode != currentSettings.DisableMode)
+        {
+            disableModeChanged = true;
+            needsRestart = true;
+        }
+        currentSettings.DisableMode = newDisableMode;
         currentSettings.UnsubscribeOnHardDisable = UnsubscribeCheckBox.IsChecked ?? false;
-        
+
         // コンソール表示設定を更新
         var newShowConsole = ShowConsoleCheckBox.IsChecked ?? false;
-        if (newShowConsole != currentSettings.ShowConsoleOnStartup)
+        var showConsoleChanged = newShowConsole != currentSettings.ShowConsoleOnStartup;
+        if (showConsoleChanged)
         {
             needsRestart = true;
         }
         currentSettings.ShowConsoleOnStartup = newShowConsole;
-        
+
         // 保存
         currentSettings.Save();
-        
+
         // 成功メッセージを表示
         if (needsRestart)
         {
-            var consoleMessage = newShowConsole 
-                ? "設定が保存されました。\nコンソール表示設定は次回起動時から有効になります。"
-                : "設定が保存されました。\nコンソール表示設定は次回起動時から無効になります。";
-            await dialogService.ShowInfoAsync(L.Get("Success.Title"), consoleMessage);
+            var reasons = new System.Collections.Generic.List<string>();
+            if (showConsoleChanged)
+            {
+                reasons.Add("コンソール表示");
+            }
+            if (disableModeChanged)
+            {
+                reasons.Add("無効化方式");
+            }
+
+            var reasonText = reasons.Count > 0 ? string.Join(" / ", reasons) : "設定";
+            var message = $"設定が保存されました。変更（{reasonText}）を反映するにはアプリの再起動が必要です。";
+            await dialogService.ShowInfoAsync(L.Get("Success.Title"), message);
         }
         else if (languageChanged)
         {
             // 言語変更済みのメッセージ
             await dialogService.ShowInfoAsync(L.Get("Success.Title"), L.Get("Settings.LanguageChanged"));
         }
-        
+
         Close();
     }
-    
-    
+
+
     private void OnLanguageSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (currentSettings != null && LanguageComboBox.SelectedIndex >= 0)
@@ -133,7 +150,7 @@ public partial class SettingsDialog : Window
             }
         }
     }
-    
+
     private void OnOpenLogFolder(object? sender, RoutedEventArgs e)
     {
         try
@@ -142,12 +159,12 @@ public partial class SettingsDialog : Window
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GmodAddonManager", "logs"
             );
-            
+
             if (!Directory.Exists(logPath))
             {
                 Directory.CreateDirectory(logPath);
             }
-            
+
             Process.Start(new ProcessStartInfo
             {
                 FileName = logPath,
@@ -156,29 +173,29 @@ public partial class SettingsDialog : Window
         }
         catch (Exception ex)
         {
-            dialogService.ShowErrorAsync(L.Get("Error.Title"), 
+            dialogService.ShowErrorAsync(L.Get("Error.Title"),
                 L.Format("Error.OpenFolderFailed", ex.Message)).Wait();
         }
     }
-    
+
     private void OnResetManager(object? sender, RoutedEventArgs e)
     {
         Close();
         ResetManagerRequested?.Invoke(this, EventArgs.Empty);
     }
-    
+
     private void OnRestoreOriginal(object? sender, RoutedEventArgs e)
     {
         Close();
         RestoreOriginalRequested?.Invoke(this, EventArgs.Empty);
     }
-    
+
     private async void OnCheckForUpdate(object? sender, RoutedEventArgs e)
     {
         try
         {
             var updateInfo = await updateService.CheckForUpdateAsync();
-            
+
             if (updateInfo != null)
             {
                 // アップデートダイアログを表示

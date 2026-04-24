@@ -19,7 +19,6 @@ $results = "tester/results/runs-steamcmd.csv"
 dotnet run --project $runner -- --mode steamcmd `
   --steamcmd-path "$steamCmd" `
   --steam-user "$steamUser" `
-  --steam-password "$steamPass" `
   --steam-guard "$steamGuard" `
   --steam-library "$steamLibrary" `
   --dataset $dataset `
@@ -31,7 +30,6 @@ dotnet run --project $runner -- --mode steamcmd `
 dotnet run --project $runner -- --mode steamcmd `
   --steamcmd-path "$steamCmd" `
   --steam-user "$steamUser" `
-  --steam-password "$steamPass" `
   --steam-guard "$steamGuard" `
   --steam-library "$steamLibrary" `
   --dataset $dataset `

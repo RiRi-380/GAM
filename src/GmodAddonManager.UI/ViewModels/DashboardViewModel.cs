@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reactive;
+using System.Security.Cryptography;
 using ReactiveUI;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
@@ -11,7 +12,6 @@ namespace GmodAddonManager.UI.ViewModels
     public class DashboardViewModel : ViewModelBase
     {
         private readonly AddonManager _addonManager;
-        private readonly Random _random = new Random();
         
         private int _totalAddons;
         private int _enabledAddons;
@@ -177,7 +177,7 @@ namespace GmodAddonManager.UI.ViewModels
                 L.Get("Dashboard.Tip8")
             };
             
-            CurrentTip = tips[_random.Next(tips.Length)];
+            CurrentTip = tips[RandomNumberGenerator.GetInt32(tips.Length)];
         }
         
         private string FormatFileSize(long bytes)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Management;
@@ -10,9 +11,14 @@ namespace GmodAddonManager.Core.Services
 {
     public class GmodProcessWatcher : IDisposable
     {
-        private const string GMOD_PROCESS_NAME = "hl2";
-        private ManagementEventWatcher startWatcher;
-        private ManagementEventWatcher stopWatcher;
+        private static readonly string[] GmodProcessNames = new[]
+        {
+            "hl2",
+            "gmod",
+            "garrysmod"
+        };
+        private readonly List<ManagementEventWatcher> startWatchers = new List<ManagementEventWatcher>();
+        private readonly List<ManagementEventWatcher> stopWatchers = new List<ManagementEventWatcher>();
         private Timer pollingTimer;
         private bool isGmodRunning;
         private readonly object lockObject = new object();
@@ -20,15 +26,15 @@ namespace GmodAddonManager.Core.Services
         public event EventHandler<ProcessEventArgs> GmodStarted;
         public event EventHandler<ProcessEventArgs> GmodStopped;
 
-        public bool IsGmodRunning 
-        { 
-            get 
-            { 
-                lock (lockObject) 
-                { 
-                    return isGmodRunning; 
-                } 
-            } 
+        public bool IsGmodRunning
+        {
+            get
+            {
+                lock (lockObject)
+                {
+                    return isGmodRunning;
+                }
+            }
         }
 
         public GmodProcessWatcher()
@@ -41,7 +47,7 @@ namespace GmodAddonManager.Core.Services
             try
             {
                 // GmodProcessWatcher.StartWatching called
-                
+
                 // Check if running in WSL
                 if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux))
                 {
@@ -49,25 +55,35 @@ namespace GmodAddonManager.Core.Services
                     StartPolling();
                     return;
                 }
-                
-                // WMIイベントウォッチャーの設定
-                var startQuery = new WqlEventQuery(
-                    "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'hl2.exe'");
-                startWatcher = new ManagementEventWatcher(startQuery);
-                startWatcher.EventArrived += OnProcessStarted;
-                startWatcher.Start();
 
-                var stopQuery = new WqlEventQuery(
-                    "SELECT * FROM Win32_ProcessStopTrace WHERE ProcessName = 'hl2.exe'");
-                stopWatcher = new ManagementEventWatcher(stopQuery);
-                stopWatcher.EventArrived += OnProcessStopped;
-                stopWatcher.Start();
+                // WMI process watchers
+                foreach (var processName in GmodProcessNames)
+                {
+                    var exeName = processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                        ? processName
+                        : processName + ".exe";
+
+                    var startQuery = new WqlEventQuery(
+                        $"SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = '{exeName}'");
+                    var startWatcher = new ManagementEventWatcher(startQuery);
+                    startWatcher.EventArrived += OnProcessStarted;
+                    startWatcher.Start();
+                    startWatchers.Add(startWatcher);
+
+                    var stopQuery = new WqlEventQuery(
+                        $"SELECT * FROM Win32_ProcessStopTrace WHERE ProcessName = '{exeName}'");
+                    var stopWatcher = new ManagementEventWatcher(stopQuery);
+                    stopWatcher.EventArrived += OnProcessStopped;
+                    stopWatcher.Start();
+                    stopWatchers.Add(stopWatcher);
+                }
 
                 // Started WMI-based process monitoring for Gmod
             }
             catch (Exception ex)
             {
                 // WMIが使えない場合はポーリングにフォールバック
+                StopWatching();
                 StartPolling();
             }
 
@@ -79,89 +95,61 @@ namespace GmodAddonManager.Core.Services
         {
             // 5秒ごとにプロセスをチェック
             pollingTimer = new Timer(
-                _ => CheckGmodProcess(), 
-                null, 
-                TimeSpan.Zero, 
+                _ => CheckGmodProcess(),
+                null,
+                TimeSpan.Zero,
                 TimeSpan.FromSeconds(5));
-            
+
         }
 
         private void OnProcessStarted(object sender, EventArrivedEventArgs e)
         {
-            lock (lockObject)
-            {
-                if (!isGmodRunning)
-                {
-                    isGmodRunning = true;
-                    var processId = Convert.ToInt32(e.NewEvent["ProcessID"]);
-                    
-                    GmodStarted?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processId,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
+            CheckGmodProcess();
         }
 
         private void OnProcessStopped(object sender, EventArrivedEventArgs e)
         {
-            lock (lockObject)
-            {
-                if (isGmodRunning)
-                {
-                    isGmodRunning = false;
-                    var processId = Convert.ToInt32(e.NewEvent["ProcessID"]);
-                    
-                    GmodStopped?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processId,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
+            CheckGmodProcess();
         }
 
         private void CheckGmodProcess()
         {
             try
             {
-                // CheckGmodProcess called
-                var processes = Process.GetProcessesByName(GMOD_PROCESS_NAME);
-                // Found processes
+                var processes = new List<Process>();
+                foreach (var name in GmodProcessNames)
+                {
+                    processes.AddRange(Process.GetProcessesByName(name));
+                }
+
                 var wasRunning = isGmodRunning;
 
-            lock (lockObject)
-            {
-                isGmodRunning = processes.Any();
-
-                if (!wasRunning && isGmodRunning)
+                lock (lockObject)
                 {
-                    // Gmodが起動した
-                    
-                    GmodStarted?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processes[0].Id,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-                else if (wasRunning && !isGmodRunning)
-                {
-                    // Gmodが終了した
-                    
-                    GmodStopped?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = -1,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
+                    isGmodRunning = processes.Any();
 
-            // プロセスハンドルを解放
-            foreach (var process in processes)
-            {
-                process.Dispose();
-            }
+                    if (!wasRunning && isGmodRunning)
+                    {
+                        GmodStarted?.Invoke(this, new ProcessEventArgs
+                        {
+                            ProcessId = processes[0].Id,
+                            Timestamp = DateTime.Now
+                        });
+                    }
+                    else if (wasRunning && !isGmodRunning)
+                    {
+                        GmodStopped?.Invoke(this, new ProcessEventArgs
+                        {
+                            ProcessId = -1,
+                            Timestamp = DateTime.Now
+                        });
+                    }
+                }
+
+                foreach (var process in processes)
+                {
+                    process.Dispose();
+                }
             }
             catch (Exception ex)
             {
@@ -177,13 +165,23 @@ namespace GmodAddonManager.Core.Services
 
         public void StopWatching()
         {
-            
+
             try
             {
-                startWatcher?.Stop();
-                startWatcher?.Dispose();
-                stopWatcher?.Stop();
-                stopWatcher?.Dispose();
+                foreach (var watcher in startWatchers)
+                {
+                    watcher?.Stop();
+                    watcher?.Dispose();
+                }
+                startWatchers.Clear();
+
+                foreach (var watcher in stopWatchers)
+                {
+                    watcher?.Stop();
+                    watcher?.Dispose();
+                }
+                stopWatchers.Clear();
+
                 pollingTimer?.Dispose();
             }
             catch (Exception ex)

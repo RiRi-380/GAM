@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using GmodAddonManager.Core.Models;
@@ -96,7 +97,21 @@ namespace GmodAddonManager.Core.Services
             bool? gmodRunning = null,
             bool? pendingChangeQueued = null,
             int? pendingQueueLength = null,
-            string? taskIdOverride = null)
+            string? taskIdOverride = null,
+            string? assetLabel = null,
+            string? assetDisplayName = null,
+            List<string>? fromAssetIds = null,
+            List<string>? fromAssetLabels = null,
+            List<string>? fromAssetDisplayNames = null,
+            string? toAssetId = null,
+            string? toAssetLabel = null,
+            string? toAssetDisplayName = null,
+            string? parentOperationId = null,
+            string? stateHashScope = null,
+            string? expectedHashScope = null,
+            bool? stateChanged = null,
+            string? fromAssetResolveMethod = null,
+            string? toAssetResolveMethod = null)
         {
             if (!Enabled)
             {
@@ -126,6 +141,20 @@ namespace GmodAddonManager.Core.Services
                 ErrorCode = errorCode,
                 OperationId = operationId,
                 AssetId = assetId,
+                AssetLabel = assetLabel,
+                AssetDisplayName = assetDisplayName,
+                FromAssetIds = fromAssetIds,
+                FromAssetLabels = fromAssetLabels,
+                FromAssetDisplayNames = fromAssetDisplayNames,
+                ToAssetId = toAssetId,
+                ToAssetLabel = toAssetLabel,
+                ToAssetDisplayName = toAssetDisplayName,
+                ParentOperationId = parentOperationId,
+                StateHashScope = stateHashScope,
+                ExpectedHashScope = expectedHashScope,
+                StateChanged = stateChanged,
+                FromAssetResolveMethod = fromAssetResolveMethod,
+                ToAssetResolveMethod = toAssetResolveMethod,
                 GmodRunning = gmodRunning,
                 PendingChangeQueued = pendingChangeQueued,
                 PendingQueueLength = pendingQueueLength,

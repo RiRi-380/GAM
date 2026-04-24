@@ -1,4 +1,4 @@
-# Gmod Addon Manager (GAM)
+﻿# Gmod Addon Manager (GAM)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![.NET](https://img.shields.io/badge/.NET-6.0-512BD4)](https://dotnet.microsoft.com/download/dotnet/6.0)
@@ -54,7 +54,7 @@ Garry's Mod のアドオンを効率的に管理するための Windows アプ�
 - **ランタイム**: [.NET 6.0 Runtime](https://dotnet.microsoft.com/download/dotnet/6.0)
 - **Visual C++**: [Visual C++ 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe)（インストーラー版では自動インストール）
 - **権限**: 管理者権限（ジャンクション作成のため）
-- **その他**: 
+- **その他**:
   - Steam がインストールされていること
   - Garry's Mod を所有していること（Workshop機能使用時）
 
