@@ -5,6 +5,7 @@ using Newtonsoft.Json;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace GmodAddonManager.Core.Services
 {
@@ -12,29 +13,40 @@ namespace GmodAddonManager.Core.Services
     {
         private const string GITHUB_API_URL = "https://api.github.com/repos/RiRi-380/GAM/releases/latest";
         private const string UPDATE_CHECK_FILE = "last_update_check.txt";
-        private static readonly HttpClient httpClient = new HttpClient();
+        private static readonly HttpClient sharedHttpClient = new HttpClient();
+        private readonly HttpClient httpClient;
         private readonly string currentVersion;
-        
+        private static readonly TimeSpan DefaultDownloadInactivityTimeout = TimeSpan.FromSeconds(30);
+
         static UpdateService()
         {
-            httpClient.DefaultRequestHeaders.Add("User-Agent", "GmodAddonManager");
+            sharedHttpClient.DefaultRequestHeaders.Add("User-Agent", "GmodAddonManager");
+            sharedHttpClient.Timeout = TimeSpan.FromMinutes(15);
         }
 
         public UpdateService(string currentVersion)
+            : this(currentVersion, null)
+        {
+        }
+
+        internal UpdateService(string currentVersion, HttpClient? httpClient)
         {
             this.currentVersion = currentVersion;
+            this.httpClient = httpClient ?? sharedHttpClient;
         }
+
+        internal TimeSpan DownloadInactivityTimeout { get; set; } = DefaultDownloadInactivityTimeout;
 
         public async Task<UpdateInfo?> CheckForUpdateAsync()
         {
             try
             {
-                if (await ShouldSkipUpdateCheck())
+                if (ShouldSkipUpdateCheck())
                     return null;
 
                 var response = await httpClient.GetStringAsync(GITHUB_API_URL);
                 var release = JsonConvert.DeserializeObject<GitHubRelease>(response);
-                await SaveLastCheckTime();
+                SaveLastCheckTime();
 
                 if (release != null && IsNewerVersion(release.TagName))
                 {
@@ -54,19 +66,19 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                // Update check failed: {ex.Message}
+                Debug.WriteLine($"Update check failed: {ex.Message}");
             }
 
             return null;
         }
 
-        private async Task<bool> ShouldSkipUpdateCheck()
+        private bool ShouldSkipUpdateCheck()
         {
             try
             {
                 var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
                 var checkFilePath = Path.Combine(appDataPath, "GmodAddonManager", UPDATE_CHECK_FILE);
-                
+
                 if (File.Exists(checkFilePath))
                 {
                     var lastCheck = File.ReadAllText(checkFilePath);
@@ -78,10 +90,9 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                // Failed to check last update time - log and assume check is needed
-                System.Diagnostics.Debug.WriteLine($"Failed to read last update check time: {ex.Message}");
+                Debug.WriteLine($"Failed to read last update check time: {ex.Message}");
             }
-            
+
             return false;
         }
 
@@ -97,21 +108,20 @@ namespace GmodAddonManager.Core.Services
                     assetName.Contains("installer", StringComparison.OrdinalIgnoreCase));
         }
 
-        private async Task SaveLastCheckTime()
+        private void SaveLastCheckTime()
         {
             try
             {
                 var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
                 var gamPath = Path.Combine(appDataPath, "GmodAddonManager");
                 Directory.CreateDirectory(gamPath);
-                
+
                 var checkFilePath = Path.Combine(gamPath, UPDATE_CHECK_FILE);
                 File.WriteAllText(checkFilePath, DateTime.Now.ToString("O"));
             }
             catch (Exception ex)
             {
-                // Failed to save last check time - non-critical
-                System.Diagnostics.Debug.WriteLine($"Failed to save last update check time: {ex.Message}");
+                Debug.WriteLine($"Failed to save last update check time: {ex.Message}");
             }
         }
 
@@ -125,17 +135,10 @@ namespace GmodAddonManager.Core.Services
                    remoteVer > currentVer;
         }
 
-        public async Task DownloadAndInstallUpdateAsync(string downloadUrl)
+        public async Task DownloadAndInstallUpdateAsync(string downloadUrl, IProgress<UpdateDownloadProgress>? progress = null, CancellationToken cancellationToken = default)
         {
             var tempPath = Path.Combine(Path.GetTempPath(), "GAM-Update-Setup.exe");
-            
-            using (var response = await httpClient.GetAsync(downloadUrl))
-            {
-                using (var fs = new FileStream(tempPath, FileMode.Create))
-                {
-                    await response.Content.CopyToAsync(fs);
-                }
-            }
+            await DownloadInstallerAsync(downloadUrl, tempPath, progress, cancellationToken);
 
             Process.Start(new ProcessStartInfo
             {
@@ -145,6 +148,155 @@ namespace GmodAddonManager.Core.Services
 
             Environment.Exit(0);
         }
+
+        internal async Task DownloadInstallerAsync(string downloadUrl, string destinationPath, IProgress<UpdateDownloadProgress>? progress = null, CancellationToken cancellationToken = default)
+        {
+            var destinationDirectory = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(destinationDirectory))
+            {
+                Directory.CreateDirectory(destinationDirectory);
+            }
+
+            var partialPath = destinationPath + ".download";
+            try
+            {
+                if (File.Exists(partialPath))
+                {
+                    File.Delete(partialPath);
+                }
+
+                using var response = await GetDownloadResponseAsync(downloadUrl, cancellationToken);
+                response.EnsureSuccessStatusCode();
+
+                var totalBytes = response.Content.Headers.ContentLength;
+                progress?.Report(new UpdateDownloadProgress(0, totalBytes));
+
+                {
+                    await using var responseStream = await response.Content.ReadAsStreamAsync();
+                    await using var fileStream = new FileStream(
+                        partialPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        81920,
+                        useAsync: true);
+
+                    var buffer = new byte[81920];
+                    long downloadedBytes = 0;
+
+                    while (true)
+                    {
+                        var bytesRead = await ReadWithInactivityTimeoutAsync(responseStream, buffer, cancellationToken);
+                        if (bytesRead == 0)
+                        {
+                            break;
+                        }
+
+                        await fileStream.WriteAsync(buffer, 0, bytesRead, cancellationToken);
+                        downloadedBytes += bytesRead;
+                        progress?.Report(new UpdateDownloadProgress(downloadedBytes, totalBytes));
+                    }
+
+                    await fileStream.FlushAsync(cancellationToken);
+                }
+
+                if (File.Exists(destinationPath))
+                {
+                    File.Delete(destinationPath);
+                }
+
+                File.Move(partialPath, destinationPath);
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(partialPath))
+                    {
+                        File.Delete(partialPath);
+                    }
+                }
+                catch
+                {
+                    // Best-effort cleanup; preserve the original download error.
+                }
+
+                throw;
+            }
+        }
+
+        private async Task<HttpResponseMessage> GetDownloadResponseAsync(string downloadUrl, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = CreateDownloadTimeoutToken(cancellationToken);
+            try
+            {
+                return await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw CreateDownloadTimeoutException();
+            }
+        }
+
+        private async Task<int> ReadWithInactivityTimeoutAsync(Stream responseStream, byte[] buffer, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = CreateDownloadTimeoutToken(cancellationToken);
+            try
+            {
+                return await responseStream.ReadAsync(buffer, 0, buffer.Length, timeoutCts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw CreateDownloadTimeoutException();
+            }
+        }
+
+        private CancellationTokenSource CreateDownloadTimeoutToken(CancellationToken cancellationToken)
+        {
+            var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (DownloadInactivityTimeout != Timeout.InfiniteTimeSpan)
+            {
+                timeoutCts.CancelAfter(DownloadInactivityTimeout);
+            }
+
+            return timeoutCts;
+        }
+
+        private TimeoutException CreateDownloadTimeoutException()
+        {
+            return new TimeoutException($"No update download data was received for {DownloadInactivityTimeout.TotalSeconds:F0} seconds.");
+        }
+
+        public static string FormatDownloadProgress(UpdateDownloadProgress progress)
+        {
+            var downloadedMiB = progress.DownloadedBytes / 1024d / 1024d;
+
+            if (progress.TotalBytes is long totalBytes && totalBytes > 0)
+            {
+                var totalMiB = totalBytes / 1024d / 1024d;
+                var percent = Math.Clamp(progress.Percentage ?? 0d, 0d, 100d);
+                return $"Downloading update... {downloadedMiB:F1} / {totalMiB:F1} MB ({percent:F0}%)";
+            }
+
+            return $"Downloading update... {downloadedMiB:F1} MB";
+        }
+    }
+
+    public readonly struct UpdateDownloadProgress
+    {
+        public UpdateDownloadProgress(long downloadedBytes, long? totalBytes)
+        {
+            DownloadedBytes = downloadedBytes;
+            TotalBytes = totalBytes;
+        }
+
+        public long DownloadedBytes { get; }
+        public long? TotalBytes { get; }
+
+        public double? Percentage =>
+            TotalBytes is long totalBytes && totalBytes > 0
+                ? DownloadedBytes * 100d / totalBytes
+                : null;
     }
 
     public class UpdateInfo

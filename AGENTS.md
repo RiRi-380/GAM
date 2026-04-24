@@ -24,8 +24,8 @@
 - UI patterns: MVVM. ViewModels end with `ViewModel`; Views are `.axaml` + `.axaml.cs` with matching type names.
 
 ## Testing Guidelines
-- Current state: No test project in repo. Prefer xUnit when adding tests.
-- Structure: `tests/GmodAddonManager.Core.Tests` targeting service classes; optional `...UI.Tests` for view-models.
+- Current state: xUnit coverage exists for selected Core services.
+- Structure: `tests/GmodAddonManager.Core.Tests` targets service classes; optional `...UI.Tests` may be added for view-models.
 - Naming: File `{TypeName}Tests.cs`; method `MethodName_State_Expected`.
 - Run: `dotnet test`. Aim for meaningful coverage on Core services; avoid UI snapshot tests unless justified.
 

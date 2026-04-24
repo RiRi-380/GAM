@@ -66,6 +66,12 @@ if (Test-Path $steamDllSource) {
     Write-Host "WARNING: steam_api64.dll not found! Workshop features will not work." -ForegroundColor Red
 }
 
+$debugSymbolFiles = Get-ChildItem -Path "publish" -Filter "*.pdb" -File -ErrorAction SilentlyContinue
+if ($debugSymbolFiles) {
+    $debugSymbolFiles | Remove-Item -Force
+    Write-Host "Removed debug symbol files from distributable outputs" -ForegroundColor Green
+}
+
 # Create portable ZIP
 Write-Host "Creating portable ZIP..." -ForegroundColor Yellow
 $zipPath = "GAM-Portable-$releaseVersion.zip"

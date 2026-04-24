@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\..\\src\\GmodAddonManager.Core\\GmodAddonManager.Core.csproj" />
+    <ProjectReference Include="..\..\src\GmodAddonManager.Core\GmodAddonManager.Core.csproj" />
   </ItemGroup>
 
 </Project>

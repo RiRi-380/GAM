@@ -203,14 +203,11 @@ test_output/
 Thumbs.db
 desktop.ini
 
-# Claude artifacts
-.claude/
-
 # Build output for release
 GAM-Setup-*.exe
 GAM-Portable-*.zip
 
-# Release documentation (for AI use only)
+# Local release helper notes
 RELEASE_COMMANDS.md
 
 # Old release artifacts
