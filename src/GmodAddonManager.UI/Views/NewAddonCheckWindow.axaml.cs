@@ -124,16 +124,9 @@ namespace GmodAddonManager.UI.Views
                     await Task.Delay(50); // Small delay to show progress
                 }
                 
-                // Add new addons to configuration
-                foreach (var addon in newAddons)
-                {
-                    config.AddonMetadata[addon.Id] = addon;
-                }
-                
                 // Run migration for new addons only
                 UpdateStatus(L.Get("NewAddonCheck.CreatingLinks"));
-                var newAddonIds = new HashSet<string>(newAddons.Select(a => a.Id));
-                await addonManager.MigrateExistingAddonsAsync(newAddonIds);
+                await addonManager.RegisterNewAddonsAsync(newAddons);
                 
                 // 新規GMAアドオンの名前を更新
                 var newGmaAddons = newAddons.Where(a => a.IsGmaFile).ToList();

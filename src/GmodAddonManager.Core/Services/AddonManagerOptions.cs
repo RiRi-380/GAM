@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace GmodAddonManager.Core.Services
 {
     public sealed class AddonManagerOptions
@@ -7,5 +9,6 @@ namespace GmodAddonManager.Core.Services
         public IErrorHandler? ErrorHandler { get; set; }
         public DisableMode DisableMode { get; set; } = DisableMode.Soft;
         public bool DisableCacheScan { get; set; } = false;
+        public IReadOnlyList<string>? CustomWorkshopCacheFilePaths { get; set; }
     }
 }

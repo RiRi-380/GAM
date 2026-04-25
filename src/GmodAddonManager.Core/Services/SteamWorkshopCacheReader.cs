@@ -8,14 +8,13 @@ using Microsoft.Win32;
 namespace GmodAddonManager.Core.Services
 {
     /// <summary>
-    /// Steam Workshop のキャッシュファイル (appworkshop_4000.acf) から
-    /// サブスクライブ済みアドオンの情報を高速に読み取る
+    /// Reads Garry's Mod Workshop subscription data from Steam appworkshop_4000.acf files.
     /// </summary>
     public class SteamWorkshopCacheReader
     {
         private const string GMOD_APP_ID = "4000";
         private const string WORKSHOP_CACHE_FILE = $"appworkshop_{GMOD_APP_ID}.acf";
-        
+
         /// <summary>
         /// Steam のインストールパスを取得
         /// </summary>
@@ -23,7 +22,6 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
-                // Windowsレジストリから取得
                 using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
                 {
                     if (key != null)
@@ -31,19 +29,18 @@ namespace GmodAddonManager.Core.Services
                         var steamPath = key.GetValue("SteamPath") as string;
                         if (!string.IsNullOrEmpty(steamPath))
                         {
-                            return steamPath.Replace('/', '\\');
+                            return NormalizeSteamPath(steamPath);
                         }
                     }
                 }
-                
-                // 一般的なパスを試す
+
                 var commonPaths = new[]
                 {
                     @"C:\Program Files (x86)\Steam",
                     @"C:\Program Files\Steam",
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Steam")
                 };
-                
+
                 foreach (var path in commonPaths)
                 {
                     if (Directory.Exists(path))
@@ -54,169 +51,373 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                // Failed to find Steam installation - log but return null
                 System.Diagnostics.Debug.WriteLine($"Error while searching for Steam installation: {ex.Message}");
             }
-            
+
             return null;
         }
-        
+
         /// <summary>
-        /// appworkshop_4000.acf ファイルのパスを取得
+        /// Backward-compatible first appworkshop_4000.acf path lookup.
         /// </summary>
         public static string? GetWorkshopCacheFilePath()
         {
+            return GetWorkshopCacheFilePaths().FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Finds every visible appworkshop_4000.acf file across Steam libraries and userdata.
+        /// </summary>
+        public static IReadOnlyList<string> GetWorkshopCacheFilePaths()
+        {
             var steamPath = GetSteamPath();
-            if (string.IsNullOrEmpty(steamPath))
-                return null;
-            
-            var workshopCachePath = Path.Combine(steamPath, "steamapps", "workshop", WORKSHOP_CACHE_FILE);
-            if (File.Exists(workshopCachePath))
-                return workshopCachePath;
-            
-            // 別の場所も試す
-            var altPath = Path.Combine(steamPath, "userdata");
-            if (Directory.Exists(altPath))
+            if (string.IsNullOrWhiteSpace(steamPath))
             {
-                foreach (var userDir in Directory.GetDirectories(altPath))
+                return Array.Empty<string>();
+            }
+
+            return GetWorkshopCacheFilePaths(steamPath);
+        }
+
+        internal static IReadOnlyList<string> GetWorkshopCacheFilePaths(string steamPath)
+        {
+            var paths = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var libraryPath in GetSteamLibraryPaths(steamPath))
+            {
+                var workshopCachePath = Path.Combine(libraryPath, "steamapps", "workshop", WORKSHOP_CACHE_FILE);
+                AddExistingPath(paths, seen, workshopCachePath);
+            }
+
+            var userdataPath = Path.Combine(steamPath, "userdata");
+            if (Directory.Exists(userdataPath))
+            {
+                foreach (var userDir in Directory.GetDirectories(userdataPath))
                 {
                     var userWorkshopPath = Path.Combine(userDir, "ugc", WORKSHOP_CACHE_FILE);
-                    if (File.Exists(userWorkshopPath))
-                        return userWorkshopPath;
+                    AddExistingPath(paths, seen, userWorkshopPath);
                 }
             }
-            
-            return null;
+
+            return paths;
         }
-        
+
+        internal static IReadOnlyList<string> GetSteamLibraryPaths(string steamPath)
+        {
+            var libraryPaths = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AddExistingDirectory(libraryPaths, seen, NormalizeSteamPath(steamPath));
+
+            try
+            {
+                var libraryFoldersPath = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
+                if (!File.Exists(libraryFoldersPath))
+                {
+                    return libraryPaths;
+                }
+
+                var content = File.ReadAllText(libraryFoldersPath);
+                var matches = Regex.Matches(content, @"""path""\s*""([^""]+)""", RegexOptions.IgnoreCase);
+
+                foreach (Match match in matches)
+                {
+                    var libraryPath = NormalizeSteamPath(match.Groups[1].Value);
+                    AddExistingDirectory(libraryPaths, seen, libraryPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to read Steam library folders: {ex.Message}");
+            }
+
+            return libraryPaths;
+        }
+
         /// <summary>
         /// サブスクライブ済みアドオンのIDリストを取得
         /// </summary>
         public static List<string> GetSubscribedAddonIds()
         {
+            return GetSubscribedAddonIds(GetWorkshopCacheFilePaths());
+        }
+
+        internal static List<string> GetSubscribedAddonIds(IEnumerable<string> cacheFilePaths)
+        {
             var addonIds = new List<string>();
-            
-            try
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var cacheFilePath in cacheFilePaths.Where(File.Exists))
             {
-                var cacheFilePath = GetWorkshopCacheFilePath();
-                if (string.IsNullOrEmpty(cacheFilePath) || !File.Exists(cacheFilePath))
-                    return addonIds;
-                
-                var content = File.ReadAllText(cacheFilePath);
-                
-                // ACFファイルから WorkshopItemsInstalled セクションを探す
-                var installedMatch = Regex.Match(content, @"""WorkshopItemsInstalled""\s*{([^}]+)}", RegexOptions.Singleline);
-                if (installedMatch.Success)
+                try
                 {
-                    var installedSection = installedMatch.Groups[1].Value;
-                    
-                    // IDを抽出 (形式: "1234567890" "0" など)
-                    var idMatches = Regex.Matches(installedSection, @"""(\d+)""\s*""(\d+)""");
-                    foreach (Match match in idMatches)
+                    var content = File.ReadAllText(cacheFilePath);
+                    foreach (var addonId in ParseSubscribedAddonIds(content))
                     {
-                        if (match.Groups.Count >= 2)
+                        if (seen.Add(addonId))
                         {
-                            addonIds.Add(match.Groups[1].Value);
+                            addonIds.Add(addonId);
                         }
                     }
                 }
-                
-                // WorkshopItemDetails セクションも確認
-                var detailsMatch = Regex.Match(content, @"""WorkshopItemDetails""\s*{([^}]+)}", RegexOptions.Singleline);
-                if (detailsMatch.Success)
+                catch (Exception ex)
                 {
-                    var detailsSection = detailsMatch.Groups[1].Value;
-                    
-                    // IDを抽出
-                    var idMatches = Regex.Matches(detailsSection, @"""(\d+)""\s*{");
-                    foreach (Match match in idMatches)
-                    {
-                        if (match.Groups.Count >= 2)
-                        {
-                            var id = match.Groups[1].Value;
-                            if (!addonIds.Contains(id))
-                            {
-                                addonIds.Add(id);
-                            }
-                        }
-                    }
+                    System.Diagnostics.Debug.WriteLine($"Failed to read Workshop cache {cacheFilePath}: {ex.Message}");
                 }
             }
-            catch (Exception ex)
-            {
-                // エラーログ
-            }
-            
+
             return addonIds;
         }
-        
+
+        internal static List<string> ParseSubscribedAddonIds(string content)
+        {
+            var addonIds = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            if (TryGetSection(content, "WorkshopItemsInstalled", out var installedSection))
+            {
+                var idMatches = Regex.Matches(installedSection, @"""(\d+)""\s*""[^""]*""");
+                foreach (Match match in idMatches)
+                {
+                    AddAddonId(addonIds, seen, match.Groups[1].Value);
+                }
+            }
+
+            if (TryGetSection(content, "WorkshopItemDetails", out var detailsSection))
+            {
+                foreach (var item in EnumerateNumericChildSections(detailsSection))
+                {
+                    AddAddonId(addonIds, seen, item.Key);
+                }
+            }
+
+            return addonIds;
+        }
+
         /// <summary>
         /// アドオンの詳細情報を取得（タイトル、タグなど）
         /// </summary>
         public static Dictionary<string, WorkshopItemInfo> GetAddonDetails()
         {
-            var addonInfo = new Dictionary<string, WorkshopItemInfo>();
-            
-            try
+            return GetAddonDetails(GetWorkshopCacheFilePaths());
+        }
+
+        internal static Dictionary<string, WorkshopItemInfo> GetAddonDetails(IEnumerable<string> cacheFilePaths)
+        {
+            var addonInfo = new Dictionary<string, WorkshopItemInfo>(StringComparer.Ordinal);
+
+            foreach (var cacheFilePath in cacheFilePaths.Where(File.Exists))
             {
-                var cacheFilePath = GetWorkshopCacheFilePath();
-                if (string.IsNullOrEmpty(cacheFilePath) || !File.Exists(cacheFilePath))
-                    return addonInfo;
-                
-                var content = File.ReadAllText(cacheFilePath);
-                
-                // WorkshopItemDetails セクションを解析
-                var detailsMatch = Regex.Match(content, @"""WorkshopItemDetails""\s*{(.+?)^\s*}", 
-                    RegexOptions.Singleline | RegexOptions.Multiline);
-                    
-                if (detailsMatch.Success)
+                try
                 {
-                    var detailsSection = detailsMatch.Groups[1].Value;
-                    
-                    // 各アイテムの詳細を抽出
-                    var itemMatches = Regex.Matches(detailsSection, 
-                        @"""(\d+)""\s*{([^}]+?)^\s*}", 
-                        RegexOptions.Singleline | RegexOptions.Multiline);
-                        
-                    foreach (Match itemMatch in itemMatches)
+                    var content = File.ReadAllText(cacheFilePath);
+                    foreach (var kvp in ParseAddonDetails(content))
                     {
-                        if (itemMatch.Groups.Count >= 3)
-                        {
-                            var id = itemMatch.Groups[1].Value;
-                            var itemContent = itemMatch.Groups[2].Value;
-                            
-                            var info = new WorkshopItemInfo { Id = id };
-                            
-                            // タイトルを抽出
-                            var titleMatch = Regex.Match(itemContent, @"""title""\s*""([^""]+)""");
-                            if (titleMatch.Success)
-                                info.Title = titleMatch.Groups[1].Value;
-                            
-                            // タグを抽出
-                            var tagsMatch = Regex.Match(itemContent, @"""tags""\s*""([^""]+)""");
-                            if (tagsMatch.Success)
-                                info.Tags = tagsMatch.Groups[1].Value;
-                            
-                            // 更新時刻を抽出
-                            var timeMatch = Regex.Match(itemContent, @"""timeupdated""\s*""(\d+)""");
-                            if (timeMatch.Success && long.TryParse(timeMatch.Groups[1].Value, out var timestamp))
-                            {
-                                info.TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
-                            }
-                            
-                            addonInfo[id] = info;
-                        }
+                        addonInfo[kvp.Key] = kvp.Value;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to read Workshop details {cacheFilePath}: {ex.Message}");
+                }
+            }
+
+            return addonInfo;
+        }
+
+        internal static Dictionary<string, WorkshopItemInfo> ParseAddonDetails(string content)
+        {
+            var addonInfo = new Dictionary<string, WorkshopItemInfo>(StringComparer.Ordinal);
+
+            if (!TryGetSection(content, "WorkshopItemDetails", out var detailsSection))
+            {
+                return addonInfo;
+            }
+
+            foreach (var item in EnumerateNumericChildSections(detailsSection))
+            {
+                var info = new WorkshopItemInfo { Id = item.Key };
+
+                var title = ReadStringField(item.Body, "title");
+                if (!string.IsNullOrEmpty(title))
+                {
+                    info.Title = title;
+                }
+
+                var tags = ReadStringField(item.Body, "tags");
+                if (!string.IsNullOrEmpty(tags))
+                {
+                    info.Tags = tags;
+                }
+
+                var timeUpdated = ReadStringField(item.Body, "timeupdated");
+                if (long.TryParse(timeUpdated, out var timestamp))
+                {
+                    info.TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
+                }
+
+                addonInfo[item.Key] = info;
+            }
+
+            return addonInfo;
+        }
+
+        private static void AddExistingPath(List<string> paths, HashSet<string> seen, string path)
+        {
+            if (File.Exists(path) && seen.Add(path))
+            {
+                paths.Add(path);
+            }
+        }
+
+        private static void AddExistingDirectory(List<string> paths, HashSet<string> seen, string path)
+        {
+            if (Directory.Exists(path) && seen.Add(path))
+            {
+                paths.Add(path);
+            }
+        }
+
+        private static void AddAddonId(List<string> addonIds, HashSet<string> seen, string addonId)
+        {
+            if (seen.Add(addonId))
+            {
+                addonIds.Add(addonId);
+            }
+        }
+
+        private static string NormalizeSteamPath(string path)
+        {
+            return path.Replace('/', '\\').Replace(@"\\", @"\");
+        }
+
+        private static string? ReadStringField(string section, string fieldName)
+        {
+            var match = Regex.Match(
+                section,
+                $@"""{Regex.Escape(fieldName)}""\s*""([^""]*)""",
+                RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                return null;
+            }
+
+            return match.Groups[1].Value
+                .Replace("\\\"", "\"")
+                .Replace(@"\\", @"\");
+        }
+
+        private static bool TryGetSection(string content, string sectionName, out string section)
+        {
+            section = string.Empty;
+            var match = Regex.Match(
+                content,
+                $@"""{Regex.Escape(sectionName)}""\s*{{",
+                RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            var openBraceIndex = content.IndexOf('{', match.Index + match.Length - 1);
+            return TryExtractBraceBody(content, openBraceIndex, out section, out _);
+        }
+
+        private static IEnumerable<(string Key, string Body)> EnumerateNumericChildSections(string section)
+        {
+            var searchIndex = 0;
+            while (searchIndex < section.Length)
+            {
+                var match = Regex.Match(
+                    section.Substring(searchIndex),
+                    @"""(\d+)""\s*{",
+                    RegexOptions.CultureInvariant);
+
+                if (!match.Success)
+                {
+                    yield break;
+                }
+
+                var absoluteMatchIndex = searchIndex + match.Index;
+                var openBraceIndex = section.IndexOf('{', absoluteMatchIndex + match.Length - 1);
+                if (!TryExtractBraceBody(section, openBraceIndex, out var body, out var closeBraceIndex))
+                {
+                    yield break;
+                }
+
+                yield return (match.Groups[1].Value, body);
+                searchIndex = closeBraceIndex + 1;
+            }
+        }
+
+        private static bool TryExtractBraceBody(string content, int openBraceIndex, out string body, out int closeBraceIndex)
+        {
+            body = string.Empty;
+            closeBraceIndex = -1;
+
+            if (openBraceIndex < 0 || openBraceIndex >= content.Length || content[openBraceIndex] != '{')
+            {
+                return false;
+            }
+
+            var depth = 0;
+            var inString = false;
+            var escaping = false;
+            var bodyStart = openBraceIndex + 1;
+
+            for (var i = openBraceIndex; i < content.Length; i++)
+            {
+                var c = content[i];
+
+                if (inString)
+                {
+                    if (escaping)
+                    {
+                        escaping = false;
+                    }
+                    else if (c == '\\')
+                    {
+                        escaping = true;
+                    }
+                    else if (c == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '{')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        closeBraceIndex = i;
+                        body = content.Substring(bodyStart, i - bodyStart);
+                        return true;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-            }
-            
-            return addonInfo;
+
+            return false;
         }
     }
-    
+
     public class WorkshopItemInfo
     {
         public string Id { get; set; } = "";

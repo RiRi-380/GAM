@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -63,19 +64,23 @@ namespace GmodAddonManager.UI.Views
                 AddDetail(L.Get("InitialLoading.CreatingJunctions"));
                 AddDetail(L.Get("InitialLoading.SettingUpHardLinks"));
                 
-                // Count total items
-                var workshopAddons = addonManager.GetAllAddons();
-                totalCount = workshopAddons?.Count ?? 0;
-                UpdateTotal(totalCount);
-                
                 // Scan workshop folder
                 UpdateStatus(L.Get("InitialLoading.ScanningWorkshop"));
                 ProgressBar.IsIndeterminate = false;
-                
+
                 var addons = await addonManager.ScanWorkshopFolderAsync();
-                
+                var newAddons = await addonManager.ScanForNewAddonsAsync();
+                var addonsToProcess = addons
+                    .Concat(newAddons)
+                    .GroupBy(addon => addon.Id)
+                    .Select(group => group.First())
+                    .ToList();
+
+                totalCount = addonsToProcess.Count;
+                UpdateTotal(totalCount);
+
                 // Process each addon
-                foreach (var addon in addons)
+                foreach (var addon in addonsToProcess)
                 {
                     processedCount++;
                     UpdateProgress(processedCount, totalCount);
@@ -84,7 +89,9 @@ namespace GmodAddonManager.UI.Views
                     // Small delay to show progress
                     await Task.Delay(10);
                 }
-                
+
+                await addonManager.RegisterNewAddonsAsync(newAddons);
+
                 // キャッシュアドオンの名前を更新
                 UpdateStatus(L.Get("InitialLoading.UpdatingTitles"));
                 ProgressBar.IsIndeterminate = false;
