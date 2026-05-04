@@ -6,15 +6,24 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class SteamWorkshopCacheReaderTests
 {
     [Fact]
-    public void ParseSubscribedAddonIdsReadsAllNestedWorkshopDetails()
+    public void ParseSubscribedAddonIdsReadsOnlyInstalledItems()
     {
         const string content = """
         "AppWorkshop"
         {
             "WorkshopItemsInstalled"
             {
-                "111" "1"
-                "222" "1"
+                "111"
+                {
+                    "size" "4096"
+                    "timeupdated" "1700000000"
+                    "manifest" "1234567890123456789"
+                }
+                "222"
+                {
+                    "timeupdated" "1700000001"
+                    "manifest" "2234567890123456789"
+                }
             }
             "WorkshopItemDetails"
             {
@@ -36,7 +45,26 @@ public sealed class SteamWorkshopCacheReaderTests
 
         var ids = SteamWorkshopCacheReader.ParseSubscribedAddonIds(content);
 
-        Assert.Equal(new[] { "111", "222", "333", "444" }, ids);
+        Assert.Equal(new[] { "111", "222" }, ids);
+    }
+
+    [Fact]
+    public void ParseSubscribedAddonIdsSupportsLegacyFlatInstalledItems()
+    {
+        const string content = """
+        "AppWorkshop"
+        {
+            "WorkshopItemsInstalled"
+            {
+                "111" "1"
+                "222" "1"
+            }
+        }
+        """;
+
+        var ids = SteamWorkshopCacheReader.ParseSubscribedAddonIds(content);
+
+        Assert.Equal(new[] { "111", "222" }, ids);
     }
 
     [Fact]
@@ -52,19 +80,19 @@ public sealed class SteamWorkshopCacheReaderTests
     }
 
     [Fact]
-    public void GetWorkshopCacheFilePathsIncludesSteamLibrariesAndUserdata()
+    public void GetWorkshopCacheFilePathsIncludesSteamLibrariesOnly()
     {
         using var env = new CacheTestEnvironment();
         var rootCache = env.WriteSteamCache(env.SteamPath, ("111", "Root"));
         var libraryPath = env.CreateLibrary("library-a");
         var libraryCache = env.WriteSteamCache(libraryPath, ("222", "Library"));
-        var userCache = env.WriteUserCache("123456789", ("333", "Userdata"));
+        env.WriteUserCache("123456789", ("333", "Userdata"));
         env.WriteLibraryFolders(libraryPath);
 
         var paths = SteamWorkshopCacheReader.GetWorkshopCacheFilePaths(env.SteamPath);
 
         Assert.Equal(
-            new[] { rootCache, libraryCache, userCache }.Order(StringComparer.OrdinalIgnoreCase),
+            new[] { rootCache, libraryCache }.Order(StringComparer.OrdinalIgnoreCase),
             paths.Order(StringComparer.OrdinalIgnoreCase));
     }
 
@@ -183,7 +211,12 @@ public sealed class SteamWorkshopCacheReaderTests
 
             foreach (var addon in addons)
             {
-                builder.AppendLine($"        \"{addon.Id}\" \"1\"");
+                builder.AppendLine($"        \"{addon.Id}\"");
+                builder.AppendLine("        {");
+                builder.AppendLine("            \"size\" \"4096\"");
+                builder.AppendLine("            \"timeupdated\" \"1700000000\"");
+                builder.AppendLine("            \"manifest\" \"1234567890123456789\"");
+                builder.AppendLine("        }");
             }
 
             builder.AppendLine("    }");

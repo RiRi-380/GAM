@@ -9,6 +9,7 @@ namespace GmodAddonManager.Core.Services
         public IErrorHandler? ErrorHandler { get; set; }
         public DisableMode DisableMode { get; set; } = DisableMode.Soft;
         public bool DisableCacheScan { get; set; } = false;
+        public string? CustomGmodCachePath { get; set; }
         public IReadOnlyList<string>? CustomWorkshopCacheFilePaths { get; set; }
     }
 }

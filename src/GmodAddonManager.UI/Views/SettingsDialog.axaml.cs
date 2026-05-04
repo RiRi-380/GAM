@@ -5,7 +5,6 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Models;
@@ -29,9 +28,7 @@ public partial class SettingsDialog : Window
         dialogService = new DialogService();
 
         // UpdateServiceの初期化
-        var version = System.Reflection.Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion?.Split('-')[0] ?? "1.0.0";
+        var version = ApplicationVersionProvider.GetUpdateVersion();
         updateService = new UpdateService(version);
 
         LoadCurrentSettings();
@@ -54,6 +51,9 @@ public partial class SettingsDialog : Window
 
         // コンソール表示設定を反映
         ShowConsoleCheckBox.IsChecked = currentSettings.ShowConsoleOnStartup;
+
+        // 試験的機能設定を反映
+        EnableDisableManifestImportCheckBox.IsChecked = currentSettings.EnableDisableManifestImport;
 
         // 無効化モード設定を反映
         SoftDisableRadio.IsChecked = currentSettings.DisableMode == DisableMode.Soft;
@@ -107,6 +107,9 @@ public partial class SettingsDialog : Window
             needsRestart = true;
         }
         currentSettings.ShowConsoleOnStartup = newShowConsole;
+
+        // 試験的機能設定を更新
+        currentSettings.EnableDisableManifestImport = EnableDisableManifestImportCheckBox.IsChecked ?? false;
 
         // 保存
         currentSettings.Save();

@@ -174,8 +174,7 @@ namespace GmodAddonManager.Core.Services
         private static bool IsImageContentType(HttpResponseMessage response)
         {
             var mediaType = response.Content.Headers.ContentType?.MediaType;
-            return string.IsNullOrEmpty(mediaType) ||
-                   mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+            return ImageContentTypePolicy.AllowsImageDownload(mediaType);
         }
 
         private static async Task<byte[]> ReadContentWithLimitAsync(HttpContent content, long maxBytes)

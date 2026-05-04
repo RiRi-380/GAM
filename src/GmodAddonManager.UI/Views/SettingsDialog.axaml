@@ -124,6 +124,24 @@
                         </Button>
                     </StackPanel>
                 </Border>
+
+                <!-- 試験的機能 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.ExperimentalHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.ExperimentalDescription}" Opacity="0.7" FontSize="12"/>
+                        </StackPanel>
+
+                        <CheckBox Name="EnableDisableManifestImportCheckBox"
+                                  Content="{loc:Localize Settings.EnableDisableManifestImport}"/>
+                        <TextBlock Text="{loc:Localize Settings.EnableDisableManifestImportDescription}"
+                                   Opacity="0.7"
+                                   FontSize="12"
+                                   Margin="20,0,0,0"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
                 
                 <!-- 危険な操作 -->
                 <Border Background="#2A1515" BorderBrush="#CC0000" BorderThickness="1" CornerRadius="8" Padding="25">

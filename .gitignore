@@ -219,6 +219,9 @@ GAM-UpdateManifest-*.sig
 # Local release notes and command notes
 RELEASE_COMMANDS.md
 
+# Local GPT/GAM generated manifests
+*.gamdisable
+
 # Old release artifacts
 publish-portable*/
 create-release*.ps1

@@ -77,12 +77,19 @@
                 
                 <!-- 左側のボタン -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
-                    <Button Command="{Binding RefreshCommand}" 
+                    <Button Command="{Binding RefreshCommand}"
                             ToolTip.Tip="{loc:Localize MainWindow.RescanAddons}"
                             Width="32" Height="32">
                         <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
                     </Button>
-                    
+
+                    <Button Command="{Binding ImportDisableManifestCommand}"
+                            IsVisible="{Binding IsDisableManifestImportEnabled}"
+                            ToolTip.Tip="{loc:Localize MainWindow.ImportDisableManifest}"
+                            Width="32" Height="32">
+                        <PathIcon Data="{StaticResource ImportIcon}" Width="16" Height="16"/>
+                    </Button>
+
                     <Button Command="{Binding UndoCommand}"
                             IsEnabled="{Binding CanUndo}"
                             ToolTip.Tip="{loc:Localize MainWindow.UndoLastAction}"

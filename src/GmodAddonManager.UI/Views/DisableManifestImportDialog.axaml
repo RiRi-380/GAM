@@ -1,0 +1,177 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="720" d:DesignHeight="560"
+        x:Class="GmodAddonManager.UI.Views.DisableManifestImportDialog"
+        x:DataType="vm:DisableManifestImportViewModel"
+        Title="除外リストをインポート"
+        Width="720"
+        Height="560"
+        MinWidth="680"
+        MinHeight="520"
+        CanResize="True"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="22" RowDefinitions="Auto,Auto,*,Auto">
+        <StackPanel Grid.Row="0" Spacing="6">
+            <TextBlock Text="除外リストをインポート"
+                       FontSize="22"
+                       FontWeight="SemiBold"/>
+            <TextBlock Text="Workshop URL/IDを読み込み、除外用Assetを作成または更新します。"
+                       TextWrapping="Wrap"
+                       Opacity="0.78"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1"
+              Margin="0,18,0,0"
+              ColumnDefinitions="*,Auto"
+              RowDefinitions="Auto,Auto,Auto">
+            <TextBox Grid.Row="0"
+                     Grid.Column="0"
+                     Text="{Binding FilePath}"
+                     IsReadOnly="True"
+                     Watermark=".gamdisable ファイルを選択"
+                     Margin="0,0,10,0"/>
+            <Button Grid.Row="0"
+                    Grid.Column="1"
+                    Content="参照"
+                    MinWidth="92"
+                    Click="OnBrowseFile"/>
+
+            <TextBlock Grid.Row="1"
+                       Grid.ColumnSpan="2"
+                       Text="{Binding StatusMessage}"
+                       Margin="0,10,0,0"
+                       TextWrapping="Wrap"
+                       Opacity="0.82"/>
+            <TextBlock Grid.Row="2"
+                       Grid.ColumnSpan="2"
+                       Text="{Binding ErrorMessage}"
+                       Foreground="#FF6B6B"
+                       Margin="0,8,0,0"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding HasError}"/>
+        </Grid>
+
+        <ScrollViewer Grid.Row="2" Margin="0,18,0,18">
+            <StackPanel Spacing="14">
+                <Border IsVisible="{Binding HasPreview}"
+                        Background="#242424"
+                        BorderBrush="#444444"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="16">
+                    <StackPanel Spacing="14">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Grid.Column="0" Spacing="2">
+                                <TextBlock Text="プレビュー"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"/>
+                                <TextBlock Text="適用前に件数と取り込み方法を確認してください。"
+                                           Opacity="0.68"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="取り込み方法"
+                                           VerticalAlignment="Center"
+                                           Opacity="0.72"/>
+                                <ComboBox SelectedIndex="{Binding SelectedModeIndex}"
+                                          Width="146">
+                                    <ComboBoxItem Content="追加"/>
+                                    <ComboBoxItem Content="置換"/>
+                                    <ComboBoxItem Content="新規作成（OFF）"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnDefinitions="*,*,*"
+                              RowDefinitions="Auto,Auto"
+                              ColumnSpacing="18"
+                              RowSpacing="10">
+                            <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
+                                <TextBlock Text="有効ID" Opacity="0.66"/>
+                                <TextBlock Text="{Binding ValidCount}" FontSize="20" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
+                                <TextBlock Text="新規除外" Opacity="0.66"/>
+                                <TextBlock Text="{Binding NewlyExcludedCount}" FontSize="20" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="2" Spacing="2">
+                                <TextBlock Text="除外済み" Opacity="0.66"/>
+                                <TextBlock Text="{Binding AlreadyExcludedCount}" FontSize="20" FontWeight="SemiBold"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
+                                <TextBlock Text="重複" Opacity="0.66"/>
+                                <TextBlock Text="{Binding DuplicateCount}" FontSize="16"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
+                                <TextBlock Text="無効行" Opacity="0.66"/>
+                                <TextBlock Text="{Binding InvalidCount}" FontSize="16"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="2">
+                                <TextBlock Text="反映" Opacity="0.66"/>
+                                <TextBlock Text="{Binding FilesystemApplyText}" FontSize="16"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnDefinitions="120,*"
+                              RowDefinitions="Auto,Auto,Auto,Auto"
+                              RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="アセット" Opacity="0.66"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AssetName}" TextWrapping="Wrap"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="方式" Opacity="0.66"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisableModeText}" TextWrapping="Wrap"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="サンプルID" Opacity="0.66"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SampleIds}" TextWrapping="Wrap"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="無効行詳細" Opacity="0.66" IsVisible="{Binding HasInvalidLines}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InvalidLineSummary}" TextWrapping="Wrap" IsVisible="{Binding HasInvalidLines}"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border IsVisible="{Binding HasPreview}"
+                        Background="#1F2A33"
+                        BorderBrush="#35516A"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="14">
+                    <TextBlock Text="Steam Workshopの購読解除やローカルファイル削除は行いません。新規作成（OFF）の場合、作成直後はGModへ反映されません。AssetをONにすると除外が有効になります。このバージョンではWorkshop Collectionの中身は展開しません。"
+                               TextWrapping="Wrap"
+                               Opacity="0.9"/>
+                </Border>
+
+                <Border IsVisible="{Binding HasResult}"
+                        Background="#202820"
+                        BorderBrush="#3B5B3B"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="14">
+                    <TextBlock Text="{Binding ResultMessage}"
+                               TextWrapping="Wrap"/>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10">
+            <Button Content="閉じる"
+                    MinWidth="88"
+                    Click="OnClose"/>
+            <Button Content="{Binding ApplyButtonText}"
+                    MinWidth="124"
+                    IsEnabled="{Binding CanApply}"
+                    Click="OnApply"
+                    Classes="accent"/>
+        </StackPanel>
+    </Grid>
+</Window>

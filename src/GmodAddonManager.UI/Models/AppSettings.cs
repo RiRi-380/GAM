@@ -11,6 +11,7 @@ namespace GmodAddonManager.UI.Models
         public DisableMode DisableMode { get; set; } = DisableMode.Soft;
         public bool UnsubscribeOnHardDisable { get; set; } = false;
         public bool StrictLinkMode { get; set; } = false;
+        public bool EnableDisableManifestImport { get; set; } = false;
         
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -9,7 +10,7 @@ namespace GmodAddonManager.Core.Services
 {
     public sealed class ExperimentEventLogger
     {
-        private readonly object lockObject = new object();
+        private static readonly ConcurrentDictionary<string, object> FileLocks = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         private readonly Stopwatch monotonicStopwatch = Stopwatch.StartNew();
 
         public ExperimentEventLogger(string logFilePath)
@@ -180,15 +181,18 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                var dir = Path.GetDirectoryName(LogFilePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                lock (GetFileLock())
                 {
-                    Directory.CreateDirectory(dir);
-                }
+                    var dir = Path.GetDirectoryName(LogFilePath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
 
-                if (!File.Exists(LogFilePath))
-                {
-                    File.WriteAllText(LogFilePath, string.Empty);
+                    if (!File.Exists(LogFilePath))
+                    {
+                        File.WriteAllText(LogFilePath, string.Empty);
+                    }
                 }
 
                 return true;
@@ -208,7 +212,7 @@ namespace GmodAddonManager.Core.Services
 
             var json = JsonConvert.SerializeObject(evt, Formatting.None);
 
-            lock (lockObject)
+            lock (GetFileLock())
             {
                 var dir = Path.GetDirectoryName(LogFilePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -218,6 +222,12 @@ namespace GmodAddonManager.Core.Services
 
                 File.AppendAllText(LogFilePath, json + Environment.NewLine);
             }
+        }
+
+        private object GetFileLock()
+        {
+            var key = Path.GetFullPath(LogFilePath);
+            return FileLocks.GetOrAdd(key, _ => new object());
         }
 
         private static string ResolveLogFilePath(string path)

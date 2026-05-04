@@ -42,8 +42,7 @@ namespace GmodAddonManager.UI.Services
                 }
                 
                 var mediaType = response.Content.Headers.ContentType?.MediaType;
-                if (!string.IsNullOrEmpty(mediaType) &&
-                    !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                if (!AllowsImageDownload(mediaType))
                 {
                     return null;
                 }
@@ -87,6 +86,13 @@ namespace GmodAddonManager.UI.Services
             {
                 return null;
             }
+        }
+
+        private static bool AllowsImageDownload(string? mediaType)
+        {
+            return string.IsNullOrEmpty(mediaType) ||
+                   mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(mediaType, "application/octet-stream", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

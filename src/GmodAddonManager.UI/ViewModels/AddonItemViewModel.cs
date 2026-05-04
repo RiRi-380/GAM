@@ -57,15 +57,9 @@ public class AddonItemViewModel : ViewModelBase
             title = string.IsNullOrWhiteSpace(addon.Title) ? $"Workshop-{addon.Id}" : addon.Title;
         }
         FolderPath = addon.FolderPath;
+        InitializeFileMetadata();
         
         // ファイル情報の初期化
-        if (Directory.Exists(FolderPath))
-        {
-            var dirInfo = new DirectoryInfo(FolderPath);
-            LastModified = dirInfo.LastWriteTime;
-            CalculateFileSize();
-        }
-
         // コマンドの初期化
         LoadDetailsCommand = ReactiveCommand.CreateFromTask(LoadDetailsAsync);
         OpenFolderCommand = ReactiveCommand.Create(OpenFolder);
@@ -102,6 +96,7 @@ public class AddonItemViewModel : ViewModelBase
     // WorkshopAddonから情報を更新するメソッド
     public void UpdateFromWorkshopAddon(WorkshopAddon workshopAddon)
     {
+        var previousThumbnailUrl = addon.ThumbnailUrl;
         // タイトルの更新
         if (!string.IsNullOrEmpty(workshopAddon.Title))
         {
@@ -115,6 +110,7 @@ public class AddonItemViewModel : ViewModelBase
         addon.Author = workshopAddon.Author;
         addon.ThumbnailUrl = workshopAddon.ThumbnailUrl;
         addon.Tags = workshopAddon.Tags;
+        ApplyAddonMetadataToDisplay(workshopAddon.Size, workshopAddon.LastUpdated);
         
         // プロパティ変更通知
         this.RaisePropertyChanged(nameof(FileSizeText));
@@ -124,7 +120,8 @@ public class AddonItemViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(Tags));
         
         // サムネイルURLが変更された場合は再読み込み
-        if (!string.IsNullOrEmpty(workshopAddon.ThumbnailUrl) && workshopAddon.ThumbnailUrl != addon.ThumbnailUrl)
+        if (!string.IsNullOrEmpty(workshopAddon.ThumbnailUrl) &&
+            !string.Equals(workshopAddon.ThumbnailUrl, previousThumbnailUrl, StringComparison.Ordinal))
         {
             ThumbnailUrl = workshopAddon.ThumbnailUrl;
             _ = LoadThumbnailAsync();
@@ -400,6 +397,11 @@ public class AddonItemViewModel : ViewModelBase
             {
                 TimeCreated = DateTimeOffset.FromUnixTimeSeconds(details.TimeCreated).DateTime;
                 TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(details.TimeUpdated).DateTime;
+                if (details.TimeUpdated > 0)
+                {
+                    LastModified = TimeUpdated.Value;
+                    this.RaisePropertyChanged(nameof(LastModifiedText));
+                }
                 this.RaisePropertyChanged(nameof(TimeCreated));
                 this.RaisePropertyChanged(nameof(TimeUpdated));
                 this.RaisePropertyChanged(nameof(TimeCreatedText));
@@ -546,6 +548,43 @@ public class AddonItemViewModel : ViewModelBase
         }
     }
 
+    private void InitializeFileMetadata()
+    {
+        if (!string.IsNullOrWhiteSpace(FolderPath))
+        {
+            if (File.Exists(FolderPath))
+            {
+                var fileInfo = new FileInfo(FolderPath);
+                FileSize = fileInfo.Length;
+                LastModified = fileInfo.LastWriteTime;
+                return;
+            }
+
+            if (Directory.Exists(FolderPath))
+            {
+                var dirInfo = new DirectoryInfo(FolderPath);
+                LastModified = dirInfo.LastWriteTime;
+                CalculateFileSize();
+                return;
+            }
+        }
+
+        ApplyAddonMetadataToDisplay(addon.Size, addon.LastUpdated);
+    }
+
+    private void ApplyAddonMetadataToDisplay(long size, DateTime lastUpdated)
+    {
+        if (size > 0)
+        {
+            FileSize = size;
+        }
+
+        if (size > 0 && lastUpdated != default)
+        {
+            LastModified = lastUpdated.ToLocalTime();
+        }
+    }
+
     private void OpenFolder()
     {
         try
@@ -599,8 +638,8 @@ public class AddonItemViewModel : ViewModelBase
                     var jpgPath = Path.Combine(FolderPath, "addon.jpg");
                     if (File.Exists(jpgPath))
                     {
-                        // file://スキームで設定（gmpublisherと同じ）
-                        ThumbnailUrl = new Uri(jpgPath).AbsoluteUri;
+                        ThumbnailPath = jpgPath;
+                        await LoadBitmapFromFileAsync(jpgPath);
                         IsThumbnailLoading = false;
                         return;
                     }
@@ -609,7 +648,8 @@ public class AddonItemViewModel : ViewModelBase
                     var pngPath = Path.Combine(FolderPath, "addon.png");
                     if (File.Exists(pngPath))
                     {
-                        ThumbnailUrl = new Uri(pngPath).AbsoluteUri;
+                        ThumbnailPath = pngPath;
+                        await LoadBitmapFromFileAsync(pngPath);
                         IsThumbnailLoading = false;
                         return;
                     }
@@ -624,6 +664,18 @@ public class AddonItemViewModel : ViewModelBase
             {
                 try
                 {
+                    if (ulong.TryParse(AddonId, out var workshopId))
+                    {
+                        var iconPath = await addonManager.GetWorkshopIconResolver().GetIconAsync(workshopId);
+                        if (!string.IsNullOrWhiteSpace(iconPath) && File.Exists(iconPath))
+                        {
+                            ThumbnailPath = iconPath;
+                            await LoadBitmapFromFileAsync(iconPath);
+                            IsThumbnailLoading = false;
+                            return;
+                        }
+                    }
+
                     var hybridService = ViewModelLocator.HybridWorkshopService;
                     if (hybridService != null)
                     {
@@ -816,6 +868,24 @@ public class AddonItemViewModel : ViewModelBase
             {
                 ThumbnailBitmap = bitmap;
             }
+        }
+        catch
+        {
+            // 画像読み込みエラーは無視
+        }
+    }
+
+    private async Task LoadBitmapFromFileAsync(string path)
+    {
+        try
+        {
+            var bitmap = await Task.Run(() =>
+            {
+                using var stream = File.OpenRead(path);
+                return new Bitmap(stream);
+            });
+
+            ThumbnailBitmap = bitmap;
         }
         catch
         {

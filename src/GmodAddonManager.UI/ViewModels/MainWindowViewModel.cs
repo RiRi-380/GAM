@@ -11,7 +11,6 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Views;
-using System.Reflection;
 using System.Timers;
 using GmodAddonManager.UI.Models;
 
@@ -29,6 +28,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
     private StatusBarViewModel statusBarViewModel;
     private bool canUndo;
     private string addonStatistics = "";
+    private bool isDisableManifestImportEnabled;
     private bool isInitialized = false;
     private Timer? autoUpdateTimer;
 
@@ -58,8 +58,11 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
         MigrateAddonsCommand = ReactiveCommand.CreateFromTask(MigrateAddonsAsync);
         ResetAllStatesCommand = ReactiveCommand.CreateFromTask(ResetAllStatesAsync);
         OpenSettingsCommand = ReactiveCommand.CreateFromTask(OpenSettingsAsync);
+        ImportDisableManifestCommand = ReactiveCommand.CreateFromTask(ImportDisableManifestAsync);
         ResetManagerCommand = ReactiveCommand.CreateFromTask(ResetManagerAsync);
         RestoreOriginalCommand = ReactiveCommand.CreateFromTask(RestoreOriginalAsync);
+
+        ReloadFeatureFlags();
 
         // 検索機能の実装
         this.WhenAnyValue(x => x.SearchText)
@@ -105,7 +108,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+            var currentVersion = ApplicationVersionProvider.GetUpdateVersion();
             var updateService = new UpdateService(currentVersion);
             
             var updateInfo = await updateService.CheckForUpdateAsync();
@@ -163,6 +166,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> MigrateAddonsCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetAllStatesCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    public ReactiveCommand<Unit, Unit> ImportDisableManifestCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetManagerCommand { get; }
     public ReactiveCommand<Unit, Unit> RestoreOriginalCommand { get; }
     
@@ -176,6 +180,12 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
     {
         get => addonStatistics;
         private set => SetAndRaise(ref addonStatistics, value);
+    }
+
+    public bool IsDisableManifestImportEnabled
+    {
+        get => isDisableManifestImportEnabled;
+        private set => SetAndRaise(ref isDisableManifestImportEnabled, value);
     }
 
     public async Task InitializeAsync()
@@ -456,6 +466,12 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
     {
         CanUndo = addonManager.GetUndoManager().CanUndo;
     }
+
+    private void ReloadFeatureFlags()
+    {
+        var settings = AppSettings.Load();
+        IsDisableManifestImportEnabled = settings.EnableDisableManifestImport;
+    }
     
     private async Task UndoLastActionAsync()
     {
@@ -723,6 +739,7 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
             // 設定変更を反映
             var updatedSettings = AppSettings.Load();
             addonManager.UnsubscribeOnHardDisable = updatedSettings.UnsubscribeOnHardDisable;
+            IsDisableManifestImportEnabled = updatedSettings.EnableDisableManifestImport;
         }
         catch (Exception ex)
         {
@@ -731,7 +748,47 @@ public class MainWindowViewModel : ViewModelBase, IDisposable
                 L.Get("Error.SettingsDialogFailed"));
         }
     }
-    
+
+    private async Task ImportDisableManifestAsync()
+    {
+        try
+        {
+            ReloadFeatureFlags();
+            if (!IsDisableManifestImportEnabled)
+            {
+                return;
+            }
+
+            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                ? desktop.MainWindow
+                : null;
+
+            if (mainWindow == null)
+            {
+                var dialogService = new DialogService();
+                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
+                return;
+            }
+
+            var importService = new DisableManifestImportService(
+                addonManager,
+                pendingChangeManager,
+                () => processWatcher.IsGmodRunning);
+            var dialog = new DisableManifestImportDialog(new DisableManifestImportViewModel(importService));
+
+            await dialog.ShowDialog(mainWindow);
+
+            AssetListViewModel.LoadAssets();
+            await AddonGridViewModel.LoadAddonsAsync();
+            UpdateAddonStatistics();
+        }
+        catch (Exception ex)
+        {
+            var dialogService = new DialogService();
+            await dialogService.ShowErrorAsync(L.Get("Error.Title"), ex.Message);
+        }
+    }
+
     private async Task ResetManagerAsync()
     {
         try

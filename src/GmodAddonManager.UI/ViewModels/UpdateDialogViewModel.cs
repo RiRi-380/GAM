@@ -1,9 +1,9 @@
 using System;
-using System.Reflection;
 using System.Reactive;
 using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.UI.Services;
 using ReactiveUI;
 
 namespace GmodAddonManager.UI.ViewModels
@@ -28,7 +28,7 @@ namespace GmodAddonManager.UI.ViewModels
             RemindLaterCommand = ReactiveCommand.Create(RequestClose);
         }
 
-        public string CurrentVersion => $"現在のバージョン: v{Assembly.GetExecutingAssembly().GetName().Version}";
+        public string CurrentVersion => $"現在のバージョン: {ApplicationVersionProvider.GetDisplayVersion()}";
         public string NewVersion => $"最新バージョン: {updateInfo.Version}";
         public string ReleaseNotes => updateInfo.ReleaseNotes;
 

@@ -35,9 +35,10 @@ namespace GmodAddonManager.Core.Services
             
             if (!string.IsNullOrEmpty(steamPath))
             {
-                string workshopPath = Path.Combine(steamPath, WORKSHOP_RELATIVE_PATH);
+                string defaultWorkshopPath = Path.Combine(steamPath, WORKSHOP_RELATIVE_PATH);
+                string workshopPath = defaultWorkshopPath;
                 // DetectWorkshopPath: Checking workshop path
-                
+
                 if (Directory.Exists(workshopPath))
                 {
                     // DetectWorkshopPath: Found workshop path
@@ -58,6 +59,19 @@ namespace GmodAddonManager.Core.Services
                         return workshopPath;
                     }
                 }
+
+                foreach (var libraryPath in libraryPaths)
+                {
+                    workshopPath = Path.Combine(libraryPath, WORKSHOP_RELATIVE_PATH);
+                    string gmodPath = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+
+                    if (Directory.Exists(gmodPath))
+                    {
+                        return workshopPath;
+                    }
+                }
+
+                return defaultWorkshopPath;
             }
 
             // DetectWorkshopPath: Failed to find workshop path

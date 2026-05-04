@@ -160,6 +160,8 @@ namespace GmodAddonManager.Core.Services
                         case "disable_asset":
                             await addonManager.DisableAssetAsync(change.AddonId);
                             break;
+                        case "apply_states":
+                            break;
                         default:
                             continue;
                     }

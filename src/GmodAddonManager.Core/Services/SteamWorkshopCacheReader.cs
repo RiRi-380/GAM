@@ -66,7 +66,7 @@ namespace GmodAddonManager.Core.Services
         }
 
         /// <summary>
-        /// Finds every visible appworkshop_4000.acf file across Steam libraries and userdata.
+        /// Finds every visible appworkshop_4000.acf file across Steam libraries.
         /// </summary>
         public static IReadOnlyList<string> GetWorkshopCacheFilePaths()
         {
@@ -88,16 +88,6 @@ namespace GmodAddonManager.Core.Services
             {
                 var workshopCachePath = Path.Combine(libraryPath, "steamapps", "workshop", WORKSHOP_CACHE_FILE);
                 AddExistingPath(paths, seen, workshopCachePath);
-            }
-
-            var userdataPath = Path.Combine(steamPath, "userdata");
-            if (Directory.Exists(userdataPath))
-            {
-                foreach (var userDir in Directory.GetDirectories(userdataPath))
-                {
-                    var userWorkshopPath = Path.Combine(userDir, "ugc", WORKSHOP_CACHE_FILE);
-                    AddExistingPath(paths, seen, userWorkshopPath);
-                }
             }
 
             return paths;
@@ -177,18 +167,18 @@ namespace GmodAddonManager.Core.Services
 
             if (TryGetSection(content, "WorkshopItemsInstalled", out var installedSection))
             {
-                var idMatches = Regex.Matches(installedSection, @"""(\d+)""\s*""[^""]*""");
-                foreach (Match match in idMatches)
-                {
-                    AddAddonId(addonIds, seen, match.Groups[1].Value);
-                }
-            }
-
-            if (TryGetSection(content, "WorkshopItemDetails", out var detailsSection))
-            {
-                foreach (var item in EnumerateNumericChildSections(detailsSection))
+                foreach (var item in EnumerateNumericChildSections(installedSection))
                 {
                     AddAddonId(addonIds, seen, item.Key);
+                }
+
+                if (addonIds.Count == 0)
+                {
+                    var idMatches = Regex.Matches(installedSection, @"""(\d+)""\s*""[^""]*""");
+                    foreach (Match match in idMatches)
+                    {
+                        AddAddonId(addonIds, seen, match.Groups[1].Value);
+                    }
                 }
             }
 
