@@ -1,6 +1,9 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
@@ -23,6 +26,7 @@ public partial class App : Application
     private WorkshopIconResolver? workshopIconResolver;
     private ApplicationLock? applicationLock;
     private ExperimentIpcServer? experimentIpcServer;
+    private Window? startupWindow;
     
     public AddonManager? AddonManager => addonManager;
     public SteamworksManager? SteamworksManager => steamworksManager;
@@ -122,6 +126,9 @@ public partial class App : Application
 #if DEBUG
             File.AppendAllText("app_startup.log", $"UIErrorHandler created at: {DateTime.Now}\n");
 #endif
+
+            var startupDesktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            ShowStartupWindow(startupDesktop);
             
             // アプリケーションロックの取得
             var appDataPath = Path.Combine(
@@ -456,7 +463,7 @@ public partial class App : Application
 #if DEBUG
                     File.AppendAllText("app_startup.log", $"Creating MainWindow at: {DateTime.Now}\n");
 #endif
-                    desktop.MainWindow = new MainWindow
+                    var mainWindow = new MainWindow
                     {
                         DataContext = mainViewModel
                     };
@@ -465,7 +472,9 @@ public partial class App : Application
 #endif
                     
                     // ウィンドウを明示的に表示
-                    desktop.MainWindow.Show();
+                    desktop.MainWindow = mainWindow;
+                    mainWindow.Show();
+                    CloseStartupWindow();
 #if DEBUG
                     File.AppendAllText("app_startup.log", $"MainWindow.Show() called at: {DateTime.Now}\n");
 #endif
@@ -526,6 +535,72 @@ public partial class App : Application
 #if DEBUG
         File.AppendAllText("app_startup.log", $"base.OnFrameworkInitializationCompleted completed at: {DateTime.Now}\n");
 #endif
+    }
+
+    private void ShowStartupWindow(IClassicDesktopStyleApplicationLifetime? desktop)
+    {
+        if (desktop == null || startupWindow != null)
+        {
+            return;
+        }
+
+        startupWindow = new Window
+        {
+            Title = L.Get("InitialLoading.Title"),
+            Width = 460,
+            Height = 180,
+            MinWidth = 420,
+            MinHeight = 170,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            CanResize = false,
+            ShowInTaskbar = true,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(24),
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = L.Get("InitialLoading.MainTitle"),
+                        FontSize = 22,
+                        FontWeight = FontWeight.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    },
+                    new TextBlock
+                    {
+                        Text = L.Get("InitialLoading.Initializing"),
+                        TextWrapping = TextWrapping.Wrap,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Opacity = 0.85
+                    },
+                    new ProgressBar
+                    {
+                        IsIndeterminate = true,
+                        Height = 8,
+                        Margin = new Thickness(0, 6, 0, 0)
+                    },
+                    new TextBlock
+                    {
+                        Text = L.Get("InitialLoading.PleaseWait"),
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 12,
+                        Opacity = 0.65,
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    }
+                }
+            }
+        };
+
+        desktop.MainWindow = startupWindow;
+        startupWindow.Show();
+    }
+
+    private void CloseStartupWindow()
+    {
+        var window = startupWindow;
+        startupWindow = null;
+        window?.Close();
     }
 
     private void Cleanup()
