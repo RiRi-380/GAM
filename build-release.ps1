@@ -1,6 +1,6 @@
 # Build script for GAM. Mirrors the GitHub Actions release path.
 param(
-    [string]$Version = "v1.0.6",
+    [string]$Version = "v1.0.5",
     [switch]$NonInteractive
 )
 
