@@ -4,6 +4,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Threading;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
@@ -58,6 +59,7 @@ public partial class App : Application
 
     public override async void OnFrameworkInitializationCompleted()
     {
+        WriteStartupTrace("OnFrameworkInitializationCompleted started");
 #if DEBUG
         try
         {
@@ -129,7 +131,8 @@ public partial class App : Application
 
             var startupDesktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
             ShowStartupWindow(startupDesktop);
-            
+            await YieldForStartupWindowAsync();
+
             // アプリケーションロックの取得
             var appDataPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -539,8 +542,12 @@ public partial class App : Application
 
     private void ShowStartupWindow(IClassicDesktopStyleApplicationLifetime? desktop)
     {
+        WriteStartupTrace("ShowStartupWindow requested");
         if (desktop == null || startupWindow != null)
         {
+            WriteStartupTrace(desktop == null
+                ? "ShowStartupWindow skipped because desktop lifetime is unavailable"
+                : "ShowStartupWindow skipped because startup window already exists");
             return;
         }
 
@@ -594,6 +601,46 @@ public partial class App : Application
 
         desktop.MainWindow = startupWindow;
         startupWindow.Show();
+        WriteStartupTrace("ShowStartupWindow Show returned");
+    }
+
+    private static async Task YieldForStartupWindowAsync()
+    {
+        WriteStartupTrace("YieldForStartupWindowAsync started");
+
+        var firstDispatcherTurn = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Dispatcher.UIThread.Post(
+            () => firstDispatcherTurn.TrySetResult(null),
+            DispatcherPriority.Background);
+
+        await firstDispatcherTurn.Task;
+
+        // Give the platform backend a short turn to create and paint the native window
+        // before startup continues into filesystem-heavy initialization.
+        await Task.Delay(100);
+
+        WriteStartupTrace("YieldForStartupWindowAsync completed");
+    }
+
+    private static void WriteStartupTrace(string message)
+    {
+        try
+        {
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GmodAddonManager",
+                "logs");
+            Directory.CreateDirectory(logDir);
+            File.AppendAllText(
+                Path.Combine(logDir, "startup_trace.log"),
+                $"[App] {message} at: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}\n");
+        }
+        catch
+        {
+            // Startup tracing must never affect application startup.
+        }
     }
 
     private void CloseStartupWindow()
