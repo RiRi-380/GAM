@@ -29,4 +29,36 @@ public sealed class UpdateServiceTests
 
         Assert.Equal(string.Empty, args);
     }
+
+    [Fact]
+    public void SelectInstallerAsset_VersionedSetupExe_IsSelectedWithoutManifestRequirement()
+    {
+        var assets = new[]
+        {
+            new GitHubAsset { Name = "GAM-Portable-1.0.5.zip", BrowserDownloadUrl = "https://example.com/GAM-Portable-1.0.5.zip" },
+            new GitHubAsset { Name = "GAM-UpdateManifest-1.0.5.json", BrowserDownloadUrl = "https://example.com/GAM-UpdateManifest-1.0.5.json" },
+            new GitHubAsset { Name = "GAM-UpdateManifest-1.0.5.sig", BrowserDownloadUrl = "https://example.com/GAM-UpdateManifest-1.0.5.sig" },
+            new GitHubAsset { Name = "GAM-Setup-1.0.5.exe", BrowserDownloadUrl = "https://example.com/GAM-Setup-1.0.5.exe" }
+        };
+
+        var selected = UpdateService.SelectInstallerAsset(assets);
+
+        Assert.NotNull(selected);
+        Assert.Equal("GAM-Setup-1.0.5.exe", selected.Name);
+    }
+
+    [Fact]
+    public void SelectInstallerAsset_PrefersSetupExeOverGenericExe()
+    {
+        var assets = new[]
+        {
+            new GitHubAsset { Name = "GAM.exe", BrowserDownloadUrl = "https://example.com/GAM.exe" },
+            new GitHubAsset { Name = "GAM-Setup.exe", BrowserDownloadUrl = "https://example.com/GAM-Setup.exe" }
+        };
+
+        var selected = UpdateService.SelectInstallerAsset(assets);
+
+        Assert.NotNull(selected);
+        Assert.Equal("GAM-Setup.exe", selected.Name);
+    }
 }

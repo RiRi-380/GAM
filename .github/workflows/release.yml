@@ -27,8 +27,23 @@ jobs:
       
     - name: Build
       run: |
-        dotnet build -c Release
-        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+        $tag = "${{ github.ref_name }}"
+        $version = $tag
+        if ($version.StartsWith("v")) {
+          $version = $version.Substring(1)
+        }
+        $fileVersion = "$version.0"
+        $sha = "${{ github.sha }}"
+        $versionProps = @(
+          "-p:Version=$version",
+          "-p:FileVersion=$fileVersion",
+          "-p:AssemblyVersion=$fileVersion",
+          "-p:InformationalVersion=$tag+$sha"
+        )
+
+        dotnet build -c Release @versionProps
+        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true @versionProps -o publish
+      shell: pwsh
       
     - name: Copy LICENSE
       run: |
