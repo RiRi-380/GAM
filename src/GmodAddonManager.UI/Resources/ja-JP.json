@@ -70,6 +70,7 @@
   "AddonState.Disabled": "無効",
   "AddonState.Enabled": "有効",
   "AddonState.Excluded": "除外",
+  "AddonState.Inactive": "非アクティブ",
   "AddonTag.Build": "Build",
   "AddonTag.Cartoon": "Cartoon",
   "AddonTag.Comic": "Comic",

@@ -373,6 +373,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
+            if (currentAsset == null)
+            {
+                return L.Get("Common.Unknown");
+            }
+
+            if (!currentAsset.IsEnabled)
+            {
+                var inactive = L.Get("AddonState.Inactive");
+                return inactive == "AddonState.Inactive" ? "Inactive" : inactive;
+            }
+
             if (currentAddonState == null)
             {
                 return L.Get("Common.Unknown");
@@ -415,7 +426,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // アドオンの状態を更新
     public void UpdateAddonState()
     {
-        if (currentAsset == null) return;
+        if (currentAsset == null)
+        {
+            currentAddonState = null;
+            this.RaisePropertyChanged(nameof(BorderColor));
+            this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
+            this.RaisePropertyChanged(nameof(StateText));
+            return;
+        }
         
         // 現在のアセットでの状態を取得
         currentAddonState = currentAsset.GetAddonState(AddonId);
@@ -517,8 +535,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 return "#F44336"; // 赤
             }
             
-            // 現在のアセットでの状態
-            if (currentAddonState == AddonState.Disabled)
+            // 無効なアセットは実効状態を作らないので、保存済みの子状態だけで
+            // オレンジ枠にしない。
+            if (currentAsset?.IsEnabled == true && currentAddonState == AddonState.Disabled)
             {
                 return "#FF9800"; // オレンジ
             }
@@ -540,6 +559,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             var config = addonManager.GetConfiguration();
             foreach (var asset in config.Assets)
             {
+                if (!asset.Enabled)
+                {
+                    continue;
+                }
+
                 if (asset.Addons.Contains(AddonId) || asset.ContainsAllAddons())
                 {
                     if (asset.GetAddonState(AddonId) == AddonState.Excluded)

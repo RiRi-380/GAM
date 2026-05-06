@@ -706,6 +706,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         foreach (var asset in config.Assets)
         {
+            if (!asset.Enabled)
+            {
+                continue;
+            }
+
             if (asset.ContainsAllAddons())
             {
                 if (asset.DefaultAddonState == AddonState.Excluded)
@@ -2056,11 +2061,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                             var current = 0;
                             foreach (var addon in selectedAddons)
                             {
+                                var state = currentAsset.GetAddonState(addon.AddonId);
+
                                 // ジャンクションアセットから削除
                                 addonManager.RemoveAddonFromAsset(currentAsset.Id, addon.AddonId);
                                 
-                                // 対象アセットに追加（これによりExcluded状態が解除される）
-                                addonManager.AddAddonToAsset(result.SelectedAsset.Id, addon.AddonId);
+                                // 対象アセットに追加（個別状態も保持する）
+                                addonManager.AddAddonToAsset(result.SelectedAsset.Id, addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, selectedAddons.Count);
                             }
@@ -2155,13 +2162,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         {
                             try
                             {
+                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
+
                                 // ジャンクション送りの場合、元のアセットから削除
                                 if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
                                 {
                                     CurrentAsset.RemoveAddon(addon.AddonId);
                                 }
                                 
-                                selectedAsset.AddAddon(addon.AddonId);
+                                selectedAsset.AddAddon(addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, newAddons.Count);
                                 addedCount++;
@@ -2212,13 +2221,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         {
                             try
                             {
+                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
+
                                 // ジャンクション送りの場合、元のアセットから削除
                                 if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
                                 {
                                     CurrentAsset.RemoveAddon(addon.AddonId);
                                 }
                                 
-                                selectedAsset.AddAddon(addon.AddonId);
+                                selectedAsset.AddAddon(addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, selectedAddons.Count);
                                 addedCount++;

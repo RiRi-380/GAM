@@ -210,11 +210,17 @@ desktop.ini
 .claude/
 
 # Build output for release
+GAM-Setup.exe
 GAM-Setup-*.exe
 GAM-Portable-*.zip
+GAM-UpdateManifest-*.json
+GAM-UpdateManifest-*.sig
 
 # Release documentation (for AI use only)
 RELEASE_COMMANDS.md
+
+# Local GPT/GAM generated manifests
+*.gamdisable
 
 # Old release artifacts
 publish-portable*/
@@ -240,6 +246,8 @@ redist/VC_redist.x64.exe
 .preview-obj/
 .tmp/
 backup/
+experiment_logs/
+kp2025_results/
 tester/results/
 gamdeepresearch/
 ijitte/
