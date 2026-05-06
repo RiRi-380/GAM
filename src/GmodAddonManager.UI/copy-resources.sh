@@ -3,7 +3,7 @@
 
 CONFIGURATION=${1:-Debug}
 SOURCE_DIR="$(dirname "$0")"
-TARGET_DIR="$SOURCE_DIR/bin/$CONFIGURATION/net6.0"
+TARGET_DIR="$SOURCE_DIR/bin/$CONFIGURATION/net10.0"
 
 # Create Resources directory if it doesn't exist
 RESOURCES_TARGET="$TARGET_DIR/Resources"

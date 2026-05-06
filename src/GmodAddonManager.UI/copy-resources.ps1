@@ -4,7 +4,7 @@ param(
 )
 
 $sourceDir = $PSScriptRoot
-$targetDir = Join-Path $sourceDir "bin\$Configuration\net6.0"
+$targetDir = Join-Path $sourceDir "bin\$Configuration\net10.0"
 
 # Create Resources directory if it doesn't exist
 $resourcesTarget = Join-Path $targetDir "Resources"
