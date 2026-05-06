@@ -9,7 +9,7 @@
     <InformationalVersion>v1.0.6</InformationalVersion>
     <NeutralLanguage>en-US</NeutralLanguage>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <AnalysisMode>Recommended</AnalysisMode>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 

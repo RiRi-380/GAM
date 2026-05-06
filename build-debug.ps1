@@ -9,7 +9,7 @@ dotnet restore
 Write-Host "Building debug version..." -ForegroundColor Yellow
 dotnet build src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Debug
 
-$exePath = "src\GmodAddonManager.UI\bin\Debug\net6.0\GmodAddonManager.UI.exe"
+$exePath = "src\GmodAddonManager.UI\bin\Debug\net10.0\GmodAddonManager.UI.exe"
 
 if (Test-Path $exePath) {
     Write-Host "`nBuild completed!" -ForegroundColor Green

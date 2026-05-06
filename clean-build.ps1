@@ -22,4 +22,4 @@ dotnet build -c Release
 # dotnet publish -c Release -o ./publish
 
 Write-Host "Clean build completed!" -ForegroundColor Green
-Write-Host "The build output is in: src\GmodAddonManager.UI\bin\Release\net6.0\" -ForegroundColor Cyan
+Write-Host "The build output is in: src\GmodAddonManager.UI\bin\Release\net10.0\" -ForegroundColor Cyan
