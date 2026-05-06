@@ -56,6 +56,7 @@ public partial class SettingsDialog : Window
         BackgroundTitleUpdatesCheckBox.IsChecked = currentSettings.EnableBackgroundTitleUpdates;
         BackgroundAddonPreloadCheckBox.IsChecked = currentSettings.EnableBackgroundAddonPreload;
         LocalAddonsCheckBox.IsChecked = currentSettings.EnableLocalAddonsExperimental;
+        DisableManifestImportCheckBox.IsChecked = currentSettings.EnableDisableManifestImport;
         DeveloperModeTextBox.Text = currentSettings.DeveloperModePhrase ?? string.Empty;
 
         ApplySoftModeTexts();
@@ -148,6 +149,7 @@ public partial class SettingsDialog : Window
             currentSettings.EnableBackgroundTitleUpdates = BackgroundTitleUpdatesCheckBox.IsChecked ?? false;
             currentSettings.EnableBackgroundAddonPreload = BackgroundAddonPreloadCheckBox.IsChecked ?? false;
             currentSettings.EnableLocalAddonsExperimental = LocalAddonsCheckBox.IsChecked ?? false;
+            currentSettings.EnableDisableManifestImport = DisableManifestImportCheckBox.IsChecked ?? false;
             currentSettings.DeveloperModePhrase = DeveloperModeTextBox.Text ?? string.Empty;
             
             // コンソール表示設定を更新

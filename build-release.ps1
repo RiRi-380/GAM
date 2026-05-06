@@ -11,6 +11,14 @@ $normalizedVersion = $Version
 if ($normalizedVersion.StartsWith("v")) {
     $normalizedVersion = $normalizedVersion.Substring(1)
 }
+$fileVersion = "$normalizedVersion.0"
+$informationalVersion = "v$normalizedVersion+local"
+$versionProps = @(
+    "-p:Version=$normalizedVersion",
+    "-p:FileVersion=$fileVersion",
+    "-p:AssemblyVersion=$fileVersion",
+    "-p:InformationalVersion=$informationalVersion"
+)
 
 # Clean previous builds
 Write-Host "Cleaning previous builds..." -ForegroundColor Yellow
@@ -34,6 +42,7 @@ dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
     -p:PublishSingleFile=true `
     -p:PublishTrimmed=false `
     -p:IncludeNativeLibrariesForSelfExtract=true `
+    @versionProps `
     -o publish
 
 # Include license in portable/installer outputs

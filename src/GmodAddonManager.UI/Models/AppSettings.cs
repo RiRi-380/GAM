@@ -14,6 +14,7 @@ namespace GmodAddonManager.UI.Models
         public bool EnableBackgroundTitleUpdates { get; set; } = false;
         public bool EnableBackgroundAddonPreload { get; set; } = false;
         public bool EnableLocalAddonsExperimental { get; set; } = false;
+        public bool EnableDisableManifestImport { get; set; } = false;
         public string DeveloperModePhrase { get; set; } = "";
         
         private static string SettingsPath => Path.Combine(

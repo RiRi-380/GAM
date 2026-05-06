@@ -37,6 +37,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private int busyProgressCurrent = 0;
     private int busyProgressTotal = 0;
     private bool isBusyProgressIndeterminate = true;
+    private bool isDisableManifestImportEnabled;
     private readonly CompositeDisposable subscriptions = new();
 
     public MainWindowViewModel(
@@ -65,8 +66,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         MigrateAddonsCommand = ReactiveCommand.CreateFromTask(MigrateAddonsAsync);
         ResetAllStatesCommand = ReactiveCommand.CreateFromTask(ResetAllStatesAsync);
         OpenSettingsCommand = ReactiveCommand.CreateFromTask(OpenSettingsAsync);
+        ImportDisableManifestCommand = ReactiveCommand.CreateFromTask(ImportDisableManifestAsync);
         ResetManagerCommand = ReactiveCommand.CreateFromTask(ResetManagerAsync);
         RestoreOriginalCommand = ReactiveCommand.CreateFromTask(RestoreOriginalAsync);
+        IsDisableManifestImportEnabled = AppSettings.Load().EnableDisableManifestImport;
 
         // 讀懃ｴ｢讖溯・縺ｮ螳溯｣・
         this.WhenAnyValue(x => x.SearchText)
@@ -265,6 +268,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> MigrateAddonsCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetAllStatesCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    public ReactiveCommand<Unit, Unit> ImportDisableManifestCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetManagerCommand { get; }
     public ReactiveCommand<Unit, Unit> RestoreOriginalCommand { get; }
     
@@ -278,6 +282,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         get => addonStatistics;
         private set => SetAndRaise(ref addonStatistics, value);
+    }
+
+    public bool IsDisableManifestImportEnabled
+    {
+        get => isDisableManifestImportEnabled;
+        private set => SetAndRaise(ref isDisableManifestImportEnabled, value);
     }
 
     public async Task InitializeAsync()
@@ -1042,6 +1052,40 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             L.Format("Success.ResetAssetStates", currentAsset.Name, resetCount));
     }
     
+    private async Task ImportDisableManifestAsync()
+    {
+        try
+        {
+            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                ? desktop.MainWindow
+                : null;
+
+            if (mainWindow == null)
+            {
+                var dialogService = new DialogService();
+                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
+                return;
+            }
+
+            var viewModel = new DisableManifestImportViewModel(
+                new DisableManifestImportService(addonManager));
+            var dialog = new DisableManifestImportDialog(viewModel);
+            var imported = await dialog.ShowDialog<bool?>(mainWindow);
+            if (imported == true)
+            {
+                await RefreshAddonsAsync(rescanWorkshop: false, showProgress: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindowViewModel.ImportDisableManifestAsync", ex);
+            var dialogService = new DialogService();
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("DisableManifest.ImportFailed", ex.Message));
+        }
+    }
+
     private async Task OpenSettingsAsync()
     {
         try
@@ -1082,6 +1126,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
             // 險ｭ螳壼､画峩繧貞渚譏
             var updatedSettings = AppSettings.Load();
+            IsDisableManifestImportEnabled = updatedSettings.EnableDisableManifestImport;
             var localSettingChanged = updatedSettings.EnableLocalAddonsExperimental != addonManager.EnableLocalAddonManagement;
             if (updatedSettings.DisableMode != addonManager.DisableMode)
             {

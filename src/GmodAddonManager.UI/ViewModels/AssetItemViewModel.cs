@@ -532,7 +532,10 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
     public bool CanShare => Id != "junction-system-asset";
 
-    public bool CanApplyExclusive => showExclusiveApply && Id != "junction-system-asset";
+    public bool CanApplyExclusive => showExclusiveApply &&
+        Id != "junction-system-asset" &&
+        Id != DisableManifestImportServiceConstants.AssetId &&
+        !Id.StartsWith(DisableManifestImportServiceConstants.NewAssetIdPrefix, StringComparison.Ordinal);
 
     
 

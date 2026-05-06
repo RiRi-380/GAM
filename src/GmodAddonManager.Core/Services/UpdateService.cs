@@ -297,7 +297,7 @@ namespace GmodAddonManager.Core.Services
             return JsonConvert.DeserializeObject<T>(json);
         }
 
-        private static GitHubAsset? SelectInstallerAsset(GitHubAsset[]? assets)
+        internal static GitHubAsset? SelectInstallerAsset(GitHubAsset[]? assets)
         {
             if (assets == null || assets.Length == 0)
             {
