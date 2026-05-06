@@ -11,8 +11,8 @@ SolidCompression=yes
 OutputDir=..\dist
 OutputBaseFilename=GAM-Setup-{#MyAppVersion}
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=..\src\GmodAddonManager.UI\Assets\app.ico
 LicenseFile=..\LICENSE
 
