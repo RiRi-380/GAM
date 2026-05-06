@@ -131,10 +131,10 @@ public partial class App : Application
 #endif
 
             var startupDesktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
-            ShowStartupWindow(startupDesktop);
             base.OnFrameworkInitializationCompleted();
             baseInitializationCompleted = true;
             WriteStartupTrace("base.OnFrameworkInitializationCompleted completed");
+            ShowStartupWindow(startupDesktop);
             await YieldForStartupWindowAsync();
 
             // アプリケーションロックの取得
@@ -560,56 +560,55 @@ public partial class App : Application
             return;
         }
 
-        startupWindow = new Window
+        WriteStartupTrace("ShowStartupWindow creating window");
+        var window = new Window();
+        WriteStartupTrace("ShowStartupWindow window created");
+
+        window.Title = "Gmod Addon Manager - 起動中";
+        window.Width = 460;
+        window.Height = 180;
+        window.MinWidth = 420;
+        window.MinHeight = 170;
+        window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        window.CanResize = false;
+        window.ShowInTaskbar = true;
+        WriteStartupTrace("ShowStartupWindow window properties assigned");
+
+        window.Content = new StackPanel
         {
-            Title = L.Get("InitialLoading.Title"),
-            Width = 460,
-            Height = 180,
-            MinWidth = 420,
-            MinHeight = 170,
-            WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            CanResize = false,
-            ShowInTaskbar = true,
-            Content = new StackPanel
+            Margin = new Thickness(24),
+            Spacing = 12,
+            Children =
             {
-                Margin = new Thickness(24),
-                Spacing = 12,
-                Children =
+                new TextBlock
                 {
-                    new TextBlock
-                    {
-                        Text = L.Get("InitialLoading.MainTitle"),
-                        FontSize = 22,
-                        FontWeight = FontWeight.Bold,
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    },
-                    new TextBlock
-                    {
-                        Text = L.Get("InitialLoading.Initializing"),
-                        TextWrapping = TextWrapping.Wrap,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        Opacity = 0.85
-                    },
-                    new ProgressBar
-                    {
-                        IsIndeterminate = true,
-                        Height = 8,
-                        Margin = new Thickness(0, 6, 0, 0)
-                    },
-                    new TextBlock
-                    {
-                        Text = L.Get("InitialLoading.PleaseWait"),
-                        TextWrapping = TextWrapping.Wrap,
-                        FontSize = 12,
-                        Opacity = 0.65,
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    }
+                    Text = "GAMを起動しています",
+                    FontSize = 22,
+                    FontWeight = FontWeight.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                },
+                new TextBlock
+                {
+                    Text = "初期化が完了するまでお待ちください。",
+                    TextWrapping = TextWrapping.Wrap,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Opacity = 0.85
+                },
+                new ProgressBar
+                {
+                    IsIndeterminate = true,
+                    Height = 8,
+                    Margin = new Thickness(0, 6, 0, 0)
                 }
             }
         };
+        WriteStartupTrace("ShowStartupWindow content assigned");
 
+        startupWindow = window;
         desktop.MainWindow = startupWindow;
         WriteStartupTrace("ShowStartupWindow assigned as MainWindow");
+        startupWindow.Show();
+        WriteStartupTrace("ShowStartupWindow Show returned");
     }
 
     private static async Task YieldForStartupWindowAsync()
