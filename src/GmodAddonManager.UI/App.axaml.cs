@@ -59,6 +59,7 @@ public partial class App : Application
 
     public override async void OnFrameworkInitializationCompleted()
     {
+        var baseInitializationCompleted = false;
         WriteStartupTrace("OnFrameworkInitializationCompleted started");
 #if DEBUG
         try
@@ -131,6 +132,9 @@ public partial class App : Application
 
             var startupDesktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
             ShowStartupWindow(startupDesktop);
+            base.OnFrameworkInitializationCompleted();
+            baseInitializationCompleted = true;
+            WriteStartupTrace("base.OnFrameworkInitializationCompleted completed");
             await YieldForStartupWindowAsync();
 
             // アプリケーションロックの取得
@@ -534,7 +538,12 @@ public partial class App : Application
 #if DEBUG
         File.AppendAllText("app_startup.log", $"Calling base.OnFrameworkInitializationCompleted at: {DateTime.Now}\n");
 #endif
-        base.OnFrameworkInitializationCompleted();
+        if (!baseInitializationCompleted)
+        {
+            base.OnFrameworkInitializationCompleted();
+            baseInitializationCompleted = true;
+            WriteStartupTrace("base.OnFrameworkInitializationCompleted completed at fallback");
+        }
 #if DEBUG
         File.AppendAllText("app_startup.log", $"base.OnFrameworkInitializationCompleted completed at: {DateTime.Now}\n");
 #endif
@@ -600,8 +609,7 @@ public partial class App : Application
         };
 
         desktop.MainWindow = startupWindow;
-        startupWindow.Show();
-        WriteStartupTrace("ShowStartupWindow Show returned");
+        WriteStartupTrace("ShowStartupWindow assigned as MainWindow");
     }
 
     private static async Task YieldForStartupWindowAsync()
