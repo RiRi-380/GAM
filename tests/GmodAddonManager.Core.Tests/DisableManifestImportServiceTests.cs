@@ -14,7 +14,7 @@ public sealed class DisableManifestImportServiceTests
             "# appid: 4000\n" +
             "# action: exclude\n" +
             "# mode: new\n" +
-            "# name: \u524a\u9664\u5019\u88dc\n" +
+            "# name: Weapon Cleanup\n" +
             "104479467 # Door STool\n" +
             "104483020\n");
 
@@ -27,11 +27,12 @@ public sealed class DisableManifestImportServiceTests
         var asset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
         Assert.False(asset.Enabled);
         Assert.False(asset.IsSystem);
-        Assert.Equal("\u524a\u9664\u5019\u88dc", asset.Name);
+        Assert.Equal("Weapon Cleanup", asset.Name);
         Assert.Equal(new[] { "104479467", "104483020" }, asset.Addons);
         Assert.All(asset.Addons, addonId => Assert.Equal(AddonState.Excluded, asset.AddonStates[addonId]));
         Assert.True(manager.GetConfiguration().AddonMetadata.ContainsKey("104479467"));
         Assert.True(manager.GetConfiguration().AddonMetadata.ContainsKey("104483020"));
+        Assert.Equal("Workshop-104479467", manager.GetConfiguration().AddonMetadata["104479467"].Title);
         Assert.False(File.Exists(env.NoMountPath));
         Assert.False(result.AppliedImmediately);
         Assert.False(result.QueuedPendingApply);
@@ -52,12 +53,12 @@ public sealed class DisableManifestImportServiceTests
 
         using var manager = env.CreateManager();
         await manager.InitializeAsync();
-        manager.GetConfiguration().Assets.Add(new Asset("\u524a\u9664\u5019\u88dc") { Enabled = true });
+        manager.GetConfiguration().Assets.Add(new Asset("Cleanup Candidates") { Enabled = true });
         var service = new DisableManifestImportService(manager);
 
         var result = await service.ImportAsync(manifestPath, new DisableManifestImportOptions());
 
-        Assert.Equal("\u524a\u9664\u5019\u88dc (2)", result.AssetName);
+        Assert.Equal("Cleanup Candidates (2)", result.AssetName);
         var importedAsset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
         Assert.False(importedAsset.Enabled);
     }
@@ -144,6 +145,7 @@ public sealed class DisableManifestImportServiceTests
         Assert.Equal(1, preview.DuplicateCount);
         Assert.Equal(1, preview.InvalidCount);
         Assert.Equal(DisableManifestMode.New, preview.Mode);
+        Assert.Equal("Cleanup Candidates", preview.AssetName);
         Assert.True(preview.IsSoftMode);
         Assert.True(preview.CreatesDisabledAsset);
         Assert.False(preview.WillRequirePendingApply);

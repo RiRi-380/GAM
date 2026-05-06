@@ -157,10 +157,9 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
 
     private static bool IsLegacyDefaultName(string name)
     {
-        return string.Equals(
-            name.Trim(),
-            DisableManifest.LegacyDefaultName,
-            StringComparison.OrdinalIgnoreCase);
+        var trimmed = name.Trim();
+        return DisableManifest.LegacyDefaultNames.Any(
+            legacyName => string.Equals(trimmed, legacyName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string MakeUniqueAssetName(Configuration config, string baseName)
@@ -207,7 +206,7 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
 
         config.AddonMetadata[addonId] = new WorkshopAddon(addonId, string.Empty)
         {
-            Title = $"Workshop {addonId}",
+            Title = $"Workshop-{addonId}",
             IsEnabled = true,
             NeedsTitleUpdate = true,
             IsGmaFile = false

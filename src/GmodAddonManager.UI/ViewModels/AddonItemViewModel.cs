@@ -81,21 +81,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
         // 基本情報の設定
         AddonId = addon.Id;
-        // NeedsTitleUpdateがtrueの場合は読み込み中を表示
-        if (addon.NeedsTitleUpdate)
-        {
-            title = L.Get("Common.Loading");
-        }
-        else if (AddonTitleHelper.IsPlaceholderTitle(addon.Title))
-        {
-            title = AddonTitleHelper.BuildPlaceholderTitle(addon.Id);
-        }
-        else
-        {
-            title = string.IsNullOrWhiteSpace(addon.Title)
-                ? AddonTitleHelper.BuildPlaceholderTitle(addon.Id)
-                : addon.Title;
-        }
+        title = ResolveDisplayTitle(addon);
         FolderPath = addon.FolderPath;
         
         // ファイル情報の初期化
@@ -145,12 +131,49 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         private set => SetAndRaise(ref title, value);
     }
     private string title = "";
+
+    private static string ResolveDisplayTitle(WorkshopAddon addon)
+    {
+        return ResolveDisplayTitle(addon.Id, addon.Title);
+    }
+
+    private static string ResolveDisplayTitle(string addonId, string? candidateTitle)
+    {
+        return IsConcreteTitle(candidateTitle)
+            ? candidateTitle!.Trim()
+            : AddonTitleHelper.BuildPlaceholderTitle(addonId);
+    }
+
+    private static bool IsConcreteTitle(string? title)
+    {
+        return !string.IsNullOrWhiteSpace(title) &&
+               !AddonTitleHelper.IsPlaceholderTitle(title) &&
+               !IsLoadingTitle(title);
+    }
+
+    private static bool IsLoadingTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        var trimmed = title.Trim();
+        return string.Equals(trimmed, L.Get("Common.Loading"), StringComparison.Ordinal) ||
+               string.Equals(trimmed, "Loading...", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(trimmed, "読み込み中...", StringComparison.Ordinal);
+    }
     
     // タイトルを外部から更新するためのメソッド
-    public void UpdateTitle(string newTitle)
+    public void UpdateTitle(string? newTitle)
     {
-        Title = newTitle;
-        if (!string.IsNullOrWhiteSpace(newTitle) && !AddonTitleHelper.IsPlaceholderTitle(newTitle))
+        Title = ResolveDisplayTitle(AddonId, newTitle);
+        if (!string.IsNullOrWhiteSpace(newTitle))
+        {
+            addon.Title = newTitle;
+        }
+
+        if (IsConcreteTitle(newTitle))
         {
             addon.NeedsTitleUpdate = false;
         }
@@ -176,9 +199,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         // タイトルの更新
         if (!string.IsNullOrEmpty(workshopAddon.Title))
         {
-            Title = workshopAddon.Title;
+            Title = ResolveDisplayTitle(workshopAddon.Id, workshopAddon.Title);
             addon.Title = workshopAddon.Title;
-            addon.NeedsTitleUpdate = false;
+            addon.NeedsTitleUpdate = !IsConcreteTitle(workshopAddon.Title);
         }
         
         // 内部のaddonオブジェクトを更新
@@ -411,13 +434,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
 
-            if (addon.NeedsTitleUpdate)
+            if (addon.NeedsTitleUpdate || AddonTitleHelper.IsPlaceholderTitle(Title) || IsLoadingTitle(Title))
             {
-                Title = L.Get("Common.Loading");
-            }
-            else if (AddonTitleHelper.IsPlaceholderTitle(Title))
-            {
-                Title = AddonTitleHelper.BuildPlaceholderTitle(AddonId);
+                Title = ResolveDisplayTitle(addon);
             }
         }
     }
@@ -576,9 +595,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 {
                     if (!string.IsNullOrWhiteSpace(details.Title))
                     {
-                        Title = details.Title;
+                        Title = ResolveDisplayTitle(AddonId, details.Title);
                         addon.Title = details.Title;
-                        addon.NeedsTitleUpdate = false;
+                        addon.NeedsTitleUpdate = !IsConcreteTitle(details.Title);
                     }
                     addon.Author = details.Author;
                     addon.Description = details.Description;
@@ -613,9 +632,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
                     if (workshopDetails != null && !string.IsNullOrWhiteSpace(workshopDetails.Title))
                     {
-                        Title = workshopDetails.Title;
+                        Title = ResolveDisplayTitle(AddonId, workshopDetails.Title);
                         addon.Title = workshopDetails.Title;
-                        addon.NeedsTitleUpdate = false;
+                        addon.NeedsTitleUpdate = !IsConcreteTitle(workshopDetails.Title);
                         if (!string.IsNullOrWhiteSpace(workshopDetails.Description))
                         {
                             addon.Description = workshopDetails.Description;

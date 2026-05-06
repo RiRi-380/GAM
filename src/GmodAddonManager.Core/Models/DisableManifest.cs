@@ -8,8 +8,16 @@ public sealed class DisableManifest
     public const string SupportedSchemaVersion = "GAM-DISABLE v1";
     public const string SupportedAction = "exclude";
     public const string SupportedAppId = "4000";
-    public const string DefaultName = "\u4e00\u62ec\u9664\u5916\u30ea\u30b9\u30c8";
+    public const string DefaultName = "Cleanup Candidates";
     public const string LegacyDefaultName = "GPT Disable List";
+    public static readonly string[] LegacyDefaultNames =
+    {
+        LegacyDefaultName,
+        "Disable Candidates",
+        "\u4e00\u62ec\u9664\u5916\u30ea\u30b9\u30c8",
+        "\u524a\u9664\u5019\u88dc",
+        "GPT\u524a\u9664\u5019\u88dc"
+    };
 
     public bool HasMagicHeader { get; set; }
     public bool HasAction { get; set; }

@@ -62,6 +62,22 @@ public sealed class AddonManagerEmptyDirectoryTests
     }
 
     [Fact]
+    public async Task ScanForNewAddonsAsync_CacheTitleForPendingAddon_ClearsTitleUpdate()
+    {
+        using var env = new TestEnvironment();
+        var cachePath = env.WriteWorkshopCache((env.AddonId, "Door STool"));
+
+        using var manager = env.CreateManager(new[] { cachePath });
+        await manager.InitializeAsync();
+
+        var addons = await manager.ScanForNewAddonsAsync();
+        var addon = Assert.Single(addons, addon => addon.Id == env.AddonId);
+
+        Assert.Equal("Door STool", addon.Title);
+        Assert.False(addon.NeedsTitleUpdate);
+    }
+
+    [Fact]
     public async Task ScanWorkshopFolderAsync_EmptyDirectoryAfterPayload_RemovesStaleMetadata()
     {
         using var env = new TestEnvironment();
@@ -101,7 +117,7 @@ public sealed class AddonManagerEmptyDirectoryTests
         public string AddonDirectoryPath => Path.Combine(WorkshopPath, AddonId);
         public string PayloadPath => Path.Combine(AddonDirectoryPath, "addon.txt");
 
-        public AddonManager CreateManager()
+        public AddonManager CreateManager(IReadOnlyList<string>? workshopCacheFilePaths = null)
         {
             return new AddonManager(new AddonManagerOptions
             {
@@ -109,7 +125,7 @@ public sealed class AddonManagerEmptyDirectoryTests
                 CustomAppDataPath = AppDataPath,
                 DisableMode = DisableMode.Soft,
                 DisableCacheScan = true,
-                CustomWorkshopCacheFilePaths = Array.Empty<string>(),
+                CustomWorkshopCacheFilePaths = workshopCacheFilePaths ?? Array.Empty<string>(),
                 ScanCacheTtl = TimeSpan.Zero
             });
         }
@@ -118,6 +134,42 @@ public sealed class AddonManagerEmptyDirectoryTests
         {
             Directory.CreateDirectory(AddonDirectoryPath);
             File.WriteAllText(PayloadPath, "payload");
+        }
+
+        public string WriteWorkshopCache(params (string Id, string Title)[] addons)
+        {
+            var cachePath = Path.Combine(rootPath, "appworkshop_4000.acf");
+            var builder = new System.Text.StringBuilder();
+            builder.AppendLine("\"AppWorkshop\"");
+            builder.AppendLine("{");
+            builder.AppendLine("    \"WorkshopItemsInstalled\"");
+            builder.AppendLine("    {");
+
+            foreach (var addon in addons)
+            {
+                builder.Append("        \"").Append(addon.Id).AppendLine("\"");
+                builder.AppendLine("        {");
+                builder.AppendLine("            \"size\" \"4096\"");
+                builder.AppendLine("            \"timeupdated\" \"1700000000\"");
+                builder.AppendLine("        }");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("    \"WorkshopItemDetails\"");
+            builder.AppendLine("    {");
+
+            foreach (var addon in addons)
+            {
+                builder.Append("        \"").Append(addon.Id).AppendLine("\"");
+                builder.AppendLine("        {");
+                builder.Append("            \"title\" \"").Append(addon.Title).AppendLine("\"");
+                builder.AppendLine("        }");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("}");
+            File.WriteAllText(cachePath, builder.ToString());
+            return cachePath;
         }
 
         public void Dispose()

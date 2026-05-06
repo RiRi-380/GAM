@@ -2560,7 +2560,11 @@ namespace GmodAddonManager.Core.Services
                     if (cachedDetails.TryGetValue(addonId, out var info))
                     {
                         if (!string.IsNullOrEmpty(info.Title))
+                        {
                             addon.Title = info.Title;
+                            addon.NeedsTitleUpdate = false;
+                        }
+
                         if (info.TimeUpdated.HasValue)
                             addon.LastUpdated = info.TimeUpdated.Value;
                     }
