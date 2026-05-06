@@ -1039,10 +1039,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 {
                     reusedAddonIds.Add(addon.Id);
                     // 既存のViewModelを更新（タイトル等が変更されている可能性がある）
-                    if (!addon.NeedsTitleUpdate && addon.Title != null)
-                    {
-                        existingVm.UpdateTitle(addon.Title);
-                    }
+                    existingVm.UpdateTitle(addon.Title);
                     newAllAddons.Add(existingVm);
                 }
                 else
