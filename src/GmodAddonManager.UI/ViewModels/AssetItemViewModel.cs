@@ -1202,7 +1202,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
                                         {
 
-                                            var state = selectedAsset.GetAddonState(addonId);
+                                            var state = GetAddonState(addonId);
 
                                             selectedAsset.AddAddon(addonId, state); // 遘ｻ陦悟・繧｢繧ｻ繝・ヨ縺ｮ迥ｶ諷九ｒ蜆ｪ蜈・
 
