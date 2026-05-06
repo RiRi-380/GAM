@@ -12,6 +12,8 @@ using GmodAddonManager.UI.Views;
 using GmodAddonManager.UI.Models;
 using System.IO;
 using System;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Utils;
 
@@ -73,6 +75,8 @@ public partial class App : Application
 #endif
 
         AppSettings? settings = null;
+        string? startupWarningTitle = null;
+        string? startupWarningMessage = null;
         
         try
         {
@@ -167,7 +171,8 @@ public partial class App : Application
                 File.AppendAllText("app_startup.log", $"Creating AddonManager at: {DateTime.Now}\n");
 #endif
                 var disableMode = settings.DisableMode;
-                if (IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE")))
+                var forceHardDisable = IsEnvTrue(Environment.GetEnvironmentVariable("GAM_EXPERIMENT_FORCE_HARD_DISABLE"));
+                if (forceHardDisable)
                 {
                     disableMode = DisableMode.Hard;
                 }
@@ -185,6 +190,25 @@ public partial class App : Application
                     // Keep preview mode in soft disable to avoid file ops.
                     disableMode = DisableMode.Soft;
                     errorHandler.HandleInfo($"Preview mode enabled. WorkshopPath={previewWorkshopPath}", "App");
+                }
+
+                if (disableMode == DisableMode.Hard && !IsRunningAsAdministrator())
+                {
+                    errorHandler.HandleWarning(
+                        "Hard disable mode was requested without administrator privileges; falling back to Soft disable.",
+                        "App");
+
+                    disableMode = DisableMode.Soft;
+                    startupWarningTitle = "Soft disable に切り替えました";
+                    startupWarningMessage = forceHardDisable
+                        ? "Hard disable の強制指定がありますが、管理者権限がないため Soft disable で起動しました。Hard disable を使う場合は管理者として起動してください。"
+                        : "Hard disable は管理者権限が必要です。今回は Soft disable で起動し、設定も Soft disable に戻しました。";
+
+                    if (!forceHardDisable)
+                    {
+                        settings.DisableMode = DisableMode.Soft;
+                        settings.Save();
+                    }
                 }
 
                 addonManager = new AddonManager(new AddonManagerOptions
@@ -482,6 +506,7 @@ public partial class App : Application
                     desktop.MainWindow = mainWindow;
                     mainWindow.Show();
                     CloseStartupWindow();
+                    QueueStartupWarning(dialogService, errorHandler, startupWarningTitle, startupWarningMessage);
 #if DEBUG
                     File.AppendAllText("app_startup.log", $"MainWindow.Show() called at: {DateTime.Now}\n");
 #endif
@@ -686,6 +711,49 @@ public partial class App : Application
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRunningAsAdministrator()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void QueueStartupWarning(
+        DialogService dialogService,
+        UIErrorHandler errorHandler,
+        string? title,
+        string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _ = Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            try
+            {
+                await dialogService.ShowWarningAsync(title ?? "GAM", message);
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to show startup warning: {ex.Message}", "App");
+            }
+        }, DispatcherPriority.Background);
     }
 
     private static bool IsPreviewMode()
