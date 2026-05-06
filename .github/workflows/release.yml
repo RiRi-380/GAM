@@ -63,7 +63,13 @@ jobs:
       
     - name: Setup Inno Setup
       run: |
-        choco install innosetup -y
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        if (Test-Path $iscc) {
+          Write-Host "Inno Setup is already available at $iscc"
+        } else {
+          choco install innosetup -y --no-progress
+        }
+      shell: pwsh
     
     - name: Download VC++ Redistributable
       run: |
