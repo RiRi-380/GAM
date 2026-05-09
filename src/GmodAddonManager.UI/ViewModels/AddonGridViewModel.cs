@@ -59,8 +59,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private readonly System.Threading.SemaphoreSlim visibleLoadSemaphore = new System.Threading.SemaphoreSlim(3, 3);
     private readonly object visibleRangeLock = new object();
     private CancellationTokenSource? visibleRangeCts;
-    private Dictionary<string, AddonState>? cachedAddonStateMarkers;
-    private DateTime cachedAddonStateMarkersUpdated = DateTime.MinValue;
     private bool disposed;
     private bool metadataSupplementUiSnapshotErrorLogged;
     private bool metadataSupplementCacheReadErrorLogged;
@@ -1109,17 +1107,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             var query = AllAddons.AsEnumerable();
             var config = addonManager.GetConfiguration();
-            if (cachedAddonStateMarkers == null || config.LastUpdated != cachedAddonStateMarkersUpdated)
-            {
-                cachedAddonStateMarkers = BuildAddonStateMarkers(config);
-                cachedAddonStateMarkersUpdated = config.LastUpdated;
-            }
-
-            var addonStateMarkers = cachedAddonStateMarkers;
-            foreach (var addon in AllAddons)
-            {
-                addon.SetAddonStateMarkers(addonStateMarkers);
-            }
+            RefreshAddonStateMarkers(config);
 
             // Normal/Cacheフィルタ
             switch (addonFilterIndex)
@@ -2692,8 +2680,17 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             {
                 var dialogService = new DialogService();
                 await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.StateChangeFailed"));
-            }
         }
+    }
+
+    private void RefreshAddonStateMarkers(Configuration config)
+    {
+        var addonStateMarkers = BuildAddonStateMarkers(config);
+        foreach (var addon in AllAddons)
+        {
+            addon.SetAddonStateMarkers(addonStateMarkers);
+        }
+    }
 
     public void Dispose()
     {
