@@ -35,6 +35,7 @@ Name: "{userdesktop}\Gmod Addon Manager"; Filename: "{app}\GmodAddonManager.UI.e
 
 [Run]
 Filename: "{app}\GmodAddonManager.UI.exe"; Description: "{cm:LaunchProgram,Gmod Addon Manager}"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\GmodAddonManager.UI.exe"; Flags: nowait skipifnotsilent shellexec
 
 [Code]
 var
