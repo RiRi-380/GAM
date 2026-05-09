@@ -48,7 +48,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private AddonItemViewModel? selectedAddon;
     private bool isSelectionMode;
     private bool hasSelectedAddons;
-    private int addonFilterIndex = 0; // 0=全て, 1=通常のみ, 2=キャッシュのみ, 3=ローカルのみ
+    private int addonFilterIndex = 0; // 0=All, 1=Enabled, 2=Disabled/Excluded
     private DashboardViewModel? dashboardViewModel;
     private bool enableBackgroundTitleUpdates;
     private bool enableBackgroundAddonPreload;
@@ -733,6 +733,45 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         return markers;
     }
 
+    private Dictionary<string, IReadOnlyList<string>> BuildInactiveAssetMembershipMarkers(
+        Configuration config,
+        string? currentAssetId)
+    {
+        var markers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
+
+        foreach (var asset in config.Assets)
+        {
+            if (asset.Enabled || string.Equals(asset.Id, currentAssetId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var assetName = string.IsNullOrWhiteSpace(asset.Name)
+                ? asset.Id
+                : asset.Name.Trim();
+            var addonIds = asset.ContainsAllAddons()
+                ? allAddonIds
+                : asset.Addons.Where(id => id != "*");
+
+            foreach (var addonId in addonIds)
+            {
+                if (!markers.TryGetValue(addonId, out var assetNames))
+                {
+                    assetNames = new List<string>();
+                    markers[addonId] = assetNames;
+                }
+
+                assetNames.Add(assetName);
+            }
+        }
+
+        return markers.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<string>)kvp.Value,
+            StringComparer.Ordinal);
+    }
+
     private static void AddStateMarker(
         Dictionary<string, AddonState> markers,
         string addonId,
@@ -1109,20 +1148,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var config = addonManager.GetConfiguration();
             RefreshAddonStateMarkers(config);
 
-            // Normal/Cacheフィルタ
-            switch (addonFilterIndex)
+            foreach (var addon in AllAddons)
             {
-                case 1: // 通常のみ
-                    query = query.Where(a => !a.IsGmaFile && !a.IsLocal);
-                    break;
-                case 2: // キャッシュのみ
-                    query = query.Where(a => a.IsGmaFile && !a.IsLocal);
-                    break;
-                case 3: // ローカルのみ
-                    query = query.Where(a => a.IsLocal);
-                    break;
-                // case 0: 全て表示（フィルタなし）
+                addon.SetCurrentAsset(CurrentAsset);
             }
+
+            // State filter: keep border semantics separate from inactive asset membership badges.
+            query = query.Where(addon => MatchesAddonStateFilter(addon, addonFilterIndex));
 
             // アセットフィルタ
             if (ShowOnlyAssetAddons)
@@ -1192,8 +1224,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var newFilteredAddons = new ObservableCollection<AddonItemViewModel>();
             foreach (var addon in results)
             {
-                // 現在のアセットを設定して状態を更新
-                addon.SetCurrentAsset(CurrentAsset);
                 newFilteredAddons.Add(addon);
             }
             
@@ -1256,6 +1286,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         return count;
+    }
+
+    private static bool MatchesAddonStateFilter(AddonItemViewModel addon, int filterIndex)
+    {
+        return filterIndex switch
+        {
+            1 => !addon.IsDisplayOff,
+            2 => addon.IsDisplayOff,
+            _ => true
+        };
     }
 
     private static bool MatchesFilterSelections(
@@ -2686,9 +2726,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private void RefreshAddonStateMarkers(Configuration config)
     {
         var addonStateMarkers = BuildAddonStateMarkers(config);
+        var inactiveAssetMembershipMarkers = BuildInactiveAssetMembershipMarkers(config, CurrentAsset?.Id);
         foreach (var addon in AllAddons)
         {
             addon.SetAddonStateMarkers(addonStateMarkers);
+            addon.SetInactiveAssetMembershipMarkers(inactiveAssetMembershipMarkers);
         }
     }
 
