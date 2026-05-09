@@ -7,6 +7,32 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class UpdateServiceTests
 {
     [Theory]
+    [InlineData("v1.0.7.0", "1.0.7")]
+    [InlineData("1.0.8.0", "1.0.8")]
+    [InlineData("v1.0.9+69e8bf562388f955", "1.0.9")]
+    [InlineData("v1.0.10-beta+local", "1.0.10")]
+    [InlineData("1.2.3.4", "1.2.3.4")]
+    public void NormalizeVersionNumber_RemovesDisplayOnlySuffixesAndTrailingZeroRevision(
+        string version,
+        string expected)
+    {
+        var normalized = UpdateService.NormalizeVersionNumber(version);
+
+        Assert.Equal(expected, normalized);
+    }
+
+    [Theory]
+    [InlineData("v1.0.7.0", "v1.0.7")]
+    [InlineData("1.0.8+abc", "v1.0.8")]
+    [InlineData("", "unknown")]
+    public void NormalizeVersionLabel_UsesConsistentUserFacingFormat(string version, string expected)
+    {
+        var label = UpdateService.NormalizeVersionLabel(version);
+
+        Assert.Equal(expected, label);
+    }
+
+    [Theory]
     [InlineData("https://github.com/RiRi-380/GAM/releases/download/v1.0.0/GAM-Setup-v1.0.0.exe")]
     [InlineData("https://example.com/path/installer-latest.exe")]
     [InlineData("https://example.com/path/GAM-Setup-v1.0.0.exe?download=1")]
@@ -60,5 +86,32 @@ public sealed class UpdateServiceTests
 
         Assert.NotNull(selected);
         Assert.Equal("GAM-Setup.exe", selected.Name);
+    }
+
+    [Fact]
+    public void BuildInstallerLauncherScript_WaitsForCurrentProcessAndStartsInstaller()
+    {
+        var script = UpdateService.BuildInstallerLauncherScript(
+            12345,
+            @"C:\Temp\GAM's Setup.exe",
+            "/VERYSILENT /SP-");
+
+        Assert.Contains("Wait-Process -Id 12345", script);
+        Assert.Contains("$installerPath = 'C:\\Temp\\GAM''s Setup.exe'", script);
+        Assert.Contains("$installerArguments = '/VERYSILENT /SP-'", script);
+        Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait", script);
+        Assert.Contains("Remove-Item -LiteralPath $PSCommandPath", script);
+    }
+
+    [Fact]
+    public void CreateInstallerLauncherStartInfo_RunsPowerShellScriptHidden()
+    {
+        var startInfo = UpdateService.CreateInstallerLauncherStartInfo(@"C:\Temp\launcher.ps1");
+
+        Assert.Equal("powershell.exe", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.CreateNoWindow);
+        Assert.Contains("-File", startInfo.ArgumentList);
+        Assert.Contains(@"C:\Temp\launcher.ps1", startInfo.ArgumentList);
     }
 }

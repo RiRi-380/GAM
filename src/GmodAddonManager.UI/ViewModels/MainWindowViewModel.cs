@@ -134,10 +134,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+            var currentVersion = GetCurrentVersion();
             var updateService = CreateUpdateService(currentVersion);
             
-            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: false);
+            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: true);
             if (updateResult.Status == UpdateCheckStatus.UpdateAvailable && updateResult.UpdateInfo != null)
             {
                 // 繧｢繝・・繝・・繝医ム繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
@@ -166,6 +166,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private static UpdateService CreateUpdateService(string currentVersion)
     {
         return new UpdateService(currentVersion);
+    }
+
+    private static string GetCurrentVersion()
+    {
+        return Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "1.0.0";
     }
 
     public string SearchText
