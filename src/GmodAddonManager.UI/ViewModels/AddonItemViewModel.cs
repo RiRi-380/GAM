@@ -38,6 +38,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private bool isFavorite;
     private Bitmap? thumbnailBitmap;
     private IReadOnlyDictionary<string, AddonState>? addonStateMarkers;
+    private IReadOnlyDictionary<string, IReadOnlyList<string>>? inactiveAssetMembershipMarkers;
     private bool isFileSizeCalculated;
     private bool disposed;
 
@@ -190,6 +191,20 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(BorderColor));
         this.RaisePropertyChanged(nameof(StateText));
+        this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(IsDisplayOff));
+    }
+
+    public void SetInactiveAssetMembershipMarkers(IReadOnlyDictionary<string, IReadOnlyList<string>>? markers)
+    {
+        if (ReferenceEquals(inactiveAssetMembershipMarkers, markers))
+        {
+            return;
+        }
+
+        inactiveAssetMembershipMarkers = markers;
+        this.RaisePropertyChanged(nameof(IsInInactiveAsset));
+        this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
     }
     
     // WorkshopAddonから情報を更新するメソッド
@@ -263,6 +278,30 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     
     public bool IsGmaFile => addon.IsGmaFile;
     public bool IsLocal => addon.IsLocal;
+    public bool IsInInactiveAsset
+    {
+        get
+        {
+            return inactiveAssetMembershipMarkers != null &&
+                   inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) &&
+                   assetNames.Count > 0;
+        }
+    }
+
+    public string InactiveAssetTooltip
+    {
+        get
+        {
+            if (inactiveAssetMembershipMarkers == null ||
+                !inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) ||
+                assetNames.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return L.Format("AddonGrid.OffAssetTooltip", string.Join(", ", assetNames));
+        }
+    }
 
     public bool IsSelected
     {
@@ -423,6 +462,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(BorderColor));
             this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
             this.RaisePropertyChanged(nameof(StateText));
+            this.RaisePropertyChanged(nameof(DisplayAddonState));
+            this.RaisePropertyChanged(nameof(IsDisplayOff));
             return;
         }
         
@@ -433,6 +474,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(BorderColor));
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(StateText));
+        this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(IsDisplayOff));
     }
 
     private void OnLocalizationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -440,6 +483,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         if (e.PropertyName == nameof(LocalizationManager.CurrentLanguage) || string.IsNullOrEmpty(e.PropertyName))
         {
             this.RaisePropertyChanged(nameof(StateText));
+            this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
 
@@ -592,6 +636,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
 
         return currentAddonState ?? globalState;
+    }
+
+    public AddonState? DisplayAddonState => GetDisplayAddonState();
+
+    public bool IsDisplayOff
+    {
+        get
+        {
+            var state = DisplayAddonState;
+            return state == AddonState.Disabled || state == AddonState.Excluded;
+        }
     }
 
     public Task LoadDetailsBackgroundAsync()

@@ -166,6 +166,60 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
     }
 
     [Fact]
+    public async Task InactiveAssetMembershipMarkersIncludeOtherDisabledAssetsOnly()
+    {
+        using var manager = await CreateManagerAsync();
+        var currentAsset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1", assetName: "Asset A");
+        currentAsset.AddAddon("addon-2", AddonState.Enabled);
+        currentAsset.AddAddon("addon-3", AddonState.Enabled);
+        var inactiveAsset = CreateAsset(manager, enabled: false, AddonState.Enabled, addonId: "addon-1", assetName: "Asset B");
+        inactiveAsset.AddAddon("addon-2", AddonState.Disabled);
+        inactiveAsset.AddAddon("addon-3", AddonState.Excluded);
+        CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1", assetName: "Asset C");
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
+        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
+
+        var markers = InvokeBuildInactiveAssetMembershipMarkers(
+            grid,
+            manager.GetConfiguration(),
+            currentAsset.Id);
+
+        Assert.Equal(new[] { "Asset B" }, markers["addon-1"]);
+        Assert.Equal(new[] { "Asset B" }, markers["addon-2"]);
+        Assert.Equal(new[] { "Asset B" }, markers["addon-3"]);
+
+        var selfSkippedMarkers = InvokeBuildInactiveAssetMembershipMarkers(
+            grid,
+            manager.GetConfiguration(),
+            inactiveAsset.Id);
+
+        Assert.False(selfSkippedMarkers.ContainsKey("addon-1"));
+        Assert.False(selfSkippedMarkers.ContainsKey("addon-2"));
+        Assert.False(selfSkippedMarkers.ContainsKey("addon-3"));
+    }
+
+    [Fact]
+    public async Task InactiveAssetBadgeDoesNotChangeDisplayState()
+    {
+        using var manager = await CreateManagerAsync();
+        var asset = CreateAsset(manager, enabled: true, AddonState.Enabled);
+        var addon = CreateAddonViewModel(manager);
+        using var assetViewModel = CreateAssetViewModel(asset, manager);
+
+        addon.SetInactiveAssetMembershipMarkers(new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["addon-1"] = new[] { "Asset B" }
+        });
+        addon.SetCurrentAsset(assetViewModel);
+
+        Assert.True(addon.IsInInactiveAsset);
+        Assert.Contains("Asset B", addon.InactiveAssetTooltip);
+        Assert.Equal("#303030", addon.BorderColor);
+        Assert.Equal("Enabled", addon.StateText);
+    }
+
+    [Fact]
     public async Task StateMarkerRefreshReflectsCrossAssetMarkersAfterUnsavedAssetMutation()
     {
         using var manager = await CreateManagerAsync();
@@ -190,6 +244,30 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
 
         Assert.Equal("#FF9800", addon2.BorderColor);
         Assert.Equal("Disabled", addon2.StateText);
+    }
+
+    [Fact]
+    public async Task AddonStateFilterTreatsDisabledAndExcludedAsOff()
+    {
+        using var manager = await CreateManagerAsync();
+        var asset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1");
+        asset.AddAddon("addon-2", AddonState.Disabled);
+        asset.AddAddon("addon-3", AddonState.Excluded);
+        using var assetViewModel = CreateAssetViewModel(asset, manager);
+        var addon1 = CreateAddonViewModel(manager, addonId: "addon-1");
+        var addon2 = CreateAddonViewModel(manager, addonId: "addon-2");
+        var addon3 = CreateAddonViewModel(manager, addonId: "addon-3");
+
+        addon1.SetCurrentAsset(assetViewModel);
+        addon2.SetCurrentAsset(assetViewModel);
+        addon3.SetCurrentAsset(assetViewModel);
+
+        Assert.True(InvokeMatchesAddonStateFilter(addon1, filterIndex: 1));
+        Assert.False(InvokeMatchesAddonStateFilter(addon2, filterIndex: 1));
+        Assert.False(InvokeMatchesAddonStateFilter(addon3, filterIndex: 1));
+        Assert.False(InvokeMatchesAddonStateFilter(addon1, filterIndex: 2));
+        Assert.True(InvokeMatchesAddonStateFilter(addon2, filterIndex: 2));
+        Assert.True(InvokeMatchesAddonStateFilter(addon3, filterIndex: 2));
     }
 
     [Fact]
@@ -233,9 +311,10 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         AddonManager manager,
         bool enabled,
         AddonState state,
-        string addonId = "addon-1")
+        string addonId = "addon-1",
+        string assetName = "Test Asset")
     {
-        var asset = new Asset("Test Asset")
+        var asset = new Asset(assetName)
         {
             Id = Guid.NewGuid().ToString("N"),
             Enabled = enabled,
@@ -275,6 +354,31 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         Assert.NotNull(method);
         var result = method!.Invoke(grid, new object[] { configuration });
         return Assert.IsType<Dictionary<string, AddonState>>(result);
+    }
+
+    private static Dictionary<string, IReadOnlyList<string>> InvokeBuildInactiveAssetMembershipMarkers(
+        AddonGridViewModel grid,
+        Configuration configuration,
+        string? currentAssetId)
+    {
+        var method = typeof(AddonGridViewModel).GetMethod(
+            "BuildInactiveAssetMembershipMarkers",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        var result = method!.Invoke(grid, new object?[] { configuration, currentAssetId });
+        return Assert.IsType<Dictionary<string, IReadOnlyList<string>>>(result);
+    }
+
+    private static bool InvokeMatchesAddonStateFilter(AddonItemViewModel addon, int filterIndex)
+    {
+        var method = typeof(AddonGridViewModel).GetMethod(
+            "MatchesAddonStateFilter",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        var result = method!.Invoke(null, new object[] { addon, filterIndex });
+        return Assert.IsType<bool>(result);
     }
 
     private static void SetAllAddons(AddonGridViewModel grid, params AddonItemViewModel[] addons)
