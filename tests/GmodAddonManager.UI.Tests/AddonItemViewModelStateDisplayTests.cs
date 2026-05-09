@@ -166,6 +166,33 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
     }
 
     [Fact]
+    public async Task StateMarkerRefreshReflectsCrossAssetMarkersAfterUnsavedAssetMutation()
+    {
+        using var manager = await CreateManagerAsync();
+        var currentAsset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1");
+        currentAsset.AddAddon("addon-2", AddonState.Enabled);
+        var otherAsset = CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1");
+        var addon2 = CreateAddonViewModel(manager, addonId: "addon-2");
+        using var currentAssetViewModel = CreateAssetViewModel(currentAsset, manager);
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
+        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
+
+        SetAllAddons(grid, addon2);
+        addon2.SetCurrentAsset(currentAssetViewModel);
+        InvokeRefreshAddonStateMarkers(grid, manager.GetConfiguration());
+
+        Assert.Equal("#303030", addon2.BorderColor);
+        Assert.Equal("Enabled", addon2.StateText);
+
+        manager.AddAddonToAsset(otherAsset.Id, "addon-2", AddonState.Disabled);
+        InvokeRefreshAddonStateMarkers(grid, manager.GetConfiguration());
+
+        Assert.Equal("#FF9800", addon2.BorderColor);
+        Assert.Equal("Disabled", addon2.StateText);
+    }
+
+    [Fact]
     public async Task ClearingCurrentAssetClearsStaleLocalState()
     {
         using var manager = await CreateManagerAsync();
@@ -219,12 +246,12 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         return asset;
     }
 
-    private static AddonItemViewModel CreateAddonViewModel(AddonManager manager)
+    private static AddonItemViewModel CreateAddonViewModel(AddonManager manager, string addonId = "addon-1")
     {
         return new AddonItemViewModel(
             new WorkshopAddon
             {
-                Id = "addon-1",
+                Id = addonId,
                 Title = "Test Addon",
                 FolderPath = string.Empty,
                 NeedsTitleUpdate = false
@@ -250,11 +277,54 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         return Assert.IsType<Dictionary<string, AddonState>>(result);
     }
 
+    private static void SetAllAddons(AddonGridViewModel grid, params AddonItemViewModel[] addons)
+    {
+        var field = typeof(AddonGridViewModel).GetField(
+            "allAddons",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.NotNull(field);
+        field!.SetValue(grid, new System.Collections.ObjectModel.ObservableCollection<AddonItemViewModel>(addons));
+    }
+
+    private static void InvokeRefreshAddonStateMarkers(
+        AddonGridViewModel grid,
+        Configuration configuration)
+    {
+        var method = typeof(AddonGridViewModel).GetMethod(
+            "RefreshAddonStateMarkers",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        method!.Invoke(grid, new object[] { configuration });
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(rootPath))
         {
-            Directory.Delete(rootPath, true);
+            DeleteDirectoryWithRetry(rootPath);
+        }
+    }
+
+    private static void DeleteDirectoryWithRetry(string path)
+    {
+        const int maxAttempts = 10;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, true);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 }
