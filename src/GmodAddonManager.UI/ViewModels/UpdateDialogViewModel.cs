@@ -3,7 +3,9 @@ using System.Threading.Tasks;
 using System.Reactive;
 using ReactiveUI;
 using System.Reflection;
+using Avalonia;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.UI;
 using GmodAddonManager.UI.Services;
 
 namespace GmodAddonManager.UI.ViewModels
@@ -22,14 +24,16 @@ namespace GmodAddonManager.UI.ViewModels
             this.updateInfo = updateInfo;
             
             UpdateCommand = ReactiveCommand.CreateFromTask(UpdateAsync);
-            RemindLaterCommand = ReactiveCommand.Create(() => { DialogResult = false; });
+            RemindLaterCommand = ReactiveCommand.Create(() => RequestClose(false));
             LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
         }
         
         public string CurrentVersion => L.Format(
             "UpdateDialog.CurrentVersionFormat",
-            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown");
-        public string NewVersion => L.Format("UpdateDialog.NewVersionFormat", updateInfo.Version);
+            UpdateService.NormalizeVersionLabel(GetCurrentVersion()));
+        public string NewVersion => L.Format(
+            "UpdateDialog.NewVersionFormat",
+            UpdateService.NormalizeVersionLabel(updateInfo.Version));
         public string ReleaseNotes => updateInfo.ReleaseNotes;
         
         public bool IsUpdating
@@ -48,6 +52,7 @@ namespace GmodAddonManager.UI.ViewModels
         
         public ReactiveCommand<Unit, Unit> UpdateCommand { get; }
         public ReactiveCommand<Unit, Unit> RemindLaterCommand { get; }
+        public event EventHandler<bool?>? CloseRequested;
         
         private async Task UpdateAsync()
         {
@@ -56,6 +61,11 @@ namespace GmodAddonManager.UI.ViewModels
             
             try
             {
+                if (Application.Current is App app)
+                {
+                    app.ReleaseApplicationLockForRestart();
+                }
+
                 await updateService.DownloadAndInstallUpdateAsync(updateInfo.DownloadUrl);
             }
             catch (Exception)
@@ -70,6 +80,20 @@ namespace GmodAddonManager.UI.ViewModels
             UpdateProgress = message;
             await Task.Delay(3000);
             DialogResult = false;
+        }
+
+        private void RequestClose(bool? result)
+        {
+            DialogResult = result == true;
+            CloseRequested?.Invoke(this, result);
+        }
+
+        private static string? GetCurrentVersion()
+        {
+            return Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion
+                ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString();
         }
 
         private void OnLocalizationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

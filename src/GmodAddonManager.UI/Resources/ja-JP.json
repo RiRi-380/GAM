@@ -682,7 +682,7 @@
   "UpdateDialog.CurrentVersionFormat": "現在のバージョン: {0}",
   "UpdateDialog.Header": "新しいバージョンがあります",
   "UpdateDialog.NewVersionFormat": "新しいバージョン: {0}",
-  "UpdateDialog.ProgressDownloading": "ダウンロード中...",
+  "UpdateDialog.ProgressDownloading": "ダウンロード中...完了後にGAMを閉じて更新し、再起動します。",
   "UpdateDialog.ReleaseNotesLabel": "リリースノート",
   "UpdateDialog.RemindLater": "後で通知",
   "UpdateDialog.Title": "更新",

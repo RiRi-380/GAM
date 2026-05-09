@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace GmodAddonManager.Core.Services
 {
@@ -130,7 +131,6 @@ namespace GmodAddonManager.Core.Services
                 return UpdateCheckResult.Error("No installer asset found in the latest release.");
             }
 
-            await SaveLastCheckTime();
             return UpdateCheckResult.UpdateAvailable(new UpdateInfo
             {
                 Version = release.TagName,
@@ -400,14 +400,53 @@ namespace GmodAddonManager.Core.Services
 
         private bool IsNewerVersion(string remoteVersion)
         {
-            var remote = remoteVersion.TrimStart('v', 'V');
-            var current = currentVersion.TrimStart('v', 'V');
-            remote = remote.Split(new[] { '-', '+' }, 2)[0];
-            current = current.Split(new[] { '-', '+' }, 2)[0];
+            var remote = NormalizeVersionNumber(remoteVersion);
+            var current = NormalizeVersionNumber(currentVersion);
 
             return Version.TryParse(remote, out var remoteVer) &&
                    Version.TryParse(current, out var currentVer) &&
                    remoteVer > currentVer;
+        }
+
+        public static string NormalizeVersionLabel(string? version)
+        {
+            var normalized = NormalizeVersionNumber(version);
+            return string.IsNullOrWhiteSpace(normalized)
+                ? "unknown"
+                : $"v{normalized}";
+        }
+
+        internal static string NormalizeVersionNumber(string? version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                return string.Empty;
+            }
+
+            var normalized = version.Trim().TrimStart('v', 'V');
+            normalized = normalized.Split(new[] { '-', '+' }, 2)[0].Trim();
+
+            if (!Version.TryParse(normalized, out var parsed))
+            {
+                return normalized;
+            }
+
+            var builder = new StringBuilder()
+                .Append(parsed.Major)
+                .Append('.')
+                .Append(parsed.Minor);
+
+            if (parsed.Build >= 0)
+            {
+                builder.Append('.').Append(parsed.Build);
+            }
+
+            if (parsed.Revision > 0)
+            {
+                builder.Append('.').Append(parsed.Revision);
+            }
+
+            return builder.ToString();
         }
 
         internal static string ResolveInstallerArguments(string downloadUrl)
@@ -443,6 +482,7 @@ namespace GmodAddonManager.Core.Services
         public async Task DownloadAndInstallUpdateAsync(string downloadUrl)
         {
             var tempPath = Path.Combine(Path.GetTempPath(), "GAM-Update-Setup.exe");
+            var installerArguments = ResolveInstallerArguments(downloadUrl);
 
             using (var response = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
@@ -451,16 +491,63 @@ namespace GmodAddonManager.Core.Services
                 await response.Content.CopyToAsync(fs);
             }
 
-            Process.Start(new ProcessStartInfo
+            var launcherPath = Path.Combine(
+                Path.GetTempPath(),
+                $"GAM-Update-Launcher-{Guid.NewGuid():N}.ps1");
+            await File.WriteAllTextAsync(
+                launcherPath,
+                BuildInstallerLauncherScript(Process.GetCurrentProcess().Id, tempPath, installerArguments),
+                Encoding.UTF8);
+
+            var launcherProcess = Process.Start(CreateInstallerLauncherStartInfo(launcherPath));
+            if (launcherProcess == null)
             {
-                FileName = tempPath,
-                Arguments = ResolveInstallerArguments(downloadUrl),
+                throw new InvalidOperationException("Failed to start the update installer launcher.");
+            }
+
+            Environment.Exit(0);
+        }
+
+        internal static ProcessStartInfo CreateInstallerLauncherStartInfo(string launcherPath)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
-            });
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(launcherPath);
+            return startInfo;
+        }
 
-            Environment.Exit(0);
+        internal static string BuildInstallerLauncherScript(
+            int currentProcessId,
+            string installerPath,
+            string installerArguments)
+        {
+            return string.Join(
+                Environment.NewLine,
+                "$ErrorActionPreference = 'SilentlyContinue'",
+                $"try {{ Wait-Process -Id {currentProcessId} -Timeout 60 }} catch {{ }}",
+                $"$installerPath = {ToPowerShellSingleQuotedString(installerPath)}",
+                $"$installerArguments = {ToPowerShellSingleQuotedString(installerArguments)}",
+                "if ([string]::IsNullOrWhiteSpace($installerArguments)) {",
+                "    Start-Process -FilePath $installerPath -Wait",
+                "} else {",
+                "    Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait",
+                "}",
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+                string.Empty);
+        }
+
+        private static string ToPowerShellSingleQuotedString(string value)
+        {
+            return $"'{(value ?? string.Empty).Replace("'", "''")}'";
         }
     }
 

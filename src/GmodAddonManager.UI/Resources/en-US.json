@@ -682,7 +682,7 @@
   "UpdateDialog.CurrentVersionFormat": "Current version: {0}",
   "UpdateDialog.Header": "A new version is available",
   "UpdateDialog.NewVersionFormat": "New version: {0}",
-  "UpdateDialog.ProgressDownloading": "Downloading update...",
+  "UpdateDialog.ProgressDownloading": "Downloading update... GAM will close and restart after installation.",
   "UpdateDialog.ReleaseNotesLabel": "Release notes",
   "UpdateDialog.RemindLater": "Remind me later",
   "UpdateDialog.Title": "Update",

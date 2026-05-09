@@ -304,7 +304,9 @@ public partial class SettingsDialog : Window
     {
         return Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion?.Split('-')[0] ?? "1.0.0";
+            .InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "1.0.0";
     }
 
 }
