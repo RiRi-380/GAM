@@ -37,7 +37,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private bool isNotesLoaded;
     private bool isFavorite;
     private Bitmap? thumbnailBitmap;
-    private HashSet<string>? excludedAddonIds;
+    private IReadOnlyDictionary<string, AddonState>? addonStateMarkers;
     private bool isFileSizeCalculated;
     private bool disposed;
 
@@ -179,16 +179,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void SetExcludedAddonIds(HashSet<string>? excludedIds)
+    public void SetAddonStateMarkers(IReadOnlyDictionary<string, AddonState>? markers)
     {
-        if (ReferenceEquals(excludedAddonIds, excludedIds))
+        if (ReferenceEquals(addonStateMarkers, markers))
         {
             return;
         }
 
-        excludedAddonIds = excludedIds;
+        addonStateMarkers = markers;
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(BorderColor));
+        this.RaisePropertyChanged(nameof(StateText));
     }
     
     // WorkshopAddonから情報を更新するメソッド
@@ -373,25 +374,15 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
-            if (currentAsset == null)
+            var state = GetDisplayAddonState();
+            if (state == null)
             {
                 return L.Get("Common.Unknown");
             }
 
-            if (!currentAsset.IsEnabled)
-            {
-                var inactive = L.Get("AddonState.Inactive");
-                return inactive == "AddonState.Inactive" ? "Inactive" : inactive;
-            }
-
-            if (currentAddonState == null)
-            {
-                return L.Get("Common.Unknown");
-            }
-
-            var stateKey = $"AddonState.{currentAddonState.Value}";
+            var stateKey = $"AddonState.{state.Value}";
             var localized = L.Get(stateKey);
-            return localized == stateKey ? currentAddonState.Value.ToString() : localized;
+            return localized == stateKey ? state.Value.ToString() : localized;
         }
     }
     public string IsGmaFileText => IsGmaFile ? L.Get("Common.Yes") : L.Get("Common.No");
@@ -529,15 +520,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 return "#4A90E2"; // アクセントカラー（青）
             }
             
-            // どこかで除外されているかチェック
-            if (IsExcludedAnywhere)
+            var state = GetDisplayAddonState();
+
+            if (state == AddonState.Excluded)
             {
                 return "#F44336"; // 赤
             }
             
-            // 無効なアセットは実効状態を作らないので、保存済みの子状態だけで
-            // オレンジ枠にしない。
-            if (currentAsset?.IsEnabled == true && currentAddonState == AddonState.Disabled)
+            if (state == AddonState.Disabled)
             {
                 return "#FF9800"; // オレンジ
             }
@@ -551,9 +541,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
-            if (excludedAddonIds != null)
+            if (addonStateMarkers != null)
             {
-                return excludedAddonIds.Contains(AddonId);
+                return addonStateMarkers.TryGetValue(AddonId, out var state)
+                    && state == AddonState.Excluded;
             }
 
             var config = addonManager.GetConfiguration();
@@ -574,6 +565,33 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             }
             return false;
         }
+    }
+
+    private AddonState? GetGlobalAddonStateMarker()
+    {
+        if (addonStateMarkers != null && addonStateMarkers.TryGetValue(AddonId, out var state))
+        {
+            return state;
+        }
+
+        return null;
+    }
+
+    private AddonState? GetDisplayAddonState()
+    {
+        var globalState = GetGlobalAddonStateMarker();
+
+        if (currentAddonState == AddonState.Excluded || globalState == AddonState.Excluded)
+        {
+            return AddonState.Excluded;
+        }
+
+        if (currentAddonState == AddonState.Disabled || globalState == AddonState.Disabled)
+        {
+            return AddonState.Disabled;
+        }
+
+        return currentAddonState ?? globalState;
     }
 
     public Task LoadDetailsBackgroundAsync()

@@ -59,8 +59,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private readonly System.Threading.SemaphoreSlim visibleLoadSemaphore = new System.Threading.SemaphoreSlim(3, 3);
     private readonly object visibleRangeLock = new object();
     private CancellationTokenSource? visibleRangeCts;
-    private HashSet<string>? cachedExcludedAddonIds;
-    private DateTime cachedExcludedAddonIdsUpdated = DateTime.MinValue;
+    private Dictionary<string, AddonState>? cachedAddonStateMarkers;
+    private DateTime cachedAddonStateMarkersUpdated = DateTime.MinValue;
     private bool disposed;
     private bool metadataSupplementUiSnapshotErrorLogged;
     private bool metadataSupplementCacheReadErrorLogged;
@@ -699,9 +699,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         public string? Type { get; set; }
     }
 
-    private HashSet<string> BuildExcludedAddonIds(Configuration config)
+    private Dictionary<string, AddonState> BuildAddonStateMarkers(Configuration config)
     {
-        var excluded = new HashSet<string>(StringComparer.Ordinal);
+        var markers = new Dictionary<string, AddonState>(StringComparer.Ordinal);
         var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
 
         foreach (var asset in config.Assets)
@@ -713,21 +713,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             if (asset.ContainsAllAddons())
             {
-                if (asset.DefaultAddonState == AddonState.Excluded)
+                foreach (var addonId in allAddonIds)
                 {
-                    foreach (var addonId in allAddonIds)
-                    {
-                        excluded.Add(addonId);
-                    }
-                    return excluded;
-                }
-
-                foreach (var kvp in asset.AddonStates)
-                {
-                    if (kvp.Value == AddonState.Excluded)
-                    {
-                        excluded.Add(kvp.Key);
-                    }
+                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
                 }
             }
             else
@@ -739,15 +727,30 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         continue;
                     }
 
-                    if (asset.GetAddonState(addonId) == AddonState.Excluded)
-                    {
-                        excluded.Add(addonId);
-                    }
+                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
                 }
             }
         }
 
-        return excluded;
+        return markers;
+    }
+
+    private static void AddStateMarker(
+        Dictionary<string, AddonState> markers,
+        string addonId,
+        AddonState state)
+    {
+        if (state != AddonState.Excluded && state != AddonState.Disabled)
+        {
+            return;
+        }
+
+        if (markers.TryGetValue(addonId, out var existing) && existing == AddonState.Excluded)
+        {
+            return;
+        }
+
+        markers[addonId] = state;
     }
 
     public ObservableCollection<AddonItemViewModel> AllAddons
@@ -1106,16 +1109,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             var query = AllAddons.AsEnumerable();
             var config = addonManager.GetConfiguration();
-            if (cachedExcludedAddonIds == null || config.LastUpdated != cachedExcludedAddonIdsUpdated)
+            if (cachedAddonStateMarkers == null || config.LastUpdated != cachedAddonStateMarkersUpdated)
             {
-                cachedExcludedAddonIds = BuildExcludedAddonIds(config);
-                cachedExcludedAddonIdsUpdated = config.LastUpdated;
+                cachedAddonStateMarkers = BuildAddonStateMarkers(config);
+                cachedAddonStateMarkersUpdated = config.LastUpdated;
             }
 
-            var excludedAddonIds = cachedExcludedAddonIds;
+            var addonStateMarkers = cachedAddonStateMarkers;
             foreach (var addon in AllAddons)
             {
-                addon.SetExcludedAddonIds(excludedAddonIds);
+                addon.SetAddonStateMarkers(addonStateMarkers);
             }
 
             // Normal/Cacheフィルタ
