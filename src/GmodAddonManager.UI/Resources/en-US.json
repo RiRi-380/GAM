@@ -64,7 +64,7 @@
   "AddonGrid.Header": "Addons",
   "AddonGrid.BadgeLocal": "Local",
   "AddonGrid.BadgeOffAsset": "OFF ASSET",
-  "AddonGrid.OffAssetTooltip": "Also in inactive assets: {0}",
+  "AddonGrid.OffAssetTooltip": "Off in other assets: {0}",
   "AddonGrid.NoAddonsFound": "No addons found",
   "AddonGrid.SaveTagHeader": "Save Tags",
   "AddonGrid.SelectionMode": "Selection Mode",

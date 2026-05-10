@@ -192,7 +192,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(BorderColor));
         this.RaisePropertyChanged(nameof(StateText));
         this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(EffectiveAddonState));
         this.RaisePropertyChanged(nameof(IsDisplayOff));
+        this.RaisePropertyChanged(nameof(IsEffectivelyOff));
     }
 
     public void SetInactiveAssetMembershipMarkers(IReadOnlyDictionary<string, IReadOnlyList<string>>? markers)
@@ -463,7 +465,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
             this.RaisePropertyChanged(nameof(StateText));
             this.RaisePropertyChanged(nameof(DisplayAddonState));
+            this.RaisePropertyChanged(nameof(EffectiveAddonState));
             this.RaisePropertyChanged(nameof(IsDisplayOff));
+            this.RaisePropertyChanged(nameof(IsEffectivelyOff));
             return;
         }
         
@@ -475,7 +479,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(StateText));
         this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(EffectiveAddonState));
         this.RaisePropertyChanged(nameof(IsDisplayOff));
+        this.RaisePropertyChanged(nameof(IsEffectivelyOff));
     }
 
     private void OnLocalizationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -623,6 +629,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     private AddonState? GetDisplayAddonState()
     {
+        return currentAddonState ?? GetGlobalAddonStateMarker();
+    }
+
+    private AddonState? GetEffectiveAddonState()
+    {
         var globalState = GetGlobalAddonStateMarker();
 
         if (currentAddonState == AddonState.Excluded || globalState == AddonState.Excluded)
@@ -640,11 +651,22 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     public AddonState? DisplayAddonState => GetDisplayAddonState();
 
+    public AddonState? EffectiveAddonState => GetEffectiveAddonState();
+
     public bool IsDisplayOff
     {
         get
         {
             var state = DisplayAddonState;
+            return state == AddonState.Disabled || state == AddonState.Excluded;
+        }
+    }
+
+    public bool IsEffectivelyOff
+    {
+        get
+        {
+            var state = EffectiveAddonState;
             return state == AddonState.Disabled || state == AddonState.Excluded;
         }
     }
