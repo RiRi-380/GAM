@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using GmodAddonManager.Core.Services;
-using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 using GmodAddonManager.UI.Views;
@@ -12,7 +11,6 @@ using System.IO;
 using System;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Utils;
-using Newtonsoft.Json;
 
 namespace GmodAddonManager.UI;
 
@@ -137,7 +135,7 @@ public sealed partial class App : Application, IDisposable
                 startupDesktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             }
 
-            var startupPathRecovery = await RunStartupPathRecoveryAsync(settings, appDataPath);
+            var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
             
             applicationLock = new ApplicationLock(appDataPath);
             if (!applicationLock.TryAcquireLock())
@@ -336,7 +334,7 @@ public sealed partial class App : Application, IDisposable
 
             if (startupPathRecovery.ApplyRepairs)
             {
-                await ApplyStartupPathRecoveryRepairsAsync(
+                await StartupPathRecoveryCoordinator.ApplyRepairsAsync(
                     addonManagerLocal,
                     pendingChangeManagerLocal,
                     processWatcherLocal,
@@ -500,157 +498,7 @@ public sealed partial class App : Application, IDisposable
         }
     }
 
-    private static async Task<StartupPathRecoveryState> RunStartupPathRecoveryAsync(AppSettings settings, string appDataPath)
-    {
-        var configuration = TryLoadExistingConfiguration(appDataPath);
-        var snapshot = DetectStartupPathSnapshot(settings);
-        var pathSignature = BuildPathRecoverySignature(snapshot);
-        var promptForUnconfirmedPaths =
-            !string.IsNullOrWhiteSpace(pathSignature) &&
-            !string.Equals(settings.DismissedPathRecoverySignature, pathSignature, StringComparison.OrdinalIgnoreCase);
-        var decision = StartupPathRecoveryEvaluator.Evaluate(
-            configuration,
-            snapshot,
-            settings.CustomGmodInstallPath,
-            settings.CustomWorkshopPath,
-            promptForUnconfirmedPaths,
-            settings.ConfirmedGmodInstallPath,
-            settings.ConfirmedWorkshopPath);
-
-        if (!decision.ShouldPrompt)
-        {
-            return new StartupPathRecoveryState();
-        }
-
-        var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
-        if (!result.Accepted)
-        {
-            if (!string.IsNullOrWhiteSpace(pathSignature))
-            {
-                settings.DismissedPathRecoverySignature = pathSignature;
-                settings.Save();
-            }
-
-            return new StartupPathRecoveryState();
-        }
-
-        settings.CustomGmodInstallPath = result.GmodInstallPath;
-        settings.CustomWorkshopPath = result.WorkshopRootPath;
-        settings.ConfirmedGmodInstallPath = result.GmodInstallPath;
-        settings.ConfirmedWorkshopPath = result.WorkshopRootPath;
-        settings.DismissedPathRecoverySignature = null;
-        settings.Save();
-        return new StartupPathRecoveryState { ApplyRepairs = true };
-    }
-
-    private static string? BuildPathRecoverySignature(PathSnapshot snapshot)
-    {
-        var gmod = snapshot.GmodInstall?.InstallPath;
-        var workshop = snapshot.ActiveWorkshopRoot?.RootPath;
-        if (string.IsNullOrWhiteSpace(gmod) || string.IsNullOrWhiteSpace(workshop))
-        {
-            return null;
-        }
-
-        return $"{NormalizePathForSignature(gmod)}|{NormalizePathForSignature(workshop)}";
-    }
-
-    private static string NormalizePathForSignature(string path)
-    {
-        try
-        {
-            return Path.GetFullPath(path)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .ToUpperInvariant();
-        }
-        catch
-        {
-            return path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant();
-        }
-    }
-
-    private static PathSnapshot DetectStartupPathSnapshot(AppSettings settings)
-    {
-        if (PathOverrideResolver.TryCreateSnapshot(
-                settings.CustomGmodInstallPath,
-                settings.CustomWorkshopPath,
-                out var overrideSnapshot,
-                out _))
-        {
-            return overrideSnapshot;
-        }
-
-        try
-        {
-            return new SteamPathDetector().DetectPathSnapshot();
-        }
-        catch (Exception ex)
-        {
-            return new PathSnapshot
-            {
-                HealthIssues = new[] { $"Startup path detection failed: {ex.Message}" }
-            };
-        }
-    }
-
-    private static Configuration? TryLoadExistingConfiguration(string appDataPath)
-    {
-        try
-        {
-            var configPath = Path.Combine(appDataPath, "config.json");
-            if (!File.Exists(configPath))
-            {
-                return null;
-            }
-
-            var json = File.ReadAllText(configPath);
-            return JsonConvert.DeserializeObject<Configuration>(json);
-        }
-        catch (Exception ex)
-        {
-            SafeFileLogger.TryLogException("App.TryLoadExistingConfiguration", ex);
-            return null;
-        }
-    }
-
-    private static async Task ApplyStartupPathRecoveryRepairsAsync(
-        AddonManager manager,
-        PendingChangeManager pendingChangeManager,
-        GmodProcessWatcher processWatcher,
-        IErrorHandler errorHandler)
-    {
-        try
-        {
-            var metadataResult = await manager.RepairStalePathMetadataAsync();
-            var addonNoMountResult = await manager.MigrateAddonNoMountEntriesAsync();
-            var stateApplyResult = "applied";
-            if (processWatcher.IsGmodRunning)
-            {
-                pendingChangeManager.QueueApplyStates();
-                stateApplyResult = "queued";
-            }
-            else
-            {
-                await manager.UpdateAddonStatesAsync();
-                await manager.SaveConfigurationAsync();
-            }
-
-            errorHandler.HandleInfo(
-                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}, stateApply={stateApplyResult}",
-                "StartupPathRecovery");
-        }
-        catch (Exception ex)
-        {
-            errorHandler.HandleWarning($"Startup path recovery repair failed: {ex.Message}", "StartupPathRecovery");
-        }
-    }
-
-    private sealed class StartupPathRecoveryState
-    {
-        public bool ApplyRepairs { get; set; }
-    }
-
-        private void Cleanup()
+    private void Cleanup()
     {
         experimentIpcServer?.Dispose();
         processWatcher?.Dispose();

@@ -25,6 +25,7 @@ public partial class SettingsDialog : Window
     public event EventHandler? RestoreOriginalRequested;
     public event EventHandler? ManualMigrationRequested;
     public event EventHandler? PathHealthRequested;
+    public event EventHandler? PathRecoveryRequested;
     
     public SettingsDialog()
     {
@@ -45,6 +46,7 @@ public partial class SettingsDialog : Window
             "GmodAddonManager", "logs"
         );
         LogLocationText.Text = logPath;
+        VersionText.Text = L.Format("Settings.CurrentVersion", GetCurrentVersion());
         
         // 言語設定を反映
         LanguageComboBox.SelectedIndex = currentSettings.Language == "ja-JP" ? 0 : 1;
@@ -260,6 +262,12 @@ public partial class SettingsDialog : Window
     {
         Close();
         PathHealthRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnPathRecovery(object? sender, RoutedEventArgs e)
+    {
+        Close();
+        PathRecoveryRequested?.Invoke(this, EventArgs.Empty);
     }
     
     private async void OnCheckForUpdate(object? sender, RoutedEventArgs e)
