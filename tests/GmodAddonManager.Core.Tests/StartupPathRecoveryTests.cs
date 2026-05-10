@@ -74,6 +74,59 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
+    public void StartupPathRecoveryEvaluator_PromptsWhenPreviousPathDiffersEvenIfOldPathStillExists()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var config = new Configuration();
+        PathHealthService.UpdatePathState(
+            config,
+            oldEnv.CreateSnapshot(),
+            Path.Combine(oldEnv.WorkshopRootPath, ".addon-manager"),
+            Path.Combine(oldEnv.WorkshopRootPath, ".addon-manager", "addons"));
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(config, currentEnv.CreateSnapshot());
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.True(decision.HasDetectedCandidate);
+        Assert.Equal(oldEnv.GmodInstallPath, decision.PreviousGmodInstallPath);
+        Assert.Equal(oldEnv.WorkshopRootPath, decision.PreviousWorkshopRootPath);
+        Assert.Equal(currentEnv.GmodInstallPath, decision.DetectedGmodInstallPath);
+        Assert.Equal(currentEnv.WorkshopRootPath, decision.DetectedWorkshopRootPath);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_PromptsForLegacyConfigWithStaleMetadataPath()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var config = new Configuration();
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(oldEnv.WorkshopRootPath, "123"));
+        oldEnv.DeleteLayout();
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(config, currentEnv.CreateSnapshot());
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.True(decision.HasDetectedCandidate);
+        Assert.Null(decision.PreviousGmodInstallPath);
+        Assert.Equal(oldEnv.WorkshopRootPath, decision.PreviousWorkshopRootPath);
+        Assert.Equal(currentEnv.GmodInstallPath, decision.DetectedGmodInstallPath);
+        Assert.Equal(currentEnv.WorkshopRootPath, decision.DetectedWorkshopRootPath);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_DoesNotPromptForLegacyConfigAlreadyOnDetectedWorkshopRoot()
+    {
+        using var env = new TestSteamLayout();
+        var config = new Configuration();
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(env.WorkshopRootPath, "123"));
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(config, env.CreateSnapshot());
+
+        Assert.False(decision.ShouldPrompt);
+    }
+
+    [Fact]
     public void StartupPathRecoveryEvaluator_DoesNotPromptWhenPreviousPathStillMatches()
     {
         using var env = new TestSteamLayout();
@@ -131,6 +184,55 @@ public sealed class StartupPathRecoveryTests
 
             Assert.Equal(1, repairResult.ChangedCount);
             Assert.Single(manager.GetConfiguration().Assets, a => a.Name == "Recovered Asset");
+            Assert.Equal(Path.Combine(currentEnv.WorkshopRootPath, "123"), manager.GetConfiguration().AddonMetadata["123"].FolderPath);
+            var noMountText = File.ReadAllText(Path.Combine(currentEnv.GmodInstallPath, "garrysmod", "cfg", "addonnomount.txt"));
+            Assert.Contains("123", noMountText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(appDataPath))
+            {
+                Directory.Delete(appDataPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StartupRecoveryFlow_RepairsLegacyConfigWithoutPathState()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var appDataPath = Path.Combine(Path.GetTempPath(), "gam-startup-recovery-legacy-appdata-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(appDataPath);
+        try
+        {
+            var config = new Configuration();
+            var asset = new Asset("Legacy Asset") { Enabled = true };
+            asset.AddAddon("123", AddonState.Excluded);
+            config.Assets.Add(asset);
+            config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(oldEnv.WorkshopRootPath, "123"));
+            File.WriteAllText(
+                Path.Combine(appDataPath, "config.json"),
+                JsonConvert.SerializeObject(config, Formatting.Indented));
+            oldEnv.DeleteLayout();
+
+            using var manager = new AddonManager(new AddonManagerOptions
+            {
+                CustomAppDataPath = appDataPath,
+                CustomGmodInstallPath = currentEnv.GmodInstallPath,
+                CustomWorkshopPath = currentEnv.WorkshopRootPath,
+                DisableMode = DisableMode.Soft,
+                DisableCacheScan = true,
+                ScanCacheTtl = TimeSpan.Zero
+            });
+            manager.StateMatchTimeout = TimeSpan.Zero;
+            await manager.InitializeAsync();
+
+            var repairResult = await manager.RepairStalePathMetadataAsync();
+            await manager.UpdateAddonStatesAsync();
+
+            Assert.Equal(1, repairResult.ChangedCount);
+            Assert.Single(manager.GetConfiguration().Assets, a => a.Name == "Legacy Asset");
             Assert.Equal(Path.Combine(currentEnv.WorkshopRootPath, "123"), manager.GetConfiguration().AddonMetadata["123"].FolderPath);
             var noMountText = File.ReadAllText(Path.Combine(currentEnv.GmodInstallPath, "garrysmod", "cfg", "addonnomount.txt"));
             Assert.Contains("123", noMountText, StringComparison.Ordinal);
