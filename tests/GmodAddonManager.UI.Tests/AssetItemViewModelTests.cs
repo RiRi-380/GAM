@@ -31,7 +31,28 @@ public sealed class AssetItemViewModelTests : IDisposable
     {
         if (Directory.Exists(rootPath))
         {
-            Directory.Delete(rootPath, recursive: true);
+            DeleteDirectoryWithRetry(rootPath);
+        }
+    }
+
+    private static void DeleteDirectoryWithRetry(string path)
+    {
+        const int maxAttempts = 10;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
