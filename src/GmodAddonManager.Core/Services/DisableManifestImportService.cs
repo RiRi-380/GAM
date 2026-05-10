@@ -49,7 +49,7 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
             Mode = DisableManifestMode.New,
             AssetId = string.Empty,
             AssetName = ResolveAssetName(null, manifest, null),
-            CreatesDisabledAsset = true
+            CreatesDisabledAsset = false
         };
     }
 
@@ -73,7 +73,7 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
         var asset = new Asset(assetName)
         {
             Id = CreateNewAssetId(config),
-            Enabled = false,
+            Enabled = true,
             IsSystem = false,
             DefaultAddonState = AddonState.Excluded
         };
@@ -89,6 +89,7 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
         }
 
         await addonManager.SaveConfigurationImmediatelyAsync();
+        await addonManager.UpdateAddonStatesAsync();
 
         return new DisableManifestImportResult
         {
@@ -97,12 +98,12 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
             InvalidCount = manifest.InvalidLines.Count,
             AlreadyExcludedCount = 0,
             NewlyExcludedCount = manifest.AddonIds.Count,
-            AppliedImmediately = false,
+            AppliedImmediately = true,
             QueuedPendingApply = false,
             AssetId = asset.Id,
             AssetName = asset.Name,
             Mode = DisableManifestMode.New,
-            CreatedDisabledAsset = true
+            CreatedDisabledAsset = false
         };
     }
 

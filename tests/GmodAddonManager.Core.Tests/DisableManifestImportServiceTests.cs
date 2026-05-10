@@ -6,7 +6,7 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class DisableManifestImportServiceTests
 {
     [Fact]
-    public async Task ImportAsync_ValidManifest_CreatesDisabledAssetWithExcludedAddons()
+    public async Task ImportAsync_ValidManifest_CreatesActiveExcludedAssetAndWritesNoMountFile()
     {
         using var env = new TestEnvironment();
         var manifestPath = env.WriteManifest(
@@ -25,7 +25,7 @@ public sealed class DisableManifestImportServiceTests
         var result = await service.ImportAsync(manifestPath, new DisableManifestImportOptions());
 
         var asset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
-        Assert.False(asset.Enabled);
+        Assert.True(asset.Enabled);
         Assert.False(asset.IsSystem);
         Assert.Equal(AddonState.Excluded, asset.DefaultAddonState);
         Assert.Equal("Weapon Cleanup", asset.Name);
@@ -34,14 +34,17 @@ public sealed class DisableManifestImportServiceTests
         Assert.True(manager.GetConfiguration().AddonMetadata.ContainsKey("104479467"));
         Assert.True(manager.GetConfiguration().AddonMetadata.ContainsKey("104483020"));
         Assert.Equal("Workshop-104479467", manager.GetConfiguration().AddonMetadata["104479467"].Title);
-        Assert.False(File.Exists(env.NoMountPath));
-        Assert.False(result.AppliedImmediately);
+        Assert.True(File.Exists(env.NoMountPath));
+        var noMountText = File.ReadAllText(env.NoMountPath);
+        Assert.Contains("104479467", noMountText, StringComparison.Ordinal);
+        Assert.Contains("104483020", noMountText, StringComparison.Ordinal);
+        Assert.True(result.AppliedImmediately);
         Assert.False(result.QueuedPendingApply);
-        Assert.True(result.CreatedDisabledAsset);
+        Assert.False(result.CreatedDisabledAsset);
     }
 
     [Fact]
-    public async Task ImportAsync_ExistingAssetName_CreatesUniqueDisabledAsset()
+    public async Task ImportAsync_ExistingAssetName_CreatesUniqueActiveAsset()
     {
         using var env = new TestEnvironment();
         var manifestPath = env.WriteManifest(
@@ -61,13 +64,13 @@ public sealed class DisableManifestImportServiceTests
 
         Assert.Equal("Cleanup Candidates (2)", result.AssetName);
         var importedAsset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
-        Assert.False(importedAsset.Enabled);
+        Assert.True(importedAsset.Enabled);
     }
 
     [Theory]
     [InlineData(DisableManifestMode.Merge)]
     [InlineData(DisableManifestMode.Replace)]
-    public async Task ImportAsync_MergeOrReplaceOptions_StillCreateNewDisabledAsset(DisableManifestMode mode)
+    public async Task ImportAsync_MergeOrReplaceOptions_StillCreateNewActiveAsset(DisableManifestMode mode)
     {
         using var env = new TestEnvironment();
         var manifestPath = env.WriteManifest(
@@ -94,7 +97,7 @@ public sealed class DisableManifestImportServiceTests
 
         Assert.NotEqual(existingAsset.Id, result.AssetId);
         Assert.Contains(manager.GetConfiguration().Assets, a => a.Id == existingAsset.Id);
-        Assert.Contains(manager.GetConfiguration().Assets, a => a.Id == result.AssetId && !a.Enabled);
+        Assert.Contains(manager.GetConfiguration().Assets, a => a.Id == result.AssetId && a.Enabled);
     }
 
     [Fact]
@@ -204,7 +207,7 @@ public sealed class DisableManifestImportServiceTests
         Assert.Equal(DisableManifestMode.New, preview.Mode);
         Assert.Equal("Cleanup Candidates", preview.AssetName);
         Assert.True(preview.IsSoftMode);
-        Assert.True(preview.CreatesDisabledAsset);
+        Assert.False(preview.CreatesDisabledAsset);
         Assert.False(preview.WillRequirePendingApply);
     }
 
