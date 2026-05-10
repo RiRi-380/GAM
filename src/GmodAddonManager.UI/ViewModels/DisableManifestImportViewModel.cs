@@ -135,7 +135,7 @@ public sealed class DisableManifestImportViewModel : ViewModelBase
         ? L.Get("DisableManifest.SoftMode")
         : L.Get("DisableManifest.SoftModeOnly");
 
-    public string CanApplyText => L.Get("DisableManifest.CreatedOff");
+    public string CanApplyText => L.Get("DisableManifest.CreateExcludedAsset");
 
     public bool CanApply => HasPreview && IsSoftMode && ValidCount > 0 && !IsBusy && !HasError;
 
