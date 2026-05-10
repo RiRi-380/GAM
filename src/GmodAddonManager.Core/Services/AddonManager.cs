@@ -45,6 +45,7 @@ namespace GmodAddonManager.Core.Services
         private readonly SteamPathDetector steamPathDetector;
         private readonly WorkshopInstallIndex workshopInstallIndex;
         private readonly WorkshopIconResolver workshopIconResolver;
+        private readonly PathSnapshot? pathSnapshot;
         private readonly SteamWorkshopService steamWorkshopService;
         private readonly UndoManager undoManager;
         private readonly IErrorHandler errorHandler;
@@ -177,16 +178,22 @@ namespace GmodAddonManager.Core.Services
             modeStrategy = DisableMode == DisableMode.Hard
                 ? new HardAddonModeStrategy()
                 : new SoftAddonModeStrategy();
-            
-            if (string.IsNullOrEmpty(options.CustomWorkshopPath))
+
+            try
             {
-                workshopPath = steamPathDetector.DetectWorkshopPath();
-                // Detected workshop path
+                pathSnapshot = steamPathDetector.DetectPathSnapshot();
+                LogPathSnapshot(pathSnapshot, "Constructor");
             }
-            else
+            catch (Exception ex)
             {
-                workshopPath = options.CustomWorkshopPath;
+                errorHandler.HandleWarning($"Failed to resolve Steam/GMod path snapshot: {ex.Message}", "Constructor");
             }
+
+            var customWorkshopPath = options.CustomWorkshopPath;
+            var hasCustomWorkshopPath = !string.IsNullOrEmpty(customWorkshopPath);
+            workshopPath = hasCustomWorkshopPath
+                ? customWorkshopPath!
+                : pathSnapshot?.ActiveWorkshopRoot?.RootPath ?? steamPathDetector.DetectWorkshopPath();
 
             if (DisableMode == DisableMode.Soft)
             {
@@ -212,7 +219,9 @@ namespace GmodAddonManager.Core.Services
                     ? null
                     : !string.IsNullOrWhiteSpace(options.CustomGmodCachePath)
                         ? options.CustomGmodCachePath
-                        : steamPathDetector.DetectGmodCachePath();
+                        : !hasCustomWorkshopPath
+                            ? pathSnapshot?.GmodCacheWorkshopPath ?? steamPathDetector.DetectGmodCachePath()
+                            : steamPathDetector.DetectGmodCachePath();
                 // エラーが発生してもnullとして続行
             }
             catch (Exception)
@@ -243,7 +252,17 @@ namespace GmodAddonManager.Core.Services
             // Detect Gmod root path for settings management (addonnomount.txt)
             try
             {
-                var candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+                var candidate = hasCustomWorkshopPath
+                    ? null
+                    : pathSnapshot?.GmodInstall?.InstallPath;
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+                    errorHandler.HandleWarning(
+                        "Garry's Mod appmanifest path was not resolved; falling back to workshop-relative path inference.",
+                        "Constructor");
+                }
+
                 if (Directory.Exists(candidate))
                 {
                     gmodRootPath = candidate;
@@ -281,6 +300,21 @@ namespace GmodAddonManager.Core.Services
                     return !string.IsNullOrEmpty(name) && !name.StartsWith(".", StringComparison.Ordinal);
                 })
                 .ToList();
+        }
+
+        private void LogPathSnapshot(PathSnapshot snapshot, string operationName)
+        {
+            errorHandler.HandleInfo(
+                $"Path snapshot: steamRoot={snapshot.SteamRootPath ?? "<none>"}, " +
+                $"gmod={snapshot.GmodInstall?.InstallPath ?? "<none>"} ({snapshot.GmodInstall?.Confidence.ToString() ?? "None"}), " +
+                $"workshop={snapshot.ActiveWorkshopRoot?.RootPath ?? "<none>"} ({snapshot.ActiveWorkshopRoot?.Confidence.ToString() ?? "None"}), " +
+                $"cache={snapshot.GmodCacheWorkshopPath ?? "<none>"}",
+                operationName);
+
+            foreach (var issue in snapshot.HealthIssues)
+            {
+                errorHandler.HandleWarning($"Path snapshot issue: {issue}", operationName);
+            }
         }
 
         private List<string> GetWorkshopDirectoriesOrEmpty(string searchPattern, string operationName)
@@ -3044,28 +3078,20 @@ namespace GmodAddonManager.Core.Services
 
         private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
         {
-            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            var result = AddonPayloadValidator.Validate(directoryPath);
+            if (result.IsValid)
             {
-                return false;
-            }
-
-            try
-            {
-                return Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories)
-                    .Any(filePath => !IsIgnoredAddonPresenceMarker(filePath));
-            }
-            catch (Exception ex)
-            {
-                errorHandler.HandleWarning(
-                    $"Failed to inspect addon directory payload at {directoryPath}. Treating directory as present. {ex.Message}",
-                    operationName);
                 return true;
             }
-        }
 
-        private static bool IsIgnoredAddonPresenceMarker(string filePath)
-        {
-            return string.Equals(Path.GetFileName(filePath), ".gam_disabled", StringComparison.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(directoryPath) && Directory.Exists(directoryPath))
+            {
+                errorHandler.HandleInfo(
+                    $"Skipping invalid addon payload at {directoryPath}: {string.Join("; ", result.Reasons)}",
+                    operationName);
+            }
+
+            return false;
         }
 
         private void ValidatePath(string? path, string paramName)
@@ -9082,7 +9108,7 @@ namespace GmodAddonManager.Core.Services
                 
             // Check cache directory for GMA file
             string cacheGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
-            if (File.Exists(cacheGmaPath))
+            if (LooksLikeGmaFile(cacheGmaPath))
                 return true;
                 
             // Check cache directory for .cache file (Garry's Mod sometimes uses .cache extension)
@@ -9094,18 +9120,18 @@ namespace GmodAddonManager.Core.Services
             if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
             {
                 string managedGmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
-                if (File.Exists(managedGmaPath))
+                if (LooksLikeGmaFile(managedGmaPath))
                     return true;
             }
 
             // Check workshop manager directory for GMA file
             string managedWorkshopGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
-            if (File.Exists(managedWorkshopGmaPath))
+            if (LooksLikeGmaFile(managedWorkshopGmaPath))
                 return true;
             
             // Legacy managed GMA location
             string legacyManagedWorkshopGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
-            if (File.Exists(legacyManagedWorkshopGmaPath))
+            if (LooksLikeGmaFile(legacyManagedWorkshopGmaPath))
                 return true;
             
             // Check workshop directory for GMA file structure
@@ -9113,7 +9139,7 @@ namespace GmodAddonManager.Core.Services
             if (Directory.Exists(workshopAddonPath))
             {
                 string workshopGmaPath = Path.Combine(workshopAddonPath, $"{addonId}.gma");
-                if (File.Exists(workshopGmaPath))
+                if (LooksLikeGmaFile(workshopGmaPath))
                     return true;
             }
             

@@ -115,7 +115,7 @@ public sealed class AddonManagerEmptyDirectoryTests
         public string WorkshopPath { get; }
         public string AppDataPath { get; }
         public string AddonDirectoryPath => Path.Combine(WorkshopPath, AddonId);
-        public string PayloadPath => Path.Combine(AddonDirectoryPath, "addon.txt");
+        public string PayloadPath => Path.Combine(AddonDirectoryPath, "lua", "autorun.lua");
 
         public AddonManager CreateManager(IReadOnlyList<string>? workshopCacheFilePaths = null)
         {
@@ -132,7 +132,7 @@ public sealed class AddonManagerEmptyDirectoryTests
 
         public void WriteAddonPayload()
         {
-            Directory.CreateDirectory(AddonDirectoryPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(PayloadPath)!);
             File.WriteAllText(PayloadPath, "payload");
         }
 
