@@ -97,7 +97,7 @@
                             </StackPanel>
                             <StackPanel Grid.Row="1" Grid.Column="2" Spacing="2" Margin="18,10,0,0">
                                 <TextBlock Text="{loc:Localize DisableManifest.InitialState}" Opacity="0.66"/>
-                                <TextBlock Text="{loc:Localize DisableManifest.Off}" FontSize="16"/>
+                                <TextBlock Text="{loc:Localize AssetList.Excluded}" FontSize="16"/>
                             </StackPanel>
                         </Grid>
 
