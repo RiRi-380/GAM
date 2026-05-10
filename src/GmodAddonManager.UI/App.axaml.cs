@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using GmodAddonManager.Core.Services;
@@ -66,6 +67,7 @@ public sealed partial class App : Application, IDisposable
 #endif
 
         AppSettings? settings = null;
+        ShutdownMode? originalShutdownMode = null;
         
         try
         {
@@ -128,6 +130,12 @@ public sealed partial class App : Application, IDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GmodAddonManager"
             );
+
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime startupDesktop)
+            {
+                originalShutdownMode = startupDesktop.ShutdownMode;
+                startupDesktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            }
 
             var startupPathRecovery = await RunStartupPathRecoveryAsync(settings, appDataPath);
             
@@ -409,6 +417,10 @@ public sealed partial class App : Application, IDisposable
                     
                     // 繧ｦ繧｣繝ｳ繝峨え繧呈・遉ｺ逧・↓陦ｨ遉ｺ
                     desktop.MainWindow.Show();
+                    if (originalShutdownMode.HasValue)
+                    {
+                        desktop.ShutdownMode = originalShutdownMode.Value;
+                    }
 #if DEBUG
                     File.AppendAllText("app_startup.log", $"MainWindow.Show() called at: {DateTime.Now}\n");
 #endif
@@ -522,17 +534,8 @@ public sealed partial class App : Application, IDisposable
             return new StartupPathRecoveryState();
         }
 
-        if (result.ManualSelection)
-        {
-            settings.CustomGmodInstallPath = result.GmodInstallPath;
-            settings.CustomWorkshopPath = result.WorkshopRootPath;
-        }
-        else
-        {
-            settings.CustomGmodInstallPath = null;
-            settings.CustomWorkshopPath = null;
-        }
-
+        settings.CustomGmodInstallPath = result.GmodInstallPath;
+        settings.CustomWorkshopPath = result.WorkshopRootPath;
         settings.ConfirmedGmodInstallPath = result.GmodInstallPath;
         settings.ConfirmedWorkshopPath = result.WorkshopRootPath;
         settings.DismissedPathRecoverySignature = null;
