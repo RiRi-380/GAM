@@ -220,10 +220,6 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(VersionDisplay));
 
             this.RaisePropertyChanged(nameof(ShareButtonText));
-            this.RaisePropertyChanged(nameof(AssetActiveLabel));
-            this.RaisePropertyChanged(nameof(AssetActiveTooltip));
-            this.RaisePropertyChanged(nameof(DisableManifestAssetStateText));
-
         }
 
     }
@@ -363,14 +359,13 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public bool IsDisableManifestAsset =>
         Id == DisableManifestImportServiceConstants.AssetId ||
         Id.StartsWith(DisableManifestImportServiceConstants.NewAssetIdPrefix, StringComparison.Ordinal);
-    public bool CanEditAddonDefaultState => !IsDisableManifestAsset;
+    public bool CanEditAddonDefaultState => true;
     public string AssetActiveLabel => IsEnabled
         ? L.Get("AssetList.AssetActiveOn")
         : L.Get("AssetList.AssetActiveOff");
     public string AssetActiveTooltip => IsEnabled
         ? L.Get("AssetList.AssetActiveOnTooltip")
         : L.Get("AssetList.AssetActiveOffTooltip");
-    public string DisableManifestAssetStateText => L.Get("AssetList.DisableManifestAssetState");
 
     public ReactiveCommand<Unit, Unit> ToggleEnabledCommand { get; }
 
@@ -1722,7 +1717,6 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(AssetStateColor));
         this.RaisePropertyChanged(nameof(AssetActiveLabel));
         this.RaisePropertyChanged(nameof(AssetActiveTooltip));
-        this.RaisePropertyChanged(nameof(DisableManifestAssetStateText));
 
 
 
