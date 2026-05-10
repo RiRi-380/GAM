@@ -182,10 +182,6 @@ public sealed partial class App : Application, IDisposable
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
                 await addonManager.InitializeAsync();
-                if (startupPathRecovery.ApplyRepairs)
-                {
-                    await ApplyStartupPathRecoveryRepairsAsync(addonManager, errorHandler);
-                }
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
@@ -329,6 +325,15 @@ public sealed partial class App : Application, IDisposable
             var addonManagerLocal = addonManager;
             var processWatcherLocal = processWatcher;
             var pendingChangeManagerLocal = pendingChangeManager;
+
+            if (startupPathRecovery.ApplyRepairs)
+            {
+                await ApplyStartupPathRecoveryRepairsAsync(
+                    addonManagerLocal,
+                    pendingChangeManagerLocal,
+                    processWatcherLocal,
+                    errorHandler);
+            }
 
             try
             {
@@ -563,14 +568,30 @@ public sealed partial class App : Application, IDisposable
         }
     }
 
-    private static async Task ApplyStartupPathRecoveryRepairsAsync(AddonManager manager, IErrorHandler errorHandler)
+    private static async Task ApplyStartupPathRecoveryRepairsAsync(
+        AddonManager manager,
+        PendingChangeManager pendingChangeManager,
+        GmodProcessWatcher processWatcher,
+        IErrorHandler errorHandler)
     {
         try
         {
             var metadataResult = await manager.RepairStalePathMetadataAsync();
             var addonNoMountResult = await manager.MigrateAddonNoMountEntriesAsync();
+            var stateApplyResult = "applied";
+            if (processWatcher.IsGmodRunning)
+            {
+                pendingChangeManager.QueueApplyStates();
+                stateApplyResult = "queued";
+            }
+            else
+            {
+                await manager.UpdateAddonStatesAsync();
+                await manager.SaveConfigurationAsync();
+            }
+
             errorHandler.HandleInfo(
-                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}",
+                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}, stateApply={stateApplyResult}",
                 "StartupPathRecovery");
         }
         catch (Exception ex)
