@@ -4,6 +4,8 @@ using ReactiveUI;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -1127,11 +1129,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 _ = RunSettingsActionSafeAsync(MigrateAddonsAsync, "ManualMigrationRequested");
             EventHandler pathHealthRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(OpenPathHealthAsync, "PathHealthRequested");
+            EventHandler pathRecoveryRequestedHandler = (_, _) =>
+                _ = RunSettingsActionSafeAsync(RunManualPathRecoveryAsync, "PathRecoveryRequested");
 
             dialog.ResetManagerRequested += resetRequestedHandler;
             dialog.RestoreOriginalRequested += restoreRequestedHandler;
             dialog.ManualMigrationRequested += manualMigrationRequestedHandler;
             dialog.PathHealthRequested += pathHealthRequestedHandler;
+            dialog.PathRecoveryRequested += pathRecoveryRequestedHandler;
             
             var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
@@ -1154,6 +1159,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 dialog.RestoreOriginalRequested -= restoreRequestedHandler;
                 dialog.ManualMigrationRequested -= manualMigrationRequestedHandler;
                 dialog.PathHealthRequested -= pathHealthRequestedHandler;
+                dialog.PathRecoveryRequested -= pathRecoveryRequestedHandler;
             }
 
             // 險ｭ螳壼､画峩繧貞渚譏
@@ -1223,6 +1229,112 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         var dialog = new PathHealthDialog(new PathHealthViewModel(addonManager));
         await dialog.ShowDialog(mainWindow);
         await RefreshAddonsAsync(rescanWorkshop: false, showProgress: false);
+    }
+
+    private async Task RunManualPathRecoveryAsync()
+    {
+        var settings = AppSettings.Load();
+        var appDataPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GmodAddonManager");
+
+        var result = await StartupPathRecoveryCoordinator.RunManualAsync(settings, appDataPath);
+        if (!result.Accepted)
+        {
+            return;
+        }
+
+        var dialogService = new DialogService();
+        var errorHandler = new UIErrorHandler(dialogService);
+        using (BeginBusy(L.Get("Busy.RepairingPaths")))
+        using (var repairManager = new AddonManager(new AddonManagerOptions
+        {
+            ErrorHandler = errorHandler,
+            DisableMode = DisableMode.Soft,
+            CustomGmodInstallPath = settings.CustomGmodInstallPath,
+            CustomWorkshopPath = settings.CustomWorkshopPath,
+            EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+        }))
+        {
+            repairManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
+            await repairManager.InitializeAsync();
+            var repairPendingChangeManager = new PendingChangeManager(
+                repairManager,
+                repairManager.GetManagerPath(),
+                errorHandler);
+            await StartupPathRecoveryCoordinator.ApplyRepairsAsync(
+                repairManager,
+                repairPendingChangeManager,
+                processWatcher,
+                errorHandler);
+        }
+
+        await dialogService.ShowInfoAsync(
+            L.Get("Settings.PathRecoveryAppliedTitle"),
+            L.Get("Settings.PathRecoveryAppliedMessage"));
+        await TryRestartApplicationAsync(dialogService);
+    }
+
+    private static async Task<bool> TryRestartApplicationAsync(IDialogService dialogService)
+    {
+        var processPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrWhiteSpace(processPath))
+        {
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.RestartFailed", "Executable path not found."));
+            return false;
+        }
+
+        try
+        {
+            var workingDirectory = Path.GetDirectoryName(processPath);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = processPath,
+                WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                    ? Environment.CurrentDirectory
+                    : workingDirectory,
+                UseShellExecute = false
+            };
+
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            if (Avalonia.Application.Current is App app)
+            {
+                app.ReleaseApplicationLockForRestart();
+            }
+
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                await dialogService.ShowErrorAsync(
+                    L.Get("Error.Title"),
+                    L.Format("Error.RestartFailed", L.Get("Error.Unknown")));
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.RestartFailed", ex.Message));
+            return false;
+        }
+
+        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.Shutdown();
+        }
+        else
+        {
+            Environment.Exit(0);
+        }
+
+        return true;
     }
     
     private async Task ResetManagerAsync()
