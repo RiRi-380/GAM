@@ -317,6 +317,138 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        private PathSnapshot DetectCurrentPathSnapshot()
+        {
+            try
+            {
+                var snapshot = steamPathDetector.DetectPathSnapshot();
+                LogPathSnapshot(snapshot, "PathHealth");
+                return snapshot;
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to refresh path snapshot: {ex.Message}", "PathHealth");
+                return pathSnapshot ?? new PathSnapshot
+                {
+                    HealthIssues = new[] { $"Failed to refresh path snapshot: {ex.Message}" }
+                };
+            }
+        }
+
+        private void RecordCurrentPathState()
+        {
+            configuration.PathState ??= new PathState();
+            var snapshot = DetectCurrentPathSnapshot();
+            PathHealthService.UpdatePathState(configuration, snapshot, managerPath, addonsPath);
+        }
+
+        public PathHealthReport GetPathHealthReport()
+        {
+            configuration.PathState ??= new PathState();
+            var snapshot = DetectCurrentPathSnapshot();
+            return PathHealthService.BuildReport(configuration, snapshot, managerPath, addonsPath);
+        }
+
+        public async Task<PathHealthOperationResult> RepairStalePathMetadataAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.RepairMetadata(configuration, report.MetadataRepairCandidates);
+            if (result.ChangedCount > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+                InvalidateWorkshopScanCache();
+            }
+
+            return result;
+        }
+
+        public async Task<PathHealthOperationResult> MigrateAddonNoMountEntriesAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.MigrateAddonNoMountEntries(report.AddonNoMountMigrationPlan);
+            if (result.ChangedCount > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            return result;
+        }
+
+        public Task<PathHealthOperationResult> CleanupStaleEmptyWorkshopFoldersAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.CleanupStaleEmptyWorkshopFolders(report.CleanupCandidates);
+            return Task.FromResult(result);
+        }
+
+        public async Task<PathHealthOperationResult> MigrateManagedDataAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.MigrateManagedData(report.ManagedDataMigrationCandidates);
+            var metadataUpdates = UpdateManagedDataMetadata(report.ManagedDataMigrationCandidates);
+            if (result.MovedCount > 0 || metadataUpdates > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            result.ChangedCount += metadataUpdates;
+            return result;
+        }
+
+        private int UpdateManagedDataMetadata(IEnumerable<ManagedDataMigrationCandidate> candidates)
+        {
+            var changed = 0;
+
+            foreach (var candidate in candidates)
+            {
+                if (!PathExists(candidate.TargetPath) || PathExists(candidate.SourcePath))
+                {
+                    continue;
+                }
+
+                foreach (var addon in configuration.AddonMetadata.Values)
+                {
+                    if (PathReferencesEqual(addon.FolderPath, candidate.SourcePath))
+                    {
+                        addon.FolderPath = candidate.TargetPath;
+                        addon.IsGmaFile = !candidate.IsDirectory &&
+                                          candidate.TargetPath.EndsWith(".gma", StringComparison.OrdinalIgnoreCase);
+                        changed++;
+                    }
+
+                    if (PathReferencesEqual(addon.LocalManagedPath, candidate.SourcePath))
+                    {
+                        addon.LocalManagedPath = candidate.TargetPath;
+                        changed++;
+                    }
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool PathExists(string? path)
+        {
+            return !string.IsNullOrWhiteSpace(path) && (File.Exists(path) || Directory.Exists(path));
+        }
+
+        private static bool PathReferencesEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(NormalizeLocalPath(left), NormalizeLocalPath(right), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
         private List<string> GetWorkshopDirectoriesOrEmpty(string searchPattern, string operationName)
         {
             if (string.IsNullOrWhiteSpace(workshopPath) || !Directory.Exists(workshopPath))
@@ -387,6 +519,9 @@ namespace GmodAddonManager.Core.Services
                     configuration.CreateDefaultAssets(DisableMode == DisableMode.Hard);
                     await SaveConfigurationAsync();
                 }
+
+                RecordCurrentPathState();
+                await SaveConfigurationAsync();
                 
                 // 起動時のシステム整合性チェック
                 await CheckIncompleteOperationsAsync();
@@ -4675,6 +4810,7 @@ namespace GmodAddonManager.Core.Services
                     
                     // Fix any invalid CurrentVersion values
                     FixInvalidCurrentVersions();
+                    configuration.PathState ??= new PathState();
                 }
                 catch (Exception ex)
                 {
@@ -4848,7 +4984,8 @@ namespace GmodAddonManager.Core.Services
                             LastUpdated = now,
                             Assets = configuration.Assets.ToList(),
                             AddonMetadata = addonMetadataSnapshot,
-                            JunctionHistory = junctionHistorySnapshot
+                            JunctionHistory = junctionHistorySnapshot,
+                            PathState = configuration.PathState ?? new PathState()
                         };
 
                         // Initialize WorkshopIconResolver

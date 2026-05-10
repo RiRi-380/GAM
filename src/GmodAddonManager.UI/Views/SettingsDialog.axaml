@@ -77,6 +77,15 @@
                                 <TextBlock Text="{loc:Localize Settings.SoftDisableDescription}" Opacity="0.7" FontSize="12" Margin="20,0,0,0"/>
                             </StackPanel>
                         </Expander>
+
+                        <Button Click="OnPathHealth"
+                                Width="220"
+                                HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
+                                <TextBlock Text="{loc:Localize Settings.PathHealthButton}"/>
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                 </Border>
                 

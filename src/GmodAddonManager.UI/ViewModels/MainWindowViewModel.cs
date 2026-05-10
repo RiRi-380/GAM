@@ -1125,10 +1125,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 _ = RunSettingsActionSafeAsync(RestoreOriginalAsync, "RestoreOriginalRequested");
             EventHandler manualMigrationRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(MigrateAddonsAsync, "ManualMigrationRequested");
+            EventHandler pathHealthRequestedHandler = (_, _) =>
+                _ = RunSettingsActionSafeAsync(OpenPathHealthAsync, "PathHealthRequested");
 
             dialog.ResetManagerRequested += resetRequestedHandler;
             dialog.RestoreOriginalRequested += restoreRequestedHandler;
             dialog.ManualMigrationRequested += manualMigrationRequestedHandler;
+            dialog.PathHealthRequested += pathHealthRequestedHandler;
             
             var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
@@ -1150,6 +1153,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 dialog.ResetManagerRequested -= resetRequestedHandler;
                 dialog.RestoreOriginalRequested -= restoreRequestedHandler;
                 dialog.ManualMigrationRequested -= manualMigrationRequestedHandler;
+                dialog.PathHealthRequested -= pathHealthRequestedHandler;
             }
 
             // 險ｭ螳壼､画峩繧貞渚譏
@@ -1201,6 +1205,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 $"MainWindowViewModel.{actionName}",
                 ex);
         }
+    }
+
+    private async Task OpenPathHealthAsync()
+    {
+        var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow
+            : null;
+
+        if (mainWindow == null)
+        {
+            var dialogService = new DialogService();
+            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
+            return;
+        }
+
+        var dialog = new PathHealthDialog(new PathHealthViewModel(addonManager));
+        await dialog.ShowDialog(mainWindow);
+        await RefreshAddonsAsync(rescanWorkshop: false, showProgress: false);
     }
     
     private async Task ResetManagerAsync()
