@@ -37,7 +37,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private bool isNotesLoaded;
     private bool isFavorite;
     private Bitmap? thumbnailBitmap;
-    private HashSet<string>? excludedAddonIds;
+    private IReadOnlyDictionary<string, AddonState>? addonStateMarkers;
+    private IReadOnlyDictionary<string, IReadOnlyList<string>>? inactiveAssetMembershipMarkers;
     private bool isFileSizeCalculated;
     private bool disposed;
 
@@ -179,16 +180,31 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void SetExcludedAddonIds(HashSet<string>? excludedIds)
+    public void SetAddonStateMarkers(IReadOnlyDictionary<string, AddonState>? markers)
     {
-        if (ReferenceEquals(excludedAddonIds, excludedIds))
+        if (ReferenceEquals(addonStateMarkers, markers))
         {
             return;
         }
 
-        excludedAddonIds = excludedIds;
+        addonStateMarkers = markers;
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(BorderColor));
+        this.RaisePropertyChanged(nameof(StateText));
+        this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(IsDisplayOff));
+    }
+
+    public void SetInactiveAssetMembershipMarkers(IReadOnlyDictionary<string, IReadOnlyList<string>>? markers)
+    {
+        if (ReferenceEquals(inactiveAssetMembershipMarkers, markers))
+        {
+            return;
+        }
+
+        inactiveAssetMembershipMarkers = markers;
+        this.RaisePropertyChanged(nameof(IsInInactiveAsset));
+        this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
     }
     
     // WorkshopAddonから情報を更新するメソッド
@@ -262,6 +278,30 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     
     public bool IsGmaFile => addon.IsGmaFile;
     public bool IsLocal => addon.IsLocal;
+    public bool IsInInactiveAsset
+    {
+        get
+        {
+            return inactiveAssetMembershipMarkers != null &&
+                   inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) &&
+                   assetNames.Count > 0;
+        }
+    }
+
+    public string InactiveAssetTooltip
+    {
+        get
+        {
+            if (inactiveAssetMembershipMarkers == null ||
+                !inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) ||
+                assetNames.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return L.Format("AddonGrid.OffAssetTooltip", string.Join(", ", assetNames));
+        }
+    }
 
     public bool IsSelected
     {
@@ -373,14 +413,15 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
-            if (currentAddonState == null)
+            var state = GetDisplayAddonState();
+            if (state == null)
             {
                 return L.Get("Common.Unknown");
             }
 
-            var stateKey = $"AddonState.{currentAddonState.Value}";
+            var stateKey = $"AddonState.{state.Value}";
             var localized = L.Get(stateKey);
-            return localized == stateKey ? currentAddonState.Value.ToString() : localized;
+            return localized == stateKey ? state.Value.ToString() : localized;
         }
     }
     public string IsGmaFileText => IsGmaFile ? L.Get("Common.Yes") : L.Get("Common.No");
@@ -415,7 +456,16 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // アドオンの状態を更新
     public void UpdateAddonState()
     {
-        if (currentAsset == null) return;
+        if (currentAsset == null)
+        {
+            currentAddonState = null;
+            this.RaisePropertyChanged(nameof(BorderColor));
+            this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
+            this.RaisePropertyChanged(nameof(StateText));
+            this.RaisePropertyChanged(nameof(DisplayAddonState));
+            this.RaisePropertyChanged(nameof(IsDisplayOff));
+            return;
+        }
         
         // 現在のアセットでの状態を取得
         currentAddonState = currentAsset.GetAddonState(AddonId);
@@ -424,6 +474,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(BorderColor));
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(StateText));
+        this.RaisePropertyChanged(nameof(DisplayAddonState));
+        this.RaisePropertyChanged(nameof(IsDisplayOff));
     }
 
     private void OnLocalizationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -431,6 +483,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         if (e.PropertyName == nameof(LocalizationManager.CurrentLanguage) || string.IsNullOrEmpty(e.PropertyName))
         {
             this.RaisePropertyChanged(nameof(StateText));
+            this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
 
@@ -511,14 +564,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 return "#4A90E2"; // アクセントカラー（青）
             }
             
-            // どこかで除外されているかチェック
-            if (IsExcludedAnywhere)
+            var state = GetDisplayAddonState();
+
+            if (state == AddonState.Excluded)
             {
                 return "#F44336"; // 赤
             }
             
-            // 現在のアセットでの状態
-            if (currentAddonState == AddonState.Disabled)
+            if (state == AddonState.Disabled)
             {
                 return "#FF9800"; // オレンジ
             }
@@ -532,14 +585,20 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
-            if (excludedAddonIds != null)
+            if (addonStateMarkers != null)
             {
-                return excludedAddonIds.Contains(AddonId);
+                return addonStateMarkers.TryGetValue(AddonId, out var state)
+                    && state == AddonState.Excluded;
             }
 
             var config = addonManager.GetConfiguration();
             foreach (var asset in config.Assets)
             {
+                if (!asset.Enabled)
+                {
+                    continue;
+                }
+
                 if (asset.Addons.Contains(AddonId) || asset.ContainsAllAddons())
                 {
                     if (asset.GetAddonState(AddonId) == AddonState.Excluded)
@@ -549,6 +608,44 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 }
             }
             return false;
+        }
+    }
+
+    private AddonState? GetGlobalAddonStateMarker()
+    {
+        if (addonStateMarkers != null && addonStateMarkers.TryGetValue(AddonId, out var state))
+        {
+            return state;
+        }
+
+        return null;
+    }
+
+    private AddonState? GetDisplayAddonState()
+    {
+        var globalState = GetGlobalAddonStateMarker();
+
+        if (currentAddonState == AddonState.Excluded || globalState == AddonState.Excluded)
+        {
+            return AddonState.Excluded;
+        }
+
+        if (currentAddonState == AddonState.Disabled || globalState == AddonState.Disabled)
+        {
+            return AddonState.Disabled;
+        }
+
+        return currentAddonState ?? globalState;
+    }
+
+    public AddonState? DisplayAddonState => GetDisplayAddonState();
+
+    public bool IsDisplayOff
+    {
+        get
+        {
+            var state = DisplayAddonState;
+            return state == AddonState.Disabled || state == AddonState.Excluded;
         }
     }
 

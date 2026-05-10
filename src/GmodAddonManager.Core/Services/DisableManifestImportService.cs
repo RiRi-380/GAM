@@ -75,7 +75,7 @@ public sealed class DisableManifestImportService : IDisableManifestImportService
             Id = CreateNewAssetId(config),
             Enabled = false,
             IsSystem = false,
-            DefaultAddonState = AddonState.Disabled
+            DefaultAddonState = AddonState.Excluded
         };
 
         config.Assets.Add(asset);

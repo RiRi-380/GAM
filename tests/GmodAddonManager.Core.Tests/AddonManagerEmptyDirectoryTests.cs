@@ -115,7 +115,7 @@ public sealed class AddonManagerEmptyDirectoryTests
         public string WorkshopPath { get; }
         public string AppDataPath { get; }
         public string AddonDirectoryPath => Path.Combine(WorkshopPath, AddonId);
-        public string PayloadPath => Path.Combine(AddonDirectoryPath, "addon.txt");
+        public string PayloadPath => Path.Combine(AddonDirectoryPath, "lua", "autorun.lua");
 
         public AddonManager CreateManager(IReadOnlyList<string>? workshopCacheFilePaths = null)
         {
@@ -132,7 +132,7 @@ public sealed class AddonManagerEmptyDirectoryTests
 
         public void WriteAddonPayload()
         {
-            Directory.CreateDirectory(AddonDirectoryPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(PayloadPath)!);
             File.WriteAllText(PayloadPath, "payload");
         }
 
@@ -176,7 +176,28 @@ public sealed class AddonManagerEmptyDirectoryTests
         {
             if (Directory.Exists(rootPath))
             {
-                Directory.Delete(rootPath, true);
+                DeleteDirectoryWithRetry(rootPath);
+            }
+        }
+
+        private static void DeleteDirectoryWithRetry(string path)
+        {
+            const int maxAttempts = 10;
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(path, true);
+                    return;
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
             }
         }
     }

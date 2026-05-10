@@ -24,6 +24,8 @@ public partial class SettingsDialog : Window
     public event EventHandler? ResetManagerRequested;
     public event EventHandler? RestoreOriginalRequested;
     public event EventHandler? ManualMigrationRequested;
+    public event EventHandler? PathHealthRequested;
+    public event EventHandler? PathRecoveryRequested;
     
     public SettingsDialog()
     {
@@ -44,6 +46,7 @@ public partial class SettingsDialog : Window
             "GmodAddonManager", "logs"
         );
         LogLocationText.Text = logPath;
+        VersionText.Text = L.Format("Settings.CurrentVersion", GetCurrentVersion());
         
         // 言語設定を反映
         LanguageComboBox.SelectedIndex = currentSettings.Language == "ja-JP" ? 0 : 1;
@@ -239,20 +242,37 @@ public partial class SettingsDialog : Window
     
     private void OnResetManager(object? sender, RoutedEventArgs e)
     {
+        var requested = ResetManagerRequested;
         Close();
-        ResetManagerRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
     
     private void OnRestoreOriginal(object? sender, RoutedEventArgs e)
     {
+        var requested = RestoreOriginalRequested;
         Close();
-        RestoreOriginalRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnManualMigration(object? sender, RoutedEventArgs e)
     {
+        var requested = ManualMigrationRequested;
         Close();
-        ManualMigrationRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnPathHealth(object? sender, RoutedEventArgs e)
+    {
+        var requested = PathHealthRequested;
+        Close();
+        requested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnPathRecovery(object? sender, RoutedEventArgs e)
+    {
+        var requested = PathRecoveryRequested;
+        Close();
+        requested?.Invoke(this, EventArgs.Empty);
     }
     
     private async void OnCheckForUpdate(object? sender, RoutedEventArgs e)
@@ -264,11 +284,7 @@ public partial class SettingsDialog : Window
 
             if (result.Status == UpdateCheckStatus.UpdateAvailable && result.UpdateInfo != null)
             {
-                var dialog = new UpdateDialog
-                {
-                    DataContext = new UpdateDialogViewModel(updateService, result.UpdateInfo)
-                };
-                await dialog.ShowDialog(this);
+                await UpdateDialogCoordinator.TryShowAsync(this, updateService, result.UpdateInfo);
                 return;
             }
 
@@ -304,7 +320,9 @@ public partial class SettingsDialog : Window
     {
         return Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion?.Split('-')[0] ?? "1.0.0";
+            .InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "1.0.0";
     }
 
 }

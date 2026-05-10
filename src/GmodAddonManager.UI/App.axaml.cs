@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using GmodAddonManager.Core.Services;
@@ -64,6 +65,7 @@ public sealed partial class App : Application, IDisposable
 #endif
 
         AppSettings? settings = null;
+        ShutdownMode? originalShutdownMode = null;
         
         try
         {
@@ -126,6 +128,14 @@ public sealed partial class App : Application, IDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GmodAddonManager"
             );
+
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime startupDesktop)
+            {
+                originalShutdownMode = startupDesktop.ShutdownMode;
+                startupDesktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            }
+
+            var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
             
             applicationLock = new ApplicationLock(appDataPath);
             if (!applicationLock.TryAcquireLock())
@@ -165,7 +175,14 @@ public sealed partial class App : Application, IDisposable
 #endif
                 // Current release is soft-only. Ignore any hard-mode settings/env.
                 var disableMode = DisableMode.Soft;
-                addonManager = new AddonManager(null, errorHandler, disableMode);
+                addonManager = new AddonManager(new AddonManagerOptions
+                {
+                    ErrorHandler = errorHandler,
+                    DisableMode = disableMode,
+                    CustomGmodInstallPath = settings.CustomGmodInstallPath,
+                    CustomWorkshopPath = settings.CustomWorkshopPath,
+                    EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+                });
                 addonManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
@@ -315,6 +332,15 @@ public sealed partial class App : Application, IDisposable
             var processWatcherLocal = processWatcher;
             var pendingChangeManagerLocal = pendingChangeManager;
 
+            if (startupPathRecovery.ApplyRepairs)
+            {
+                await StartupPathRecoveryCoordinator.ApplyRepairsAsync(
+                    addonManagerLocal,
+                    pendingChangeManagerLocal,
+                    processWatcherLocal,
+                    errorHandler);
+            }
+
             try
             {
 #if DEBUG
@@ -389,6 +415,10 @@ public sealed partial class App : Application, IDisposable
                     
                     // 繧ｦ繧｣繝ｳ繝峨え繧呈・遉ｺ逧・↓陦ｨ遉ｺ
                     desktop.MainWindow.Show();
+                    if (originalShutdownMode.HasValue)
+                    {
+                        desktop.ShutdownMode = originalShutdownMode.Value;
+                    }
 #if DEBUG
                     File.AppendAllText("app_startup.log", $"MainWindow.Show() called at: {DateTime.Now}\n");
 #endif
@@ -468,7 +498,7 @@ public sealed partial class App : Application, IDisposable
         }
     }
 
-        private void Cleanup()
+    private void Cleanup()
     {
         experimentIpcServer?.Dispose();
         processWatcher?.Dispose();

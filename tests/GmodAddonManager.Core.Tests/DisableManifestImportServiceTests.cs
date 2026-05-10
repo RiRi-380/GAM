@@ -27,6 +27,7 @@ public sealed class DisableManifestImportServiceTests
         var asset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
         Assert.False(asset.Enabled);
         Assert.False(asset.IsSystem);
+        Assert.Equal(AddonState.Excluded, asset.DefaultAddonState);
         Assert.Equal("Weapon Cleanup", asset.Name);
         Assert.Equal(new[] { "104479467", "104483020" }, asset.Addons);
         Assert.All(asset.Addons, addonId => Assert.Equal(AddonState.Excluded, asset.AddonStates[addonId]));
@@ -94,6 +95,62 @@ public sealed class DisableManifestImportServiceTests
         Assert.NotEqual(existingAsset.Id, result.AssetId);
         Assert.Contains(manager.GetConfiguration().Assets, a => a.Id == existingAsset.Id);
         Assert.Contains(manager.GetConfiguration().Assets, a => a.Id == result.AssetId && !a.Enabled);
+    }
+
+    [Fact]
+    public async Task SetAssetEnabledAsync_ImportedDisableAsset_PreservesExcludedStatesAndWritesNoMountFile()
+    {
+        using var env = new TestEnvironment();
+        var manifestPath = env.WriteManifest(
+            "# GAM-DISABLE v1\n" +
+            "# appid: 4000\n" +
+            "# action: exclude\n" +
+            "# mode: new\n" +
+            "104479467\n" +
+            "104483020\n");
+
+        using var manager = env.CreateManager();
+        await manager.InitializeAsync();
+        var service = new DisableManifestImportService(manager);
+        var result = await service.ImportAsync(manifestPath, new DisableManifestImportOptions());
+
+        await manager.SetAssetEnabledAsync(result.AssetId, enabled: true);
+
+        var asset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
+        Assert.True(asset.Enabled);
+        Assert.Equal(AddonState.Excluded, asset.DefaultAddonState);
+        Assert.All(asset.Addons, addonId => Assert.Equal(AddonState.Excluded, asset.AddonStates[addonId]));
+
+        var noMountText = File.ReadAllText(env.NoMountPath);
+        Assert.Contains("104479467", noMountText, StringComparison.Ordinal);
+        Assert.Contains("104483020", noMountText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetAssetEnabledAsync_DisablingImportedDisableAsset_PreservesExcludedStatesAndClearsNoMountFile()
+    {
+        using var env = new TestEnvironment();
+        var manifestPath = env.WriteManifest(
+            "# GAM-DISABLE v1\n" +
+            "# appid: 4000\n" +
+            "# action: exclude\n" +
+            "104479467\n");
+
+        using var manager = env.CreateManager();
+        await manager.InitializeAsync();
+        var service = new DisableManifestImportService(manager);
+        var result = await service.ImportAsync(manifestPath, new DisableManifestImportOptions());
+
+        await manager.SetAssetEnabledAsync(result.AssetId, enabled: true);
+        await manager.SetAssetEnabledAsync(result.AssetId, enabled: false);
+
+        var asset = manager.GetConfiguration().Assets.Single(a => a.Id == result.AssetId);
+        Assert.False(asset.Enabled);
+        Assert.Equal(AddonState.Excluded, asset.DefaultAddonState);
+        Assert.Equal(AddonState.Excluded, asset.AddonStates["104479467"]);
+
+        var noMountText = File.ReadAllText(env.NoMountPath);
+        Assert.DoesNotContain("104479467", noMountText, StringComparison.Ordinal);
     }
 
     [Fact]

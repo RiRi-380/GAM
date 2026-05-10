@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using GmodAddonManager.Core.Services;
 using Newtonsoft.Json;
 
 namespace GmodAddonManager.Core.Models
@@ -19,7 +20,10 @@ namespace GmodAddonManager.Core.Models
         public Dictionary<string, WorkshopAddon> AddonMetadata { get; set; }
 
         [JsonProperty("junctionHistory")]
-        public Dictionary<string, List<string>> JunctionHistory { get; set; } // アドオンID -> 元のアセットID[]
+        public Dictionary<string, List<string>> JunctionHistory { get; set; }
+
+        [JsonProperty("pathState")]
+        public PathState PathState { get; set; }
 
         public Configuration()
         {
@@ -28,6 +32,7 @@ namespace GmodAddonManager.Core.Models
             Assets = new List<Asset>();
             AddonMetadata = new Dictionary<string, WorkshopAddon>();
             JunctionHistory = new Dictionary<string, List<string>>();
+            PathState = new PathState();
         }
 
         public void CreateDefaultAssets()
@@ -37,21 +42,66 @@ namespace GmodAddonManager.Core.Models
 
         public void CreateDefaultAssets(bool includeJunction)
         {
-            // サブスクライブアセット
             var subscribeAsset = new Asset("Subscribe Asset", true);
-            subscribeAsset.Id = "subscribe-system-asset"; // 固定ID
+            subscribeAsset.Id = "subscribe-system-asset";
             subscribeAsset.SetAllAddons();
             Assets.Add(subscribeAsset);
-            
+
             if (includeJunction)
             {
-                // ジャンクションアセット（無効化されたアドオンを表示）
                 var junctionAsset = new Asset("Junction", true);
-                junctionAsset.Id = "junction-system-asset"; // 固定ID
-                junctionAsset.Enabled = false; // デフォルトで無効
+                junctionAsset.Id = "junction-system-asset";
+                junctionAsset.Enabled = false;
                 Assets.Add(junctionAsset);
             }
         }
+    }
+
+    public class PathState
+    {
+        [JsonProperty("lastKnownGoodSnapshot")]
+        public PathSnapshot? LastKnownGoodSnapshot { get; set; }
+
+        [JsonProperty("lastDetectedSnapshot")]
+        public PathSnapshot? LastDetectedSnapshot { get; set; }
+
+        [JsonProperty("previousDetectedSnapshot")]
+        public PathSnapshot? PreviousDetectedSnapshot { get; set; }
+
+        [JsonProperty("lastManagerPath")]
+        public string? LastManagerPath { get; set; }
+
+        [JsonProperty("lastAddonsPath")]
+        public string? LastAddonsPath { get; set; }
+
+        [JsonProperty("previousManagerPath")]
+        public string? PreviousManagerPath { get; set; }
+
+        [JsonProperty("previousAddonsPath")]
+        public string? PreviousAddonsPath { get; set; }
+
+        [JsonProperty("changes")]
+        public List<PathChangeRecord> Changes { get; set; }
+
+        public PathState()
+        {
+            Changes = new List<PathChangeRecord>();
+        }
+    }
+
+    public class PathChangeRecord
+    {
+        [JsonProperty("detectedAt")]
+        public DateTime DetectedAt { get; set; } = DateTime.UtcNow;
+
+        [JsonProperty("pathKind")]
+        public string PathKind { get; set; } = string.Empty;
+
+        [JsonProperty("oldPath")]
+        public string? OldPath { get; set; }
+
+        [JsonProperty("newPath")]
+        public string? NewPath { get; set; }
     }
 
     public class PendingChanges

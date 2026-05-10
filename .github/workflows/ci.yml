@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - 'codex/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build UI
+        run: dotnet build src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Debug
+
+      - name: Test Core
+        run: dotnet test tests/GmodAddonManager.Core.Tests/GmodAddonManager.Core.Tests.csproj -c Debug
+
+      - name: Test UI
+        run: dotnet test tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj -c Debug

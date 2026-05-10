@@ -98,6 +98,7 @@ jobs:
         
         Write-Host "Building installer for version: $version"
         & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/setup.iss /DMyAppVersion=$version
+        Copy-Item "dist\GAM-Setup-$version.exe" "GAM-Setup.exe" -Force
       shell: pwsh
       
     - name: Create Release
@@ -106,6 +107,7 @@ jobs:
         files: |
           ./GAM-Portable-*.zip
           ./dist/GAM-Setup-*.exe
+          ./GAM-Setup.exe
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
         draft: false

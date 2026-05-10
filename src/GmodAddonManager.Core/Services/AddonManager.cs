@@ -45,6 +45,9 @@ namespace GmodAddonManager.Core.Services
         private readonly SteamPathDetector steamPathDetector;
         private readonly WorkshopInstallIndex workshopInstallIndex;
         private readonly WorkshopIconResolver workshopIconResolver;
+        private readonly PathSnapshot? pathSnapshot;
+        private readonly string? customGmodInstallPath;
+        private readonly string? customWorkshopPath;
         private readonly SteamWorkshopService steamWorkshopService;
         private readonly UndoManager undoManager;
         private readonly IErrorHandler errorHandler;
@@ -150,6 +153,12 @@ namespace GmodAddonManager.Core.Services
             _maxParallelAddonStateUpdates = options.MaxParallelAddonStateUpdates.HasValue
                 ? Math.Max(1, options.MaxParallelAddonStateUpdates.Value)
                 : Math.Clamp(Environment.ProcessorCount, 2, 6);
+            customGmodInstallPath = string.IsNullOrWhiteSpace(options.CustomGmodInstallPath)
+                ? null
+                : options.CustomGmodInstallPath;
+            customWorkshopPath = string.IsNullOrWhiteSpace(options.CustomWorkshopPath)
+                ? null
+                : options.CustomWorkshopPath;
             steamPathDetector = new SteamPathDetector();
             workshopInstallIndex = new WorkshopInstallIndex(steamPathDetector);
             junctionService = new JunctionService();
@@ -177,16 +186,42 @@ namespace GmodAddonManager.Core.Services
             modeStrategy = DisableMode == DisableMode.Hard
                 ? new HardAddonModeStrategy()
                 : new SoftAddonModeStrategy();
-            
-            if (string.IsNullOrEmpty(options.CustomWorkshopPath))
+
+            if (!string.IsNullOrWhiteSpace(customGmodInstallPath) ||
+                !string.IsNullOrWhiteSpace(customWorkshopPath))
             {
-                workshopPath = steamPathDetector.DetectWorkshopPath();
-                // Detected workshop path
+                if (PathOverrideResolver.TryCreateSnapshot(
+                        customGmodInstallPath,
+                        customWorkshopPath,
+                        out var overrideSnapshot,
+                        out var overrideError))
+                {
+                    pathSnapshot = overrideSnapshot;
+                    LogPathSnapshot(pathSnapshot, "Constructor.CustomPathOverride");
+                }
+                else
+                {
+                    errorHandler.HandleWarning($"Failed to use custom path override: {overrideError}", "Constructor");
+                }
             }
-            else
+
+            if (pathSnapshot == null)
             {
-                workshopPath = options.CustomWorkshopPath;
+                try
+                {
+                    pathSnapshot = steamPathDetector.DetectPathSnapshot();
+                    LogPathSnapshot(pathSnapshot, "Constructor");
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning($"Failed to resolve Steam/GMod path snapshot: {ex.Message}", "Constructor");
+                }
             }
+
+            var hasCustomWorkshopPath = !string.IsNullOrEmpty(customWorkshopPath);
+            workshopPath = hasCustomWorkshopPath
+                ? customWorkshopPath!
+                : pathSnapshot?.ActiveWorkshopRoot?.RootPath ?? steamPathDetector.DetectWorkshopPath();
 
             if (DisableMode == DisableMode.Soft)
             {
@@ -212,7 +247,9 @@ namespace GmodAddonManager.Core.Services
                     ? null
                     : !string.IsNullOrWhiteSpace(options.CustomGmodCachePath)
                         ? options.CustomGmodCachePath
-                        : steamPathDetector.DetectGmodCachePath();
+                        : !hasCustomWorkshopPath
+                            ? pathSnapshot?.GmodCacheWorkshopPath ?? steamPathDetector.DetectGmodCachePath()
+                            : steamPathDetector.DetectGmodCachePath();
                 // エラーが発生してもnullとして続行
             }
             catch (Exception)
@@ -243,7 +280,19 @@ namespace GmodAddonManager.Core.Services
             // Detect Gmod root path for settings management (addonnomount.txt)
             try
             {
-                var candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+                var candidate = !string.IsNullOrWhiteSpace(customGmodInstallPath)
+                    ? customGmodInstallPath
+                    : hasCustomWorkshopPath
+                        ? Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"))
+                        : pathSnapshot?.GmodInstall?.InstallPath;
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
+                    errorHandler.HandleWarning(
+                        "Garry's Mod appmanifest path was not resolved; falling back to workshop-relative path inference.",
+                        "Constructor");
+                }
+
                 if (Directory.Exists(candidate))
                 {
                     gmodRootPath = candidate;
@@ -281,6 +330,169 @@ namespace GmodAddonManager.Core.Services
                     return !string.IsNullOrEmpty(name) && !name.StartsWith(".", StringComparison.Ordinal);
                 })
                 .ToList();
+        }
+
+        private void LogPathSnapshot(PathSnapshot snapshot, string operationName)
+        {
+            errorHandler.HandleInfo(
+                $"Path snapshot: steamRoot={snapshot.SteamRootPath ?? "<none>"}, " +
+                $"gmod={snapshot.GmodInstall?.InstallPath ?? "<none>"} ({snapshot.GmodInstall?.Confidence.ToString() ?? "None"}), " +
+                $"workshop={snapshot.ActiveWorkshopRoot?.RootPath ?? "<none>"} ({snapshot.ActiveWorkshopRoot?.Confidence.ToString() ?? "None"}), " +
+                $"cache={snapshot.GmodCacheWorkshopPath ?? "<none>"}",
+                operationName);
+
+            foreach (var issue in snapshot.HealthIssues)
+            {
+                errorHandler.HandleWarning($"Path snapshot issue: {issue}", operationName);
+            }
+        }
+
+        private PathSnapshot DetectCurrentPathSnapshot()
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(customGmodInstallPath) ||
+                    !string.IsNullOrWhiteSpace(customWorkshopPath))
+                {
+                    if (PathOverrideResolver.TryCreateSnapshot(
+                            customGmodInstallPath,
+                            customWorkshopPath,
+                            out var overrideSnapshot,
+                            out var overrideError))
+                    {
+                        LogPathSnapshot(overrideSnapshot, "PathHealth.CustomPathOverride");
+                        return overrideSnapshot;
+                    }
+
+                    errorHandler.HandleWarning($"Failed to refresh custom path snapshot: {overrideError}", "PathHealth");
+                }
+
+                var snapshot = steamPathDetector.DetectPathSnapshot();
+                LogPathSnapshot(snapshot, "PathHealth");
+                return snapshot;
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to refresh path snapshot: {ex.Message}", "PathHealth");
+                return pathSnapshot ?? new PathSnapshot
+                {
+                    HealthIssues = new[] { $"Failed to refresh path snapshot: {ex.Message}" }
+                };
+            }
+        }
+
+        private void RecordCurrentPathState()
+        {
+            configuration.PathState ??= new PathState();
+            var snapshot = DetectCurrentPathSnapshot();
+            PathHealthService.UpdatePathState(configuration, snapshot, managerPath, addonsPath);
+        }
+
+        public PathHealthReport GetPathHealthReport()
+        {
+            configuration.PathState ??= new PathState();
+            var snapshot = DetectCurrentPathSnapshot();
+            return PathHealthService.BuildReport(configuration, snapshot, managerPath, addonsPath);
+        }
+
+        public async Task<PathHealthOperationResult> RepairStalePathMetadataAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.RepairMetadata(configuration, report.MetadataRepairCandidates);
+            if (result.ChangedCount > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+                InvalidateWorkshopScanCache();
+            }
+
+            return result;
+        }
+
+        public async Task<PathHealthOperationResult> MigrateAddonNoMountEntriesAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.MigrateAddonNoMountEntries(report.AddonNoMountMigrationPlan);
+            if (result.ChangedCount > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            return result;
+        }
+
+        public Task<PathHealthOperationResult> CleanupStaleEmptyWorkshopFoldersAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.CleanupStaleEmptyWorkshopFolders(report.CleanupCandidates);
+            return Task.FromResult(result);
+        }
+
+        public async Task<PathHealthOperationResult> MigrateManagedDataAsync()
+        {
+            var report = GetPathHealthReport();
+            var result = PathHealthService.MigrateManagedData(report.ManagedDataMigrationCandidates);
+            var metadataUpdates = UpdateManagedDataMetadata(report.ManagedDataMigrationCandidates);
+            if (result.MovedCount > 0 || metadataUpdates > 0)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            result.ChangedCount += metadataUpdates;
+            return result;
+        }
+
+        private int UpdateManagedDataMetadata(IEnumerable<ManagedDataMigrationCandidate> candidates)
+        {
+            var changed = 0;
+
+            foreach (var candidate in candidates)
+            {
+                if (!PathExists(candidate.TargetPath) || PathExists(candidate.SourcePath))
+                {
+                    continue;
+                }
+
+                foreach (var addon in configuration.AddonMetadata.Values)
+                {
+                    if (PathReferencesEqual(addon.FolderPath, candidate.SourcePath))
+                    {
+                        addon.FolderPath = candidate.TargetPath;
+                        addon.IsGmaFile = !candidate.IsDirectory &&
+                                          candidate.TargetPath.EndsWith(".gma", StringComparison.OrdinalIgnoreCase);
+                        changed++;
+                    }
+
+                    if (PathReferencesEqual(addon.LocalManagedPath, candidate.SourcePath))
+                    {
+                        addon.LocalManagedPath = candidate.TargetPath;
+                        changed++;
+                    }
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool PathExists(string? path)
+        {
+            return !string.IsNullOrWhiteSpace(path) && (File.Exists(path) || Directory.Exists(path));
+        }
+
+        private static bool PathReferencesEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(NormalizeLocalPath(left), NormalizeLocalPath(right), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         private List<string> GetWorkshopDirectoriesOrEmpty(string searchPattern, string operationName)
@@ -353,6 +565,9 @@ namespace GmodAddonManager.Core.Services
                     configuration.CreateDefaultAssets(DisableMode == DisableMode.Hard);
                     await SaveConfigurationAsync();
                 }
+
+                RecordCurrentPathState();
+                await SaveConfigurationAsync();
                 
                 // 起動時のシステム整合性チェック
                 await CheckIncompleteOperationsAsync();
@@ -3044,28 +3259,20 @@ namespace GmodAddonManager.Core.Services
 
         private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
         {
-            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            var result = AddonPayloadValidator.Validate(directoryPath);
+            if (result.IsValid)
             {
-                return false;
-            }
-
-            try
-            {
-                return Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories)
-                    .Any(filePath => !IsIgnoredAddonPresenceMarker(filePath));
-            }
-            catch (Exception ex)
-            {
-                errorHandler.HandleWarning(
-                    $"Failed to inspect addon directory payload at {directoryPath}. Treating directory as present. {ex.Message}",
-                    operationName);
                 return true;
             }
-        }
 
-        private static bool IsIgnoredAddonPresenceMarker(string filePath)
-        {
-            return string.Equals(Path.GetFileName(filePath), ".gam_disabled", StringComparison.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(directoryPath) && Directory.Exists(directoryPath))
+            {
+                errorHandler.HandleInfo(
+                    $"Skipping invalid addon payload at {directoryPath}: {string.Join("; ", result.Reasons)}",
+                    operationName);
+            }
+
+            return false;
         }
 
         private void ValidatePath(string? path, string paramName)
@@ -4322,6 +4529,11 @@ namespace GmodAddonManager.Core.Services
             return BuildSnapshot(BuildExpectedStates(), scope);
         }
 
+        public IReadOnlyDictionary<string, bool> GetFinalAddonStates()
+        {
+            return BuildExpectedStates();
+        }
+
         public string ComputeStateHash(AddonStateSnapshot snapshot)
         {
             using var sha = SHA256.Create();
@@ -4333,13 +4545,11 @@ namespace GmodAddonManager.Core.Services
         private Dictionary<string, bool> BuildExpectedStates()
         {
             var enabledAssets = configuration.Assets.Where(asset => asset.Enabled).ToList();
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
-            return BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+            return BuildExpectedStatesForAssets(enabledAssets);
         }
 
         private Dictionary<string, bool> BuildExpectedStatesForAssets(
-            IReadOnlyList<Asset> enabledAssets,
-            Asset? subscribeAsset)
+            IReadOnlyList<Asset> enabledAssets)
         {
             var states = new Dictionary<string, bool>(StringComparer.Ordinal);
 
@@ -4352,7 +4562,7 @@ namespace GmodAddonManager.Core.Services
                     continue;
                 }
 
-                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
+                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets);
             }
 
             return states;
@@ -4392,8 +4602,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             var enabledAssets = configuration.Assets.Where(a => a.Id == assetId).ToList();
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
-            var states = BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+            var states = BuildExpectedStatesForAssets(enabledAssets);
             return BuildSnapshot(states, GetExpectedScopeLabel(assetSpecific: true));
         }
 
@@ -4649,6 +4858,7 @@ namespace GmodAddonManager.Core.Services
                     
                     // Fix any invalid CurrentVersion values
                     FixInvalidCurrentVersions();
+                    configuration.PathState ??= new PathState();
                 }
                 catch (Exception ex)
                 {
@@ -4822,7 +5032,8 @@ namespace GmodAddonManager.Core.Services
                             LastUpdated = now,
                             Assets = configuration.Assets.ToList(),
                             AddonMetadata = addonMetadataSnapshot,
-                            JunctionHistory = junctionHistorySnapshot
+                            JunctionHistory = junctionHistorySnapshot,
+                            PathState = configuration.PathState ?? new PathState()
                         };
 
                         // Initialize WorkshopIconResolver
@@ -5591,7 +5802,7 @@ namespace GmodAddonManager.Core.Services
             };
             undoManager.RecordAction(undoAction);
 
-            asset.Enabled = false;
+            asset.Enabled = true;
             
             foreach (var addonId in addonIds)
             {
@@ -5603,6 +5814,49 @@ namespace GmodAddonManager.Core.Services
             }
             
             // Initialize WorkshopIconResolver
+            try
+            {
+                using var suppressRecording = undoManager.SuppressRecording();
+                await UpdateAddonStatesAsync(progress);
+            }
+            finally
+            {
+                undoManager.MoveToTop(undoAction);
+            }
+        }
+
+        public async Task SetAssetEnabledAsync(
+            string assetId,
+            bool enabled,
+            IProgress<(int current, int total)>? progress = null,
+            bool updateAddonStates = true)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset == null || asset.Enabled == enabled)
+            {
+                return;
+            }
+
+            var undoAction = new UndoAction(
+                enabled ? UndoActionType.AssetEnabled : UndoActionType.AssetDisabled,
+                $"{(enabled ? "Activated" : "Deactivated")} asset '{asset.Name}'")
+            {
+                AssetId = assetId,
+                AssetName = asset.Name,
+                PreviousEnabledState = asset.Enabled,
+                PreviousDefaultAddonState = asset.DefaultAddonState,
+                IsAssetToggle = true,
+                NewAddonState = asset.DefaultAddonState
+            };
+            undoManager.RecordAction(undoAction);
+
+            asset.Enabled = enabled;
+
+            if (!updateAddonStates)
+            {
+                return;
+            }
+
             try
             {
                 using var suppressRecording = undoManager.SuppressRecording();
@@ -5658,7 +5912,7 @@ namespace GmodAddonManager.Core.Services
             };
             undoManager.RecordAction(undoAction);
 
-            asset.Enabled = newDefaultState != AddonState.Disabled;
+            asset.Enabled = true;
             asset.DefaultAddonState = newDefaultState;
 
             foreach (var addonId in addonIds)
@@ -6730,17 +6984,17 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         private bool CalculateFinalAddonState(string addonId)
         {
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
             var enabledAssets = configuration.Assets.Where(a => a.Enabled).ToList();
-            return CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
+            return CalculateFinalAddonState(addonId, enabledAssets);
         }
 
         private static bool CalculateFinalAddonState(
             string addonId,
-            IReadOnlyList<Asset> enabledAssets,
-            Asset? subscribeAsset)
+            IReadOnlyList<Asset> enabledAssets)
         {
-            // Initialize WorkshopIconResolver
+            var disabledByEnabledAsset = false;
+            var enabledByEnabledAsset = false;
+
             foreach (var asset in enabledAssets)
             {
                 if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
@@ -6748,58 +7002,25 @@ namespace GmodAddonManager.Core.Services
                     var state = asset.GetAddonState(addonId);
                     if (state == AddonState.Excluded)
                     {
-                        return false; // 除外されている場合は必ず無効
+                        return false;
                     }
-                }
-            }
-
-            // Initialize WorkshopIconResolver
-            bool isInSubscribe = false;
-            bool isSubscribeEnabled = false;
-            AddonState subscribeState = AddonState.Disabled;
-
-            if (subscribeAsset != null)
-            {
-                isSubscribeEnabled = enabledAssets.Any(asset => asset.Id == subscribeAsset.Id);
-                if (subscribeAsset.ContainsAllAddons() || subscribeAsset.Addons.Contains(addonId))
-                {
-                    isInSubscribe = true;
-                    subscribeState = subscribeAsset.GetAddonState(addonId);
-                }
-            }
-
-            // Initialize WorkshopIconResolver
-            foreach (var asset in enabledAssets)
-            {
-                if (asset.IsSystem) continue;
-
-                if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
-                {
-                    var state = asset.GetAddonState(addonId);
-
-                    if (state == AddonState.Enabled)
+                    if (state == AddonState.Disabled)
                     {
-                        return true; // 有効状態のアセットがあれば有効
+                        disabledByEnabledAsset = true;
                     }
-                    else if (state == AddonState.Disabled)
+                    else if (state == AddonState.Enabled)
                     {
-                        // Initialize WorkshopIconResolver
-                        if (isInSubscribe && isSubscribeEnabled && subscribeState != AddonState.Excluded)
-                        {
-                            return true;
-                        }
+                        enabledByEnabledAsset = true;
                     }
                 }
             }
 
-            // Initialize WorkshopIconResolver
-            if (subscribeAsset != null)
+            if (disabledByEnabledAsset)
             {
-                // Initialize WorkshopIconResolver
-                return isSubscribeEnabled && isInSubscribe && subscribeState == AddonState.Enabled;
+                return false;
             }
 
-            return false;
+            return enabledByEnabledAsset;
         }
         
         /// <summary>
@@ -9082,7 +9303,7 @@ namespace GmodAddonManager.Core.Services
                 
             // Check cache directory for GMA file
             string cacheGmaPath = Path.Combine(gmodCachePath, $"{addonId}.gma");
-            if (File.Exists(cacheGmaPath))
+            if (LooksLikeGmaFile(cacheGmaPath))
                 return true;
                 
             // Check cache directory for .cache file (Garry's Mod sometimes uses .cache extension)
@@ -9094,18 +9315,18 @@ namespace GmodAddonManager.Core.Services
             if (!string.IsNullOrEmpty(gmodCacheAddonsPath))
             {
                 string managedGmaPath = Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma");
-                if (File.Exists(managedGmaPath))
+                if (LooksLikeGmaFile(managedGmaPath))
                     return true;
             }
 
             // Check workshop manager directory for GMA file
             string managedWorkshopGmaPath = Path.Combine(addonsPath, addonId, $"{addonId}.gma");
-            if (File.Exists(managedWorkshopGmaPath))
+            if (LooksLikeGmaFile(managedWorkshopGmaPath))
                 return true;
             
             // Legacy managed GMA location
             string legacyManagedWorkshopGmaPath = Path.Combine(addonsPath, $"{addonId}.gma");
-            if (File.Exists(legacyManagedWorkshopGmaPath))
+            if (LooksLikeGmaFile(legacyManagedWorkshopGmaPath))
                 return true;
             
             // Check workshop directory for GMA file structure
@@ -9113,7 +9334,7 @@ namespace GmodAddonManager.Core.Services
             if (Directory.Exists(workshopAddonPath))
             {
                 string workshopGmaPath = Path.Combine(workshopAddonPath, $"{addonId}.gma");
-                if (File.Exists(workshopGmaPath))
+                if (LooksLikeGmaFile(workshopGmaPath))
                     return true;
             }
             

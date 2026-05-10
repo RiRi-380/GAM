@@ -27,6 +27,7 @@ public partial class MainWindow : Window
             // ViewModelのInitializeAsyncを呼び出す
             if (DataContext is MainWindowViewModel viewModel)
             {
+                viewModel.StartStartupUpdateCheck();
                 await viewModel.InitializeAsync();
             }
             

@@ -105,6 +105,20 @@
                                            FontWeight="Bold"
                                            Foreground="White"/>
                             </Border>
+
+                            <!-- Also belongs to at least one inactive asset -->
+                            <Border Background="#455A64"
+                                    CornerRadius="4"
+                                    Padding="4,2"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Top"
+                                    IsVisible="{Binding IsInInactiveAsset}"
+                                    ToolTip.Tip="{Binding InactiveAssetTooltip}">
+                                <TextBlock Text="{loc:Localize AddonGrid.BadgeOffAsset}"
+                                           FontSize="9"
+                                           FontWeight="Bold"
+                                           Foreground="#E8EEF5"/>
+                            </Border>
                             
                         </Grid>
                     </Border>
@@ -179,19 +193,18 @@
                                 Orientation="Horizontal"
                                 Spacing="10"
                                 VerticalAlignment="Center">
-                        <TextBlock Text="{loc:Localize AddonGrid.FilterScopeLabel}"
+                        <TextBlock Text="{loc:Localize AddonGrid.FilterStateLabel}"
                                    FontSize="12"
                                    Opacity="0.7"
                                    VerticalAlignment="Center"/>
-                        <!-- Normal/Cache フィルター -->
+                        <!-- State filter -->
                         <ComboBox SelectedIndex="{Binding AddonFilterIndex}"
                                   MinWidth="110"
                                   Height="26"
                                   VerticalContentAlignment="Center">
                             <ComboBoxItem Content="{loc:Localize AddonGrid.FilterAll}"/>
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.FilterNormal}"/>
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.FilterCache}"/>
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.FilterLocal}"/>
+                            <ComboBoxItem Content="{loc:Localize AddonGrid.FilterEnabled}"/>
+                            <ComboBoxItem Content="{loc:Localize AddonGrid.FilterDisabled}"/>
                         </ComboBox>
 
                         <CheckBox Content="{loc:Localize AddonGrid.ShowCurrentAssetOnly}"
