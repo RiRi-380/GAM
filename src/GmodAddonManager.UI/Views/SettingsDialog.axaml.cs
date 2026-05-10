@@ -24,6 +24,7 @@ public partial class SettingsDialog : Window
     public event EventHandler? ResetManagerRequested;
     public event EventHandler? RestoreOriginalRequested;
     public event EventHandler? ManualMigrationRequested;
+    public event EventHandler? PathHealthRequested;
     
     public SettingsDialog()
     {
@@ -253,6 +254,12 @@ public partial class SettingsDialog : Window
     {
         Close();
         ManualMigrationRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnPathHealth(object? sender, RoutedEventArgs e)
+    {
+        Close();
+        PathHealthRequested?.Invoke(this, EventArgs.Empty);
     }
     
     private async void OnCheckForUpdate(object? sender, RoutedEventArgs e)
