@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 using GmodAddonManager.UI.Views;
@@ -10,6 +11,7 @@ using System.IO;
 using System;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Utils;
+using Newtonsoft.Json;
 
 namespace GmodAddonManager.UI;
 
@@ -126,6 +128,8 @@ public sealed partial class App : Application, IDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GmodAddonManager"
             );
+
+            var startupPathRecovery = await RunStartupPathRecoveryAsync(settings, appDataPath);
             
             applicationLock = new ApplicationLock(appDataPath);
             if (!applicationLock.TryAcquireLock())
@@ -165,12 +169,23 @@ public sealed partial class App : Application, IDisposable
 #endif
                 // Current release is soft-only. Ignore any hard-mode settings/env.
                 var disableMode = DisableMode.Soft;
-                addonManager = new AddonManager(null, errorHandler, disableMode);
+                addonManager = new AddonManager(new AddonManagerOptions
+                {
+                    ErrorHandler = errorHandler,
+                    DisableMode = disableMode,
+                    CustomGmodInstallPath = settings.CustomGmodInstallPath,
+                    CustomWorkshopPath = settings.CustomWorkshopPath,
+                    EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+                });
                 addonManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
                 await addonManager.InitializeAsync();
+                if (startupPathRecovery.ApplyRepairs)
+                {
+                    await ApplyStartupPathRecoveryRepairsAsync(addonManager, errorHandler);
+                }
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
@@ -466,6 +481,107 @@ public sealed partial class App : Application, IDisposable
             // Best-effort; avoid crashing shutdown.
             SafeFileLogger.TryLogException("App.PendingChangeManager.ApplyPendingChangesAsync", ex);
         }
+    }
+
+    private static async Task<StartupPathRecoveryState> RunStartupPathRecoveryAsync(AppSettings settings, string appDataPath)
+    {
+        var configuration = TryLoadExistingConfiguration(appDataPath);
+        var snapshot = DetectStartupPathSnapshot(settings);
+        var decision = StartupPathRecoveryEvaluator.Evaluate(
+            configuration,
+            snapshot,
+            settings.CustomGmodInstallPath,
+            settings.CustomWorkshopPath);
+
+        if (!decision.ShouldPrompt)
+        {
+            return new StartupPathRecoveryState();
+        }
+
+        var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
+        if (!result.Accepted)
+        {
+            return new StartupPathRecoveryState();
+        }
+
+        if (result.ManualSelection)
+        {
+            settings.CustomGmodInstallPath = result.GmodInstallPath;
+            settings.CustomWorkshopPath = result.WorkshopRootPath;
+        }
+        else
+        {
+            settings.CustomGmodInstallPath = null;
+            settings.CustomWorkshopPath = null;
+        }
+
+        settings.Save();
+        return new StartupPathRecoveryState { ApplyRepairs = true };
+    }
+
+    private static PathSnapshot DetectStartupPathSnapshot(AppSettings settings)
+    {
+        if (PathOverrideResolver.TryCreateSnapshot(
+                settings.CustomGmodInstallPath,
+                settings.CustomWorkshopPath,
+                out var overrideSnapshot,
+                out _))
+        {
+            return overrideSnapshot;
+        }
+
+        try
+        {
+            return new SteamPathDetector().DetectPathSnapshot();
+        }
+        catch (Exception ex)
+        {
+            return new PathSnapshot
+            {
+                HealthIssues = new[] { $"Startup path detection failed: {ex.Message}" }
+            };
+        }
+    }
+
+    private static Configuration? TryLoadExistingConfiguration(string appDataPath)
+    {
+        try
+        {
+            var configPath = Path.Combine(appDataPath, "config.json");
+            if (!File.Exists(configPath))
+            {
+                return null;
+            }
+
+            var json = File.ReadAllText(configPath);
+            return JsonConvert.DeserializeObject<Configuration>(json);
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("App.TryLoadExistingConfiguration", ex);
+            return null;
+        }
+    }
+
+    private static async Task ApplyStartupPathRecoveryRepairsAsync(AddonManager manager, IErrorHandler errorHandler)
+    {
+        try
+        {
+            var metadataResult = await manager.RepairStalePathMetadataAsync();
+            var addonNoMountResult = await manager.MigrateAddonNoMountEntriesAsync();
+            errorHandler.HandleInfo(
+                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}",
+                "StartupPathRecovery");
+        }
+        catch (Exception ex)
+        {
+            errorHandler.HandleWarning($"Startup path recovery repair failed: {ex.Message}", "StartupPathRecovery");
+        }
+    }
+
+    private sealed class StartupPathRecoveryState
+    {
+        public bool ApplyRepairs { get; set; }
     }
 
         private void Cleanup()

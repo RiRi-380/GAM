@@ -861,5 +861,21 @@
   "PathHealth.MetadataRepairComplete": "Metadata修復が完了しました。変更: {0}, スキップ: {1}",
   "PathHealth.AddonNoMountMigrationComplete": "addonnomount移行が完了しました。追加: {0}",
   "PathHealth.CleanupComplete": "Cleanupが完了しました。削除: {0}, スキップ: {1}",
-  "PathHealth.ManagedMigrationComplete": "GAM管理データの移動が完了しました。移動: {0}, スキップ: {1}"
+  "PathHealth.ManagedMigrationComplete": "GAM管理データの移動が完了しました。移動: {0}, スキップ: {1}",
+  "StartupPathRecovery.Title": "GModパスの復旧",
+  "StartupPathRecovery.Heading": "Garry's Mod の場所が変わった可能性があります",
+  "StartupPathRecovery.Description": "前回使っていたインストール先をそのまま使えません。検出された場所を使うか、正しいフォルダを選ぶと、既存のGAM設定を引き継いで起動します。",
+  "StartupPathRecovery.PreviousPaths": "前回の場所",
+  "StartupPathRecovery.CandidatePaths": "検出された場所",
+  "StartupPathRecovery.Reason": "理由",
+  "StartupPathRecovery.BrowseHint": "違う場合は、Garry's Mod のインストールフォルダ、Steamライブラリフォルダ、または steamapps\\workshop\\content\\4000 を選んでください。",
+  "StartupPathRecovery.Browse": "フォルダを選択...",
+  "StartupPathRecovery.UseThis": "この場所を使う",
+  "StartupPathRecovery.Later": "あとで",
+  "StartupPathRecovery.Ready": "この場所に既存のGAM設定を接続できます。",
+  "StartupPathRecovery.NoCandidate": "使える場所を検出できませんでした。手動でフォルダを選んでください。",
+  "StartupPathRecovery.ManualReady": "フォルダを確認しました。この場所で復旧できます。",
+  "StartupPathRecovery.PickerUnavailable": "フォルダ選択を開けませんでした。",
+  "StartupPathRecovery.PickerTitle": "Garry's Mod、Steamライブラリ、または workshop\\content\\4000 を選択",
+  "StartupPathRecovery.InvalidFolder": "このフォルダは使えません: {0}"
 }
