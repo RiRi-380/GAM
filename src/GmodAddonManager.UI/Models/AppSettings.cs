@@ -16,6 +16,8 @@ namespace GmodAddonManager.UI.Models
         public bool EnableLocalAddonsExperimental { get; set; } = false;
         public bool EnableDisableManifestImport { get; set; } = false;
         public string DeveloperModePhrase { get; set; } = "";
+        public string? CustomGmodInstallPath { get; set; }
+        public string? CustomWorkshopPath { get; set; }
         
         private static string SettingsPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

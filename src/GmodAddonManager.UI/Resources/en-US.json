@@ -861,5 +861,21 @@
   "PathHealth.MetadataRepairComplete": "Metadata repair completed. Changed: {0}, skipped: {1}.",
   "PathHealth.AddonNoMountMigrationComplete": "addonnomount migration completed. Added: {0}.",
   "PathHealth.CleanupComplete": "Cleanup completed. Deleted: {0}, skipped: {1}.",
-  "PathHealth.ManagedMigrationComplete": "Managed data migration completed. Moved: {0}, skipped: {1}."
+  "PathHealth.ManagedMigrationComplete": "Managed data migration completed. Moved: {0}, skipped: {1}.",
+  "StartupPathRecovery.Title": "GMod path recovery",
+  "StartupPathRecovery.Heading": "Garry's Mod seems to have moved",
+  "StartupPathRecovery.Description": "GAM could not use the previous install path. Choose the detected location or select the correct folder to keep using your existing GAM settings.",
+  "StartupPathRecovery.PreviousPaths": "Previous location",
+  "StartupPathRecovery.CandidatePaths": "Detected location",
+  "StartupPathRecovery.Reason": "Reason",
+  "StartupPathRecovery.BrowseHint": "If this is not correct, select the Garry's Mod install folder, the Steam library folder, or steamapps\\workshop\\content\\4000.",
+  "StartupPathRecovery.Browse": "Choose folder...",
+  "StartupPathRecovery.UseThis": "Use this",
+  "StartupPathRecovery.Later": "Later",
+  "StartupPathRecovery.Ready": "Ready to reconnect the existing GAM settings to this location.",
+  "StartupPathRecovery.NoCandidate": "No usable location was detected. Choose a folder manually.",
+  "StartupPathRecovery.ManualReady": "Folder accepted. Use this to continue startup recovery.",
+  "StartupPathRecovery.PickerUnavailable": "The folder picker is not available.",
+  "StartupPathRecovery.PickerTitle": "Select Garry's Mod, a Steam library, or workshop\\content\\4000",
+  "StartupPathRecovery.InvalidFolder": "This folder cannot be used: {0}"
 }

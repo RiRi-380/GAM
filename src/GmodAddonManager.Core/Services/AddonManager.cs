@@ -46,6 +46,8 @@ namespace GmodAddonManager.Core.Services
         private readonly WorkshopInstallIndex workshopInstallIndex;
         private readonly WorkshopIconResolver workshopIconResolver;
         private readonly PathSnapshot? pathSnapshot;
+        private readonly string? customGmodInstallPath;
+        private readonly string? customWorkshopPath;
         private readonly SteamWorkshopService steamWorkshopService;
         private readonly UndoManager undoManager;
         private readonly IErrorHandler errorHandler;
@@ -151,6 +153,12 @@ namespace GmodAddonManager.Core.Services
             _maxParallelAddonStateUpdates = options.MaxParallelAddonStateUpdates.HasValue
                 ? Math.Max(1, options.MaxParallelAddonStateUpdates.Value)
                 : Math.Clamp(Environment.ProcessorCount, 2, 6);
+            customGmodInstallPath = string.IsNullOrWhiteSpace(options.CustomGmodInstallPath)
+                ? null
+                : options.CustomGmodInstallPath;
+            customWorkshopPath = string.IsNullOrWhiteSpace(options.CustomWorkshopPath)
+                ? null
+                : options.CustomWorkshopPath;
             steamPathDetector = new SteamPathDetector();
             workshopInstallIndex = new WorkshopInstallIndex(steamPathDetector);
             junctionService = new JunctionService();
@@ -179,17 +187,37 @@ namespace GmodAddonManager.Core.Services
                 ? new HardAddonModeStrategy()
                 : new SoftAddonModeStrategy();
 
-            try
+            if (!string.IsNullOrWhiteSpace(customGmodInstallPath) ||
+                !string.IsNullOrWhiteSpace(customWorkshopPath))
             {
-                pathSnapshot = steamPathDetector.DetectPathSnapshot();
-                LogPathSnapshot(pathSnapshot, "Constructor");
-            }
-            catch (Exception ex)
-            {
-                errorHandler.HandleWarning($"Failed to resolve Steam/GMod path snapshot: {ex.Message}", "Constructor");
+                if (PathOverrideResolver.TryCreateSnapshot(
+                        customGmodInstallPath,
+                        customWorkshopPath,
+                        out var overrideSnapshot,
+                        out var overrideError))
+                {
+                    pathSnapshot = overrideSnapshot;
+                    LogPathSnapshot(pathSnapshot, "Constructor.CustomPathOverride");
+                }
+                else
+                {
+                    errorHandler.HandleWarning($"Failed to use custom path override: {overrideError}", "Constructor");
+                }
             }
 
-            var customWorkshopPath = options.CustomWorkshopPath;
+            if (pathSnapshot == null)
+            {
+                try
+                {
+                    pathSnapshot = steamPathDetector.DetectPathSnapshot();
+                    LogPathSnapshot(pathSnapshot, "Constructor");
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning($"Failed to resolve Steam/GMod path snapshot: {ex.Message}", "Constructor");
+                }
+            }
+
             var hasCustomWorkshopPath = !string.IsNullOrEmpty(customWorkshopPath);
             workshopPath = hasCustomWorkshopPath
                 ? customWorkshopPath!
@@ -252,9 +280,11 @@ namespace GmodAddonManager.Core.Services
             // Detect Gmod root path for settings management (addonnomount.txt)
             try
             {
-                var candidate = hasCustomWorkshopPath
-                    ? null
-                    : pathSnapshot?.GmodInstall?.InstallPath;
+                var candidate = !string.IsNullOrWhiteSpace(customGmodInstallPath)
+                    ? customGmodInstallPath
+                    : hasCustomWorkshopPath
+                        ? Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"))
+                        : pathSnapshot?.GmodInstall?.InstallPath;
                 if (string.IsNullOrWhiteSpace(candidate))
                 {
                     candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
@@ -321,6 +351,22 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
+                if (!string.IsNullOrWhiteSpace(customGmodInstallPath) ||
+                    !string.IsNullOrWhiteSpace(customWorkshopPath))
+                {
+                    if (PathOverrideResolver.TryCreateSnapshot(
+                            customGmodInstallPath,
+                            customWorkshopPath,
+                            out var overrideSnapshot,
+                            out var overrideError))
+                    {
+                        LogPathSnapshot(overrideSnapshot, "PathHealth.CustomPathOverride");
+                        return overrideSnapshot;
+                    }
+
+                    errorHandler.HandleWarning($"Failed to refresh custom path snapshot: {overrideError}", "PathHealth");
+                }
+
                 var snapshot = steamPathDetector.DetectPathSnapshot();
                 LogPathSnapshot(snapshot, "PathHealth");
                 return snapshot;
