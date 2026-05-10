@@ -64,7 +64,7 @@
   "AddonGrid.Header": "アドオン",
   "AddonGrid.BadgeLocal": "ローカル",
   "AddonGrid.BadgeOffAsset": "OFF ASSET",
-  "AddonGrid.OffAssetTooltip": "無効中のアセットにも含まれています: {0}",
+  "AddonGrid.OffAssetTooltip": "他のアセットでOFF: {0}",
   "AddonGrid.NoAddonsFound": "アドオンが見つかりません",
   "AddonGrid.SaveTagHeader": "保存タグ",
   "AddonGrid.SelectionMode": "選択モード",

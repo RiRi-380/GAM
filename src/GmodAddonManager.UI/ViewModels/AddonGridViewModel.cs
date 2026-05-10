@@ -742,7 +742,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         foreach (var asset in config.Assets)
         {
-            if (asset.Enabled || string.Equals(asset.Id, currentAssetId, StringComparison.Ordinal))
+            if (string.Equals(asset.Id, currentAssetId, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -756,6 +756,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             foreach (var addonId in addonIds)
             {
+                if (asset.Enabled && !IsOffState(asset.GetAddonState(addonId)))
+                {
+                    continue;
+                }
+
                 if (!markers.TryGetValue(addonId, out var assetNames))
                 {
                     assetNames = new List<string>();
@@ -770,6 +775,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             kvp => kvp.Key,
             kvp => (IReadOnlyList<string>)kvp.Value,
             StringComparer.Ordinal);
+    }
+
+    private static bool IsOffState(AddonState state)
+    {
+        return state == AddonState.Disabled || state == AddonState.Excluded;
     }
 
     private static void AddStateMarker(
@@ -1292,8 +1302,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         return filterIndex switch
         {
-            1 => !addon.IsDisplayOff,
-            2 => addon.IsDisplayOff,
+            1 => !addon.IsEffectivelyOff,
+            2 => addon.IsEffectivelyOff,
             _ => true
         };
     }
