@@ -15,7 +15,8 @@ namespace GmodAddonManager.Core.Services
         Enable,
         Disable,
         EnableAsset,
-        DisableAsset
+        DisableAsset,
+        ApplyStates
     }
 
     public class PendingChangeManager
@@ -97,6 +98,11 @@ namespace GmodAddonManager.Core.Services
             QueueChanges(changes);
         }
 
+        public void QueueApplyStates()
+        {
+            QueueChange(new AddonChange("apply_states", "*"));
+        }
+
         internal static PendingChangeActionType ParseActionType(string? action)
         {
             return action?.Trim().ToLowerInvariant() switch
@@ -105,6 +111,7 @@ namespace GmodAddonManager.Core.Services
                 "disable" => PendingChangeActionType.Disable,
                 "enable_asset" => PendingChangeActionType.EnableAsset,
                 "disable_asset" => PendingChangeActionType.DisableAsset,
+                "apply_states" => PendingChangeActionType.ApplyStates,
                 _ => PendingChangeActionType.Unknown
             };
         }
@@ -203,6 +210,8 @@ namespace GmodAddonManager.Core.Services
                             break;
                         case PendingChangeActionType.DisableAsset:
                             await addonManager.DisableAssetAsync(change.AddonId);
+                            break;
+                        case PendingChangeActionType.ApplyStates:
                             break;
                         default:
                             throw new InvalidOperationException(

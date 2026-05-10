@@ -1,5 +1,6 @@
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
+using Newtonsoft.Json;
 
 namespace GmodAddonManager.Core.Tests;
 
@@ -87,6 +88,66 @@ public sealed class StartupPathRecoveryTests
         var decision = StartupPathRecoveryEvaluator.Evaluate(config, snapshot);
 
         Assert.False(decision.ShouldPrompt);
+    }
+
+    [Fact]
+    public async Task StartupRecoveryFlow_ReusesExistingConfigAndRewritesCurrentNoMountFromRecoveredState()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var appDataPath = Path.Combine(Path.GetTempPath(), "gam-startup-recovery-appdata-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(appDataPath);
+        try
+        {
+            var config = new Configuration();
+            var asset = new Asset("Recovered Asset") { Enabled = true };
+            asset.AddAddon("123", AddonState.Excluded);
+            config.Assets.Add(asset);
+            config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(oldEnv.WorkshopRootPath, "123"));
+            PathHealthService.UpdatePathState(
+                config,
+                oldEnv.CreateSnapshot(),
+                Path.Combine(appDataPath, "manager"),
+                Path.Combine(appDataPath, "addons"));
+            File.WriteAllText(
+                Path.Combine(appDataPath, "config.json"),
+                JsonConvert.SerializeObject(config, Formatting.Indented));
+            oldEnv.DeleteLayout();
+
+            using var manager = new AddonManager(new AddonManagerOptions
+            {
+                CustomAppDataPath = appDataPath,
+                CustomGmodInstallPath = currentEnv.GmodInstallPath,
+                CustomWorkshopPath = currentEnv.WorkshopRootPath,
+                DisableMode = DisableMode.Soft,
+                DisableCacheScan = true,
+                ScanCacheTtl = TimeSpan.Zero
+            });
+            manager.StateMatchTimeout = TimeSpan.Zero;
+            await manager.InitializeAsync();
+
+            var repairResult = await manager.RepairStalePathMetadataAsync();
+            await manager.UpdateAddonStatesAsync();
+
+            Assert.Equal(1, repairResult.ChangedCount);
+            Assert.Single(manager.GetConfiguration().Assets, a => a.Name == "Recovered Asset");
+            Assert.Equal(Path.Combine(currentEnv.WorkshopRootPath, "123"), manager.GetConfiguration().AddonMetadata["123"].FolderPath);
+            var noMountText = File.ReadAllText(Path.Combine(currentEnv.GmodInstallPath, "garrysmod", "cfg", "addonnomount.txt"));
+            Assert.Contains("123", noMountText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(appDataPath))
+            {
+                Directory.Delete(appDataPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PendingChangeManager_ParsesApplyStatesAction()
+    {
+        Assert.Equal(PendingChangeActionType.ApplyStates, PendingChangeManager.ParseActionType("apply_states"));
     }
 
     private sealed class TestSteamLayout : IDisposable
