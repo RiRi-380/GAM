@@ -127,6 +127,61 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
+    public void StartupPathRecoveryEvaluator_PromptsForUnconfirmedExistingConfig()
+    {
+        using var env = new TestSteamLayout();
+        var config = new Configuration();
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(env.WorkshopRootPath, "123"));
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(
+            config,
+            env.CreateSnapshot(),
+            promptForUnconfirmedExistingConfig: true);
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.True(decision.HasDetectedCandidate);
+        Assert.Equal("Confirm the Garry's Mod and Workshop paths GAM should use.", decision.Reason);
+        Assert.Equal(env.GmodInstallPath, decision.DetectedGmodInstallPath);
+        Assert.Equal(env.WorkshopRootPath, decision.DetectedWorkshopRootPath);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_DoesNotPromptForConfirmedExistingConfig()
+    {
+        using var env = new TestSteamLayout();
+        var config = new Configuration();
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(env.WorkshopRootPath, "123"));
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(
+            config,
+            env.CreateSnapshot(),
+            promptForUnconfirmedExistingConfig: true,
+            confirmedGmodInstallPath: env.GmodInstallPath,
+            confirmedWorkshopRootPath: env.WorkshopRootPath);
+
+        Assert.False(decision.ShouldPrompt);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_PromptsWhenConfirmedPathDiffersFromDetectedPath()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var config = new Configuration();
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(currentEnv.WorkshopRootPath, "123"));
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(
+            config,
+            currentEnv.CreateSnapshot(),
+            promptForUnconfirmedExistingConfig: true,
+            confirmedGmodInstallPath: oldEnv.GmodInstallPath,
+            confirmedWorkshopRootPath: oldEnv.WorkshopRootPath);
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.True(decision.HasDetectedCandidate);
+    }
+
+    [Fact]
     public void StartupPathRecoveryEvaluator_DoesNotPromptWhenPreviousPathStillMatches()
     {
         using var env = new TestSteamLayout();

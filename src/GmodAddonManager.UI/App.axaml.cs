@@ -492,11 +492,18 @@ public sealed partial class App : Application, IDisposable
     {
         var configuration = TryLoadExistingConfiguration(appDataPath);
         var snapshot = DetectStartupPathSnapshot(settings);
+        var pathSignature = BuildPathRecoverySignature(snapshot);
+        var promptForUnconfirmedPaths =
+            !string.IsNullOrWhiteSpace(pathSignature) &&
+            !string.Equals(settings.DismissedPathRecoverySignature, pathSignature, StringComparison.OrdinalIgnoreCase);
         var decision = StartupPathRecoveryEvaluator.Evaluate(
             configuration,
             snapshot,
             settings.CustomGmodInstallPath,
-            settings.CustomWorkshopPath);
+            settings.CustomWorkshopPath,
+            promptForUnconfirmedPaths,
+            settings.ConfirmedGmodInstallPath,
+            settings.ConfirmedWorkshopPath);
 
         if (!decision.ShouldPrompt)
         {
@@ -506,6 +513,12 @@ public sealed partial class App : Application, IDisposable
         var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
         if (!result.Accepted)
         {
+            if (!string.IsNullOrWhiteSpace(pathSignature))
+            {
+                settings.DismissedPathRecoverySignature = pathSignature;
+                settings.Save();
+            }
+
             return new StartupPathRecoveryState();
         }
 
@@ -520,8 +533,37 @@ public sealed partial class App : Application, IDisposable
             settings.CustomWorkshopPath = null;
         }
 
+        settings.ConfirmedGmodInstallPath = result.GmodInstallPath;
+        settings.ConfirmedWorkshopPath = result.WorkshopRootPath;
+        settings.DismissedPathRecoverySignature = null;
         settings.Save();
         return new StartupPathRecoveryState { ApplyRepairs = true };
+    }
+
+    private static string? BuildPathRecoverySignature(PathSnapshot snapshot)
+    {
+        var gmod = snapshot.GmodInstall?.InstallPath;
+        var workshop = snapshot.ActiveWorkshopRoot?.RootPath;
+        if (string.IsNullOrWhiteSpace(gmod) || string.IsNullOrWhiteSpace(workshop))
+        {
+            return null;
+        }
+
+        return $"{NormalizePathForSignature(gmod)}|{NormalizePathForSignature(workshop)}";
+    }
+
+    private static string NormalizePathForSignature(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .ToUpperInvariant();
+        }
+        catch
+        {
+            return path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant();
+        }
     }
 
     private static PathSnapshot DetectStartupPathSnapshot(AppSettings settings)
