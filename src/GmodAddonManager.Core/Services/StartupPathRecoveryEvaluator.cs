@@ -25,7 +25,10 @@ namespace GmodAddonManager.Core.Services
             Configuration? configuration,
             PathSnapshot currentSnapshot,
             string? configuredGmodInstallPath = null,
-            string? configuredWorkshopRootPath = null)
+            string? configuredWorkshopRootPath = null,
+            bool promptForUnconfirmedExistingConfig = false,
+            string? confirmedGmodInstallPath = null,
+            string? confirmedWorkshopRootPath = null)
         {
             var previous = configuration?.PathState?.LastDetectedSnapshot ??
                            configuration?.PathState?.LastKnownGoodSnapshot;
@@ -61,16 +64,27 @@ namespace GmodAddonManager.Core.Services
             var noDetectedCandidate =
                 string.IsNullOrWhiteSpace(detectedGmod) ||
                 string.IsNullOrWhiteSpace(detectedWorkshop);
+            var shouldConfirmExistingConfig =
+                promptForUnconfirmedExistingConfig &&
+                HasExistingInventory(configuration) &&
+                !noDetectedCandidate &&
+                (!PathsEqual(confirmedGmodInstallPath, detectedGmod) ||
+                 !PathsEqual(confirmedWorkshopRootPath, detectedWorkshop));
 
             var shouldPrompt = configuredPathsInvalid ||
                                noDetectedCandidate ||
                                (hasPreviousPath && detectedDifferent) ||
-                               metadataWorkshopDifferent;
+                               metadataWorkshopDifferent ||
+                               shouldConfirmExistingConfig;
 
             return new StartupPathRecoveryDecision
             {
                 ShouldPrompt = shouldPrompt,
-                Reason = BuildReason(configuredPathsInvalid, previousMissing, noDetectedCandidate),
+                Reason = BuildReason(
+                    configuredPathsInvalid,
+                    previousMissing,
+                    noDetectedCandidate,
+                    shouldConfirmExistingConfig),
                 PreviousGmodInstallPath = previousGmod,
                 PreviousWorkshopRootPath = previousWorkshop,
                 DetectedGmodInstallPath = detectedGmod,
@@ -78,7 +92,11 @@ namespace GmodAddonManager.Core.Services
             };
         }
 
-        private static string BuildReason(bool configuredPathsInvalid, bool previousMissing, bool noDetectedCandidate)
+        private static string BuildReason(
+            bool configuredPathsInvalid,
+            bool previousMissing,
+            bool noDetectedCandidate,
+            bool shouldConfirmExistingConfig)
         {
             if (configuredPathsInvalid)
             {
@@ -93,6 +111,11 @@ namespace GmodAddonManager.Core.Services
             if (previousMissing)
             {
                 return "Previous Garry's Mod or Workshop path is missing.";
+            }
+
+            if (shouldConfirmExistingConfig)
+            {
+                return "Confirm the Garry's Mod and Workshop paths GAM should use.";
             }
 
             return "Path recovery is recommended.";
@@ -130,6 +153,23 @@ namespace GmodAddonManager.Core.Services
                 .OrderByDescending(group => group.Count())
                 .Select(group => group.First())
                 .FirstOrDefault();
+        }
+
+        private static bool HasExistingInventory(Configuration? configuration)
+        {
+            if (configuration == null)
+            {
+                return false;
+            }
+
+            if (configuration.AddonMetadata?.Count > 0)
+            {
+                return true;
+            }
+
+            return configuration.Assets?.Any(asset =>
+                asset.Addons.Any(addonId => !string.Equals(addonId, "*", StringComparison.Ordinal)) ||
+                asset.AddonStates.Count > 0) == true;
         }
 
         private static string? TryExtractWorkshopRoot(string? metadataPath, string addonId)
