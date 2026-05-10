@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace GmodAddonManager.Core.Services
 {
@@ -71,6 +72,7 @@ namespace GmodAddonManager.Core.Services
         private const string EnvUpdateIncludePrerelease = "GAM_UPDATE_INCLUDE_PRERELEASE";
         private const string EnvGithubToken = "GAM_GITHUB_TOKEN";
         private const string EnvGithubTokenFallback = "GITHUB_TOKEN";
+        private static readonly TimeSpan UpdateDownloadTimeout = TimeSpan.FromMinutes(5);
 
         private static readonly HttpClient httpClient = new HttpClient();
         private readonly string currentVersion;
@@ -479,16 +481,47 @@ namespace GmodAddonManager.Core.Services
             return !string.IsNullOrWhiteSpace(fileName);
         }
 
-        public async Task DownloadAndInstallUpdateAsync(string downloadUrl)
+        public async Task DownloadAndInstallUpdateAsync(string downloadUrl, CancellationToken cancellationToken = default)
         {
-            var tempPath = Path.Combine(Path.GetTempPath(), "GAM-Update-Setup.exe");
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                throw new ArgumentException("Update download URL is required.", nameof(downloadUrl));
+            }
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"GAM-Update-Setup-{Guid.NewGuid():N}.exe");
             var installerArguments = ResolveInstallerArguments(downloadUrl);
 
-            using (var response = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(UpdateDownloadTimeout);
+
+            try
             {
-                response.EnsureSuccessStatusCode();
-                using var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await response.Content.CopyToAsync(fs);
+                using (var response = await httpClient.GetAsync(
+                    downloadUrl,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    timeoutCts.Token).ConfigureAwait(false))
+                {
+                    response.EnsureSuccessStatusCode();
+                    using var fs = new FileStream(
+                        tempPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize: 81920,
+                        useAsync: true);
+                    using var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                    await CopyStreamAsync(contentStream, fs, timeoutCts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                TryDeleteFile(tempPath);
+                throw new TimeoutException("Update download timed out.", ex);
+            }
+            catch
+            {
+                TryDeleteFile(tempPath);
+                throw;
             }
 
             var launcherPath = Path.Combine(
@@ -497,7 +530,7 @@ namespace GmodAddonManager.Core.Services
             await File.WriteAllTextAsync(
                 launcherPath,
                 BuildInstallerLauncherScript(Process.GetCurrentProcess().Id, tempPath, installerArguments),
-                Encoding.UTF8);
+                Encoding.UTF8).ConfigureAwait(false);
 
             var launcherProcess = Process.Start(CreateInstallerLauncherStartInfo(launcherPath));
             if (launcherProcess == null)
@@ -506,6 +539,34 @@ namespace GmodAddonManager.Core.Services
             }
 
             Environment.Exit(0);
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup for partial update downloads.
+            }
+        }
+
+        private static async Task CopyStreamAsync(
+            Stream source,
+            Stream destination,
+            CancellationToken cancellationToken)
+        {
+            var buffer = new byte[81920];
+            int bytesRead;
+            while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                await destination.WriteAsync(buffer, 0, bytesRead, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         internal static ProcessStartInfo CreateInstallerLauncherStartInfo(string launcherPath)
@@ -541,6 +602,7 @@ namespace GmodAddonManager.Core.Services
                 "} else {",
                 "    Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait",
                 "}",
+                "Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue",
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
                 string.Empty);
         }

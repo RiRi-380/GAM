@@ -38,6 +38,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private int busyProgressTotal = 0;
     private bool isBusyProgressIndeterminate = true;
     private bool isDisableManifestImportEnabled;
+    private bool startupUpdateCheckStarted;
     private readonly CompositeDisposable subscriptions = new();
 
     public MainWindowViewModel(
@@ -123,10 +124,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
     
+    public void StartStartupUpdateCheck()
+    {
+        if (startupUpdateCheckStarted)
+        {
+            return;
+        }
+
+        startupUpdateCheckStarted = true;
+        _ = RunStartupUpdateCheckSafelyAsync();
+    }
+
+    private async Task RunStartupUpdateCheckSafelyAsync()
+    {
+        try
+        {
+            await CheckForUpdatesAfterStartupAsync();
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindowViewModel.CheckForUpdatesAfterStartupAsync", ex);
+        }
+    }
+
     private async Task CheckForUpdatesAfterStartupAsync()
     {
         // 襍ｷ蜍・遘貞ｾ後↓繧｢繝・・繝・・繝医メ繧ｧ繝・け
-        await Task.Delay(5000);
+        await Task.Delay(TimeSpan.FromSeconds(5));
         await CheckForUpdatesAsync();
     }
     
@@ -141,24 +165,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             if (updateResult.Status == UpdateCheckStatus.UpdateAvailable && updateResult.UpdateInfo != null)
             {
                 // 繧｢繝・・繝・・繝医ム繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
-                var dialog = new UpdateDialog
-                {
-                    DataContext = new UpdateDialogViewModel(updateService, updateResult.UpdateInfo)
-                };
-                
                 var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                     ? desktop.MainWindow
                     : null;
                     
                 if (mainWindow != null)
                 {
-                    await dialog.ShowDialog(mainWindow);
+                    await UpdateDialogCoordinator.TryShowAsync(mainWindow, updateService, updateResult.UpdateInfo);
                 }
             }
         }
         catch (Exception ex)
         {
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け縺ｮ繧ｨ繝ｩ繝ｼ縺ｯ辟｡隕・
+            SafeFileLogger.TryLogException("MainWindowViewModel.CheckForUpdatesAsync", ex);
             // Update check failed: {ex.Message}
         }
     }
@@ -354,7 +374,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             isInitialized = true;
             
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け繧帝幕蟋・
-            _ = CheckForUpdatesAfterStartupAsync();
         
             // 襍ｷ蜍墓凾縺ｫ繧ｳ繝ｬ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蟄伜惠遒ｺ隱・
             _ = CheckCollectionExistenceAsync();

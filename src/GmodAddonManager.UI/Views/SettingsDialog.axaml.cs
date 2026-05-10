@@ -264,11 +264,7 @@ public partial class SettingsDialog : Window
 
             if (result.Status == UpdateCheckStatus.UpdateAvailable && result.UpdateInfo != null)
             {
-                var dialog = new UpdateDialog
-                {
-                    DataContext = new UpdateDialogViewModel(updateService, result.UpdateInfo)
-                };
-                await dialog.ShowDialog(this);
+                await UpdateDialogCoordinator.TryShowAsync(this, updateService, result.UpdateInfo);
                 return;
             }
 
