@@ -100,6 +100,7 @@ public sealed class UpdateServiceTests
         Assert.Contains("$installerPath = 'C:\\Temp\\GAM''s Setup.exe'", script);
         Assert.Contains("$installerArguments = '/VERYSILENT /SP-'", script);
         Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait", script);
+        Assert.Contains("Remove-Item -LiteralPath $installerPath", script);
         Assert.Contains("Remove-Item -LiteralPath $PSCommandPath", script);
     }
 

@@ -68,8 +68,19 @@ namespace GmodAddonManager.UI.ViewModels
 
                 await updateService.DownloadAndInstallUpdateAsync(updateInfo.DownloadUrl);
             }
-            catch (Exception)
+            catch (TimeoutException)
             {
+                await ShowErrorAsync(L.Get("UpdateDialog.UpdateTimedOut"));
+                IsUpdating = false;
+            }
+            catch (OperationCanceledException)
+            {
+                await ShowErrorAsync(L.Get("UpdateDialog.UpdateTimedOut"));
+                IsUpdating = false;
+            }
+            catch (Exception ex)
+            {
+                SafeFileLogger.TryLogException("UpdateDialogViewModel.UpdateAsync", ex);
                 await ShowErrorAsync(L.Get("UpdateDialog.UpdateFailed"));
                 IsUpdating = false;
             }
