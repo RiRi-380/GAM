@@ -194,7 +194,8 @@
                                       ColumnDefinitions="Auto,*"
                                       VerticalAlignment="Center">
                                     <StackPanel Grid.Column="0"
-                                               Orientation="Horizontal">
+                                               Orientation="Horizontal"
+                                               IsVisible="{Binding CanEditAddonDefaultState}">
                                         <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
                                                     Content="{loc:Localize AssetList.Enabled}"
                                                     IsChecked="{Binding IsEnabledState}"
@@ -232,6 +233,13 @@
                                             </RadioButton.Styles>
                                         </RadioButton>
                                     </StackPanel>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding DisableManifestAssetStateText}"
+                                               IsVisible="{Binding IsDisableManifestAsset}"
+                                               Foreground="#F44336"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center"/>
 
                                     <Button Grid.Column="1"
                                             Command="{Binding ApplyExclusiveCommand}"
@@ -277,6 +285,17 @@
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Center"
                                             Spacing="6">
+                                    <ToggleButton Command="{Binding ToggleEnabledCommand}"
+                                                  IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  IsVisible="{Binding CanToggleAssetActive}"
+                                                  Content="{Binding AssetActiveLabel}"
+                                                  ToolTip.Tip="{Binding AssetActiveTooltip}"
+                                                  MinWidth="42"
+                                                  Height="24"
+                                                  Padding="8,2"
+                                                  FontSize="11"
+                                                  VerticalContentAlignment="Center"
+                                                  HorizontalContentAlignment="Center"/>
                                     <Button Command="{Binding DeleteCommand}"
                                             Width="24" Height="24"
                                             ToolTip.Tip="{loc:Localize AssetList.DeleteTooltip}"

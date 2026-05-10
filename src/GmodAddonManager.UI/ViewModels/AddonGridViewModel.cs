@@ -48,7 +48,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private AddonItemViewModel? selectedAddon;
     private bool isSelectionMode;
     private bool hasSelectedAddons;
-    private int addonFilterIndex = 0; // 0=全て, 1=通常のみ, 2=キャッシュのみ, 3=ローカルのみ
+    private int addonFilterIndex = 0; // 0=All, 1=Enabled, 2=Disabled/Excluded
     private DashboardViewModel? dashboardViewModel;
     private bool enableBackgroundTitleUpdates;
     private bool enableBackgroundAddonPreload;
@@ -59,8 +59,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private readonly System.Threading.SemaphoreSlim visibleLoadSemaphore = new System.Threading.SemaphoreSlim(3, 3);
     private readonly object visibleRangeLock = new object();
     private CancellationTokenSource? visibleRangeCts;
-    private HashSet<string>? cachedExcludedAddonIds;
-    private DateTime cachedExcludedAddonIdsUpdated = DateTime.MinValue;
     private bool disposed;
     private bool metadataSupplementUiSnapshotErrorLogged;
     private bool metadataSupplementCacheReadErrorLogged;
@@ -699,30 +697,23 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         public string? Type { get; set; }
     }
 
-    private HashSet<string> BuildExcludedAddonIds(Configuration config)
+    private Dictionary<string, AddonState> BuildAddonStateMarkers(Configuration config)
     {
-        var excluded = new HashSet<string>(StringComparer.Ordinal);
+        var markers = new Dictionary<string, AddonState>(StringComparer.Ordinal);
         var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
 
         foreach (var asset in config.Assets)
         {
+            if (!asset.Enabled)
+            {
+                continue;
+            }
+
             if (asset.ContainsAllAddons())
             {
-                if (asset.DefaultAddonState == AddonState.Excluded)
+                foreach (var addonId in allAddonIds)
                 {
-                    foreach (var addonId in allAddonIds)
-                    {
-                        excluded.Add(addonId);
-                    }
-                    return excluded;
-                }
-
-                foreach (var kvp in asset.AddonStates)
-                {
-                    if (kvp.Value == AddonState.Excluded)
-                    {
-                        excluded.Add(kvp.Key);
-                    }
+                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
                 }
             }
             else
@@ -734,15 +725,69 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         continue;
                     }
 
-                    if (asset.GetAddonState(addonId) == AddonState.Excluded)
-                    {
-                        excluded.Add(addonId);
-                    }
+                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
                 }
             }
         }
 
-        return excluded;
+        return markers;
+    }
+
+    private Dictionary<string, IReadOnlyList<string>> BuildInactiveAssetMembershipMarkers(
+        Configuration config,
+        string? currentAssetId)
+    {
+        var markers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
+
+        foreach (var asset in config.Assets)
+        {
+            if (asset.Enabled || string.Equals(asset.Id, currentAssetId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var assetName = string.IsNullOrWhiteSpace(asset.Name)
+                ? asset.Id
+                : asset.Name.Trim();
+            var addonIds = asset.ContainsAllAddons()
+                ? allAddonIds
+                : asset.Addons.Where(id => id != "*");
+
+            foreach (var addonId in addonIds)
+            {
+                if (!markers.TryGetValue(addonId, out var assetNames))
+                {
+                    assetNames = new List<string>();
+                    markers[addonId] = assetNames;
+                }
+
+                assetNames.Add(assetName);
+            }
+        }
+
+        return markers.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<string>)kvp.Value,
+            StringComparer.Ordinal);
+    }
+
+    private static void AddStateMarker(
+        Dictionary<string, AddonState> markers,
+        string addonId,
+        AddonState state)
+    {
+        if (state != AddonState.Excluded && state != AddonState.Disabled)
+        {
+            return;
+        }
+
+        if (markers.TryGetValue(addonId, out var existing) && existing == AddonState.Excluded)
+        {
+            return;
+        }
+
+        markers[addonId] = state;
     }
 
     public ObservableCollection<AddonItemViewModel> AllAddons
@@ -1101,32 +1146,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             var query = AllAddons.AsEnumerable();
             var config = addonManager.GetConfiguration();
-            if (cachedExcludedAddonIds == null || config.LastUpdated != cachedExcludedAddonIdsUpdated)
-            {
-                cachedExcludedAddonIds = BuildExcludedAddonIds(config);
-                cachedExcludedAddonIdsUpdated = config.LastUpdated;
-            }
+            RefreshAddonStateMarkers(config);
 
-            var excludedAddonIds = cachedExcludedAddonIds;
             foreach (var addon in AllAddons)
             {
-                addon.SetExcludedAddonIds(excludedAddonIds);
+                addon.SetCurrentAsset(CurrentAsset);
             }
 
-            // Normal/Cacheフィルタ
-            switch (addonFilterIndex)
-            {
-                case 1: // 通常のみ
-                    query = query.Where(a => !a.IsGmaFile && !a.IsLocal);
-                    break;
-                case 2: // キャッシュのみ
-                    query = query.Where(a => a.IsGmaFile && !a.IsLocal);
-                    break;
-                case 3: // ローカルのみ
-                    query = query.Where(a => a.IsLocal);
-                    break;
-                // case 0: 全て表示（フィルタなし）
-            }
+            // State filter: keep border semantics separate from inactive asset membership badges.
+            query = query.Where(addon => MatchesAddonStateFilter(addon, addonFilterIndex));
 
             // アセットフィルタ
             if (ShowOnlyAssetAddons)
@@ -1196,8 +1224,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var newFilteredAddons = new ObservableCollection<AddonItemViewModel>();
             foreach (var addon in results)
             {
-                // 現在のアセットを設定して状態を更新
-                addon.SetCurrentAsset(CurrentAsset);
                 newFilteredAddons.Add(addon);
             }
             
@@ -1260,6 +1286,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         return count;
+    }
+
+    private static bool MatchesAddonStateFilter(AddonItemViewModel addon, int filterIndex)
+    {
+        return filterIndex switch
+        {
+            1 => !addon.IsDisplayOff,
+            2 => addon.IsDisplayOff,
+            _ => true
+        };
     }
 
     private static bool MatchesFilterSelections(
@@ -2056,11 +2092,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                             var current = 0;
                             foreach (var addon in selectedAddons)
                             {
+                                var state = currentAsset.GetAddonState(addon.AddonId);
+
                                 // ジャンクションアセットから削除
                                 addonManager.RemoveAddonFromAsset(currentAsset.Id, addon.AddonId);
                                 
-                                // 対象アセットに追加（これによりExcluded状態が解除される）
-                                addonManager.AddAddonToAsset(result.SelectedAsset.Id, addon.AddonId);
+                                // 対象アセットに追加（個別状態も保持する）
+                                addonManager.AddAddonToAsset(result.SelectedAsset.Id, addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, selectedAddons.Count);
                             }
@@ -2155,13 +2193,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         {
                             try
                             {
+                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
+
                                 // ジャンクション送りの場合、元のアセットから削除
                                 if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
                                 {
                                     CurrentAsset.RemoveAddon(addon.AddonId);
                                 }
                                 
-                                selectedAsset.AddAddon(addon.AddonId);
+                                selectedAsset.AddAddon(addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, newAddons.Count);
                                 addedCount++;
@@ -2212,13 +2252,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         {
                             try
                             {
+                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
+
                                 // ジャンクション送りの場合、元のアセットから削除
                                 if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
                                 {
                                     CurrentAsset.RemoveAddon(addon.AddonId);
                                 }
                                 
-                                selectedAsset.AddAddon(addon.AddonId);
+                                selectedAsset.AddAddon(addon.AddonId, state);
                                 current++;
                                 progressDialog?.UpdateProgress(current, selectedAddons.Count);
                                 addedCount++;
@@ -2678,8 +2720,19 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             {
                 var dialogService = new DialogService();
                 await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.StateChangeFailed"));
-            }
         }
+    }
+
+    private void RefreshAddonStateMarkers(Configuration config)
+    {
+        var addonStateMarkers = BuildAddonStateMarkers(config);
+        var inactiveAssetMembershipMarkers = BuildInactiveAssetMembershipMarkers(config, CurrentAsset?.Id);
+        foreach (var addon in AllAddons)
+        {
+            addon.SetAddonStateMarkers(addonStateMarkers);
+            addon.SetInactiveAssetMembershipMarkers(inactiveAssetMembershipMarkers);
+        }
+    }
 
     public void Dispose()
     {

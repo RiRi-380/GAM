@@ -8,14 +8,17 @@
         Title="{loc:Localize Settings.Title}"
         Width="700"
         Height="600"
+        MinWidth="700"
+        MinHeight="600"
         WindowStartupLocation="CenterOwner"
-        CanResize="False">
+        CanResize="True">
     
     <DockPanel Margin="30">
         <!-- ヘッダー -->
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
             <TextBlock Text="{loc:Localize Settings.Header}" FontSize="24" FontWeight="Bold"/>
             <TextBlock Text="{loc:Localize Settings.Description}" Opacity="0.7" Margin="0,5,0,0"/>
+            <TextBlock Name="VersionText" Opacity="0.65" FontSize="12" Margin="0,8,0,0"/>
         </StackPanel>
         
         <!-- ボタン -->
@@ -77,6 +80,26 @@
                                 <TextBlock Text="{loc:Localize Settings.SoftDisableDescription}" Opacity="0.7" FontSize="12" Margin="20,0,0,0"/>
                             </StackPanel>
                         </Expander>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Click="OnPathRecovery"
+                                    Width="220"
+                                    HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <PathIcon Data="{StaticResource FolderIcon}" Width="16" Height="16"/>
+                                    <TextBlock Text="{loc:Localize Settings.PathRecoveryButton}"/>
+                                </StackPanel>
+                            </Button>
+
+                            <Button Click="OnPathHealth"
+                                    Width="220"
+                                    HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
+                                    <TextBlock Text="{loc:Localize Settings.PathHealthButton}"/>
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
                 

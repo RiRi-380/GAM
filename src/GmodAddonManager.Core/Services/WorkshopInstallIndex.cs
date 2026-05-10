@@ -96,6 +96,11 @@ namespace GmodAddonManager.Core.Services
                             continue;
                         }
 
+                        if (!AddonPayloadValidator.HasValidAddonPayload(dir))
+                        {
+                            continue;
+                        }
+
                         if (!index.ContainsKey(name))
                         {
                             index[name] = dir;

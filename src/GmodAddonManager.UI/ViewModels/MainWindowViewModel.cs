@@ -4,6 +4,8 @@ using ReactiveUI;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -38,6 +40,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private int busyProgressTotal = 0;
     private bool isBusyProgressIndeterminate = true;
     private bool isDisableManifestImportEnabled;
+    private bool startupUpdateCheckStarted;
     private readonly CompositeDisposable subscriptions = new();
 
     public MainWindowViewModel(
@@ -123,10 +126,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
     
+    public void StartStartupUpdateCheck()
+    {
+        if (startupUpdateCheckStarted)
+        {
+            return;
+        }
+
+        startupUpdateCheckStarted = true;
+        _ = RunStartupUpdateCheckSafelyAsync();
+    }
+
+    private async Task RunStartupUpdateCheckSafelyAsync()
+    {
+        try
+        {
+            await CheckForUpdatesAfterStartupAsync();
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindowViewModel.CheckForUpdatesAfterStartupAsync", ex);
+        }
+    }
+
     private async Task CheckForUpdatesAfterStartupAsync()
     {
         // 襍ｷ蜍・遘貞ｾ後↓繧｢繝・・繝・・繝医メ繧ｧ繝・け
-        await Task.Delay(5000);
+        await Task.Delay(TimeSpan.FromSeconds(5));
         await CheckForUpdatesAsync();
     }
     
@@ -134,31 +160,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+            var currentVersion = GetCurrentVersion();
             var updateService = CreateUpdateService(currentVersion);
             
-            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: false);
+            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: true);
             if (updateResult.Status == UpdateCheckStatus.UpdateAvailable && updateResult.UpdateInfo != null)
             {
                 // 繧｢繝・・繝・・繝医ム繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
-                var dialog = new UpdateDialog
-                {
-                    DataContext = new UpdateDialogViewModel(updateService, updateResult.UpdateInfo)
-                };
-                
                 var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                     ? desktop.MainWindow
                     : null;
                     
                 if (mainWindow != null)
                 {
-                    await dialog.ShowDialog(mainWindow);
+                    await UpdateDialogCoordinator.TryShowAsync(mainWindow, updateService, updateResult.UpdateInfo);
                 }
             }
         }
         catch (Exception ex)
         {
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け縺ｮ繧ｨ繝ｩ繝ｼ縺ｯ辟｡隕・
+            SafeFileLogger.TryLogException("MainWindowViewModel.CheckForUpdatesAsync", ex);
             // Update check failed: {ex.Message}
         }
     }
@@ -166,6 +188,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private static UpdateService CreateUpdateService(string currentVersion)
     {
         return new UpdateService(currentVersion);
+    }
+
+    private static string GetCurrentVersion()
+    {
+        return Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "1.0.0";
     }
 
     public string SearchText
@@ -345,7 +376,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             isInitialized = true;
             
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け繧帝幕蟋・
-            _ = CheckForUpdatesAfterStartupAsync();
         
             // 襍ｷ蜍墓凾縺ｫ繧ｳ繝ｬ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蟄伜惠遒ｺ隱・
             _ = CheckCollectionExistenceAsync();
@@ -534,6 +564,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 驥崎､・ｒ髯､蜴ｻ・郁､・焚繧｢繧ｻ繝・ヨ縺ｫ蜷ｫ縺ｾ繧後ｋ繧｢繝峨が繝ｳ繧定・・・・
             enabledAddons = Math.Min(enabledAddons, totalAddons - disabledAddons);
+
+            var finalStates = addonManager.GetFinalAddonStates();
+            totalAddons = finalStates.Count;
+            enabledAddons = finalStates.Count(kvp => kvp.Value);
+            disabledAddons = finalStates.Count(kvp => !kvp.Value);
             
             // 繝輔ぃ繧､繝ｫ繧ｵ繧､繧ｺ繧定ｨ育ｮ・
             long totalSize = 0;
@@ -1097,10 +1132,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 _ = RunSettingsActionSafeAsync(RestoreOriginalAsync, "RestoreOriginalRequested");
             EventHandler manualMigrationRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(MigrateAddonsAsync, "ManualMigrationRequested");
+            EventHandler pathHealthRequestedHandler = (_, _) =>
+                _ = RunSettingsActionSafeAsync(OpenPathHealthAsync, "PathHealthRequested");
+            EventHandler pathRecoveryRequestedHandler = (_, _) =>
+                _ = RunSettingsActionSafeAsync(RunManualPathRecoveryAsync, "PathRecoveryRequested");
 
             dialog.ResetManagerRequested += resetRequestedHandler;
             dialog.RestoreOriginalRequested += restoreRequestedHandler;
             dialog.ManualMigrationRequested += manualMigrationRequestedHandler;
+            dialog.PathHealthRequested += pathHealthRequestedHandler;
+            dialog.PathRecoveryRequested += pathRecoveryRequestedHandler;
             
             var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
@@ -1122,6 +1163,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 dialog.ResetManagerRequested -= resetRequestedHandler;
                 dialog.RestoreOriginalRequested -= restoreRequestedHandler;
                 dialog.ManualMigrationRequested -= manualMigrationRequestedHandler;
+                dialog.PathHealthRequested -= pathHealthRequestedHandler;
+                dialog.PathRecoveryRequested -= pathRecoveryRequestedHandler;
             }
 
             // 險ｭ螳壼､画峩繧貞渚譏
@@ -1173,6 +1216,130 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 $"MainWindowViewModel.{actionName}",
                 ex);
         }
+    }
+
+    private async Task OpenPathHealthAsync()
+    {
+        var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow
+            : null;
+
+        if (mainWindow == null)
+        {
+            var dialogService = new DialogService();
+            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
+            return;
+        }
+
+        var dialog = new PathHealthDialog(new PathHealthViewModel(addonManager));
+        await dialog.ShowDialog(mainWindow);
+        await RefreshAddonsAsync(rescanWorkshop: false, showProgress: false);
+    }
+
+    private async Task RunManualPathRecoveryAsync()
+    {
+        var settings = AppSettings.Load();
+        var appDataPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GmodAddonManager");
+
+        var result = await StartupPathRecoveryCoordinator.RunManualAsync(settings, appDataPath);
+        if (!result.Accepted)
+        {
+            return;
+        }
+
+        var dialogService = new DialogService();
+        var errorHandler = new UIErrorHandler(dialogService);
+        using (BeginBusy(L.Get("Busy.RepairingPaths")))
+        using (var repairManager = new AddonManager(new AddonManagerOptions
+        {
+            ErrorHandler = errorHandler,
+            DisableMode = DisableMode.Soft,
+            CustomGmodInstallPath = settings.CustomGmodInstallPath,
+            CustomWorkshopPath = settings.CustomWorkshopPath,
+            EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+        }))
+        {
+            repairManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
+            await repairManager.InitializeAsync();
+            var repairPendingChangeManager = new PendingChangeManager(
+                repairManager,
+                repairManager.GetManagerPath(),
+                errorHandler);
+            await StartupPathRecoveryCoordinator.ApplyRepairsAsync(
+                repairManager,
+                repairPendingChangeManager,
+                processWatcher,
+                errorHandler);
+        }
+
+        await dialogService.ShowInfoAsync(
+            L.Get("Settings.PathRecoveryAppliedTitle"),
+            L.Get("Settings.PathRecoveryAppliedMessage"));
+        await TryRestartApplicationAsync(dialogService);
+    }
+
+    private static async Task<bool> TryRestartApplicationAsync(IDialogService dialogService)
+    {
+        var processPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrWhiteSpace(processPath))
+        {
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.RestartFailed", "Executable path not found."));
+            return false;
+        }
+
+        try
+        {
+            var workingDirectory = Path.GetDirectoryName(processPath);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = processPath,
+                WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                    ? Environment.CurrentDirectory
+                    : workingDirectory,
+                UseShellExecute = false
+            };
+
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            if (Avalonia.Application.Current is App app)
+            {
+                app.ReleaseApplicationLockForRestart();
+            }
+
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                await dialogService.ShowErrorAsync(
+                    L.Get("Error.Title"),
+                    L.Format("Error.RestartFailed", L.Get("Error.Unknown")));
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.RestartFailed", ex.Message));
+            return false;
+        }
+
+        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.Shutdown();
+        }
+        else
+        {
+            Environment.Exit(0);
+        }
+
+        return true;
     }
     
     private async Task ResetManagerAsync()

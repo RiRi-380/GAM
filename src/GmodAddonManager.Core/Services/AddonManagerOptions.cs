@@ -7,6 +7,7 @@ namespace GmodAddonManager.Core.Services
     {
         public DisableMode DisableMode { get; set; } = DisableMode.Soft;
         public string? CustomWorkshopPath { get; set; }
+        public string? CustomGmodInstallPath { get; set; }
         public string? CustomAppDataPath { get; set; }
         public string? CustomGmodCachePath { get; set; }
         public IReadOnlyList<string>? CustomWorkshopCacheFilePaths { get; set; }
