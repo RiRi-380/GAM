@@ -206,10 +206,10 @@ namespace GmodAddonManager.Core.Services
                             addonManager.DisableAddon(change.AddonId);
                             break;
                         case PendingChangeActionType.EnableAsset:
-                            await addonManager.EnableAssetAsync(change.AddonId);
+                            await addonManager.SetAssetEnabledAsync(change.AddonId, enabled: true);
                             break;
                         case PendingChangeActionType.DisableAsset:
-                            await addonManager.DisableAssetAsync(change.AddonId);
+                            await addonManager.SetAssetEnabledAsync(change.AddonId, enabled: false);
                             break;
                         case PendingChangeActionType.ApplyStates:
                             break;

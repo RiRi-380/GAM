@@ -564,6 +564,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 驥崎､・ｒ髯､蜴ｻ・郁､・焚繧｢繧ｻ繝・ヨ縺ｫ蜷ｫ縺ｾ繧後ｋ繧｢繝峨が繝ｳ繧定・・・・
             enabledAddons = Math.Min(enabledAddons, totalAddons - disabledAddons);
+
+            var finalStates = addonManager.GetFinalAddonStates();
+            totalAddons = finalStates.Count;
+            enabledAddons = finalStates.Count(kvp => kvp.Value);
+            disabledAddons = finalStates.Count(kvp => !kvp.Value);
             
             // 繝輔ぃ繧､繝ｫ繧ｵ繧､繧ｺ繧定ｨ育ｮ・
             long totalSize = 0;

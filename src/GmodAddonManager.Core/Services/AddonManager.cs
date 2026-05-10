@@ -4529,6 +4529,11 @@ namespace GmodAddonManager.Core.Services
             return BuildSnapshot(BuildExpectedStates(), scope);
         }
 
+        public IReadOnlyDictionary<string, bool> GetFinalAddonStates()
+        {
+            return BuildExpectedStates();
+        }
+
         public string ComputeStateHash(AddonStateSnapshot snapshot)
         {
             using var sha = SHA256.Create();
@@ -4540,13 +4545,11 @@ namespace GmodAddonManager.Core.Services
         private Dictionary<string, bool> BuildExpectedStates()
         {
             var enabledAssets = configuration.Assets.Where(asset => asset.Enabled).ToList();
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
-            return BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+            return BuildExpectedStatesForAssets(enabledAssets);
         }
 
         private Dictionary<string, bool> BuildExpectedStatesForAssets(
-            IReadOnlyList<Asset> enabledAssets,
-            Asset? subscribeAsset)
+            IReadOnlyList<Asset> enabledAssets)
         {
             var states = new Dictionary<string, bool>(StringComparer.Ordinal);
 
@@ -4559,7 +4562,7 @@ namespace GmodAddonManager.Core.Services
                     continue;
                 }
 
-                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
+                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets);
             }
 
             return states;
@@ -4599,8 +4602,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             var enabledAssets = configuration.Assets.Where(a => a.Id == assetId).ToList();
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
-            var states = BuildExpectedStatesForAssets(enabledAssets, subscribeAsset);
+            var states = BuildExpectedStatesForAssets(enabledAssets);
             return BuildSnapshot(states, GetExpectedScopeLabel(assetSpecific: true));
         }
 
@@ -5800,7 +5802,7 @@ namespace GmodAddonManager.Core.Services
             };
             undoManager.RecordAction(undoAction);
 
-            asset.Enabled = false;
+            asset.Enabled = true;
             
             foreach (var addonId in addonIds)
             {
@@ -5812,6 +5814,49 @@ namespace GmodAddonManager.Core.Services
             }
             
             // Initialize WorkshopIconResolver
+            try
+            {
+                using var suppressRecording = undoManager.SuppressRecording();
+                await UpdateAddonStatesAsync(progress);
+            }
+            finally
+            {
+                undoManager.MoveToTop(undoAction);
+            }
+        }
+
+        public async Task SetAssetEnabledAsync(
+            string assetId,
+            bool enabled,
+            IProgress<(int current, int total)>? progress = null,
+            bool updateAddonStates = true)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset == null || asset.Enabled == enabled)
+            {
+                return;
+            }
+
+            var undoAction = new UndoAction(
+                enabled ? UndoActionType.AssetEnabled : UndoActionType.AssetDisabled,
+                $"{(enabled ? "Activated" : "Deactivated")} asset '{asset.Name}'")
+            {
+                AssetId = assetId,
+                AssetName = asset.Name,
+                PreviousEnabledState = asset.Enabled,
+                PreviousDefaultAddonState = asset.DefaultAddonState,
+                IsAssetToggle = true,
+                NewAddonState = asset.DefaultAddonState
+            };
+            undoManager.RecordAction(undoAction);
+
+            asset.Enabled = enabled;
+
+            if (!updateAddonStates)
+            {
+                return;
+            }
+
             try
             {
                 using var suppressRecording = undoManager.SuppressRecording();
@@ -5867,7 +5912,7 @@ namespace GmodAddonManager.Core.Services
             };
             undoManager.RecordAction(undoAction);
 
-            asset.Enabled = newDefaultState != AddonState.Disabled;
+            asset.Enabled = true;
             asset.DefaultAddonState = newDefaultState;
 
             foreach (var addonId in addonIds)
@@ -6939,17 +6984,17 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         private bool CalculateFinalAddonState(string addonId)
         {
-            var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
             var enabledAssets = configuration.Assets.Where(a => a.Enabled).ToList();
-            return CalculateFinalAddonState(addonId, enabledAssets, subscribeAsset);
+            return CalculateFinalAddonState(addonId, enabledAssets);
         }
 
         private static bool CalculateFinalAddonState(
             string addonId,
-            IReadOnlyList<Asset> enabledAssets,
-            Asset? subscribeAsset)
+            IReadOnlyList<Asset> enabledAssets)
         {
-            // Initialize WorkshopIconResolver
+            var disabledByEnabledAsset = false;
+            var enabledByEnabledAsset = false;
+
             foreach (var asset in enabledAssets)
             {
                 if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
@@ -6957,58 +7002,25 @@ namespace GmodAddonManager.Core.Services
                     var state = asset.GetAddonState(addonId);
                     if (state == AddonState.Excluded)
                     {
-                        return false; // 除外されている場合は必ず無効
+                        return false;
                     }
-                }
-            }
-
-            // Initialize WorkshopIconResolver
-            bool isInSubscribe = false;
-            bool isSubscribeEnabled = false;
-            AddonState subscribeState = AddonState.Disabled;
-
-            if (subscribeAsset != null)
-            {
-                isSubscribeEnabled = enabledAssets.Any(asset => asset.Id == subscribeAsset.Id);
-                if (subscribeAsset.ContainsAllAddons() || subscribeAsset.Addons.Contains(addonId))
-                {
-                    isInSubscribe = true;
-                    subscribeState = subscribeAsset.GetAddonState(addonId);
-                }
-            }
-
-            // Initialize WorkshopIconResolver
-            foreach (var asset in enabledAssets)
-            {
-                if (asset.IsSystem) continue;
-
-                if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
-                {
-                    var state = asset.GetAddonState(addonId);
-
-                    if (state == AddonState.Enabled)
+                    if (state == AddonState.Disabled)
                     {
-                        return true; // 有効状態のアセットがあれば有効
+                        disabledByEnabledAsset = true;
                     }
-                    else if (state == AddonState.Disabled)
+                    else if (state == AddonState.Enabled)
                     {
-                        // Initialize WorkshopIconResolver
-                        if (isInSubscribe && isSubscribeEnabled && subscribeState != AddonState.Excluded)
-                        {
-                            return true;
-                        }
+                        enabledByEnabledAsset = true;
                     }
                 }
             }
 
-            // Initialize WorkshopIconResolver
-            if (subscribeAsset != null)
+            if (disabledByEnabledAsset)
             {
-                // Initialize WorkshopIconResolver
-                return isSubscribeEnabled && isInSubscribe && subscribeState == AddonState.Enabled;
+                return false;
             }
 
-            return false;
+            return enabledByEnabledAsset;
         }
         
         /// <summary>

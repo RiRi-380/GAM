@@ -220,6 +220,9 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(VersionDisplay));
 
             this.RaisePropertyChanged(nameof(ShareButtonText));
+            this.RaisePropertyChanged(nameof(AssetActiveLabel));
+            this.RaisePropertyChanged(nameof(AssetActiveTooltip));
+            this.RaisePropertyChanged(nameof(DisableManifestAssetStateText));
 
         }
 
@@ -283,7 +286,12 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         get => isEnabled;
 
-        set => SetAndRaise(ref isEnabled, value);
+        set
+        {
+            SetAndRaise(ref isEnabled, value);
+            this.RaisePropertyChanged(nameof(AssetActiveLabel));
+            this.RaisePropertyChanged(nameof(AssetActiveTooltip));
+        }
 
     }
 
@@ -351,6 +359,18 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
     public bool CanDelete => !IsSystem && Id != "subscribe-system-asset" && Id != "junction-system-asset";
     public bool CanManageVersions => Id != "subscribe-system-asset";
+    public bool CanToggleAssetActive => Id != "subscribe-system-asset";
+    public bool IsDisableManifestAsset =>
+        Id == DisableManifestImportServiceConstants.AssetId ||
+        Id.StartsWith(DisableManifestImportServiceConstants.NewAssetIdPrefix, StringComparison.Ordinal);
+    public bool CanEditAddonDefaultState => !IsDisableManifestAsset;
+    public string AssetActiveLabel => IsEnabled
+        ? L.Get("AssetList.AssetActiveOn")
+        : L.Get("AssetList.AssetActiveOff");
+    public string AssetActiveTooltip => IsEnabled
+        ? L.Get("AssetList.AssetActiveOnTooltip")
+        : L.Get("AssetList.AssetActiveOffTooltip");
+    public string DisableManifestAssetStateText => L.Get("AssetList.DisableManifestAssetState");
 
     public ReactiveCommand<Unit, Unit> ToggleEnabledCommand { get; }
 
@@ -573,7 +593,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
     {
 
-        if (!CanManageVersions)
+        if (!CanToggleAssetActive)
         {
             return;
         }
@@ -581,6 +601,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         try
 
         {
+            var targetEnabled = !IsEnabled;
 
             if (processWatcher.IsGmodRunning)
 
@@ -588,13 +609,11 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
                 // Gmod縺悟ｮ溯｡御ｸｭ縺ｮ蝣ｴ蜷医・螟画峩繧剃ｿ晉蕗
 
-                pendingChangeManager.AddPendingChange(
-
-                    IsEnabled ? "disable" : "enable",
-
-                    Id
-
-                );
+                await addonManager.SetAssetEnabledAsync(Id, targetEnabled, updateAddonStates: false);
+                await addonManager.SaveConfigurationAsync();
+                pendingChangeManager.QueueApplyStates();
+                IsEnabled = targetEnabled;
+                asset.Enabled = targetEnabled;
 
                 return;
 
@@ -644,27 +663,13 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             // 蜊ｳ蠎ｧ縺ｫ蛻・ｊ譖ｿ縺・
 
-            if (IsEnabled)
-
-            {
-
-                await addonManager.DisableAssetAsync(Id, progress);
-
-            }
-
-            else
-
-            {
-
-                await addonManager.EnableAssetAsync(Id, progress);
-
-            }
+            await addonManager.SetAssetEnabledAsync(Id, targetEnabled, progress);
 
 
 
             await addonManager.SaveConfigurationAsync();
 
-            IsEnabled = !IsEnabled;
+            IsEnabled = targetEnabled;
 
             asset.Enabled = IsEnabled;
 
@@ -1715,6 +1720,9 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(IsExcludedState));
 
         this.RaisePropertyChanged(nameof(AssetStateColor));
+        this.RaisePropertyChanged(nameof(AssetActiveLabel));
+        this.RaisePropertyChanged(nameof(AssetActiveTooltip));
+        this.RaisePropertyChanged(nameof(DisableManifestAssetStateText));
 
 
 
