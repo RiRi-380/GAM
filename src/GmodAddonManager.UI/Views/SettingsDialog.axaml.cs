@@ -242,32 +242,37 @@ public partial class SettingsDialog : Window
     
     private void OnResetManager(object? sender, RoutedEventArgs e)
     {
+        var requested = ResetManagerRequested;
         Close();
-        ResetManagerRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
     
     private void OnRestoreOriginal(object? sender, RoutedEventArgs e)
     {
+        var requested = RestoreOriginalRequested;
         Close();
-        RestoreOriginalRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnManualMigration(object? sender, RoutedEventArgs e)
     {
+        var requested = ManualMigrationRequested;
         Close();
-        ManualMigrationRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnPathHealth(object? sender, RoutedEventArgs e)
     {
+        var requested = PathHealthRequested;
         Close();
-        PathHealthRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnPathRecovery(object? sender, RoutedEventArgs e)
     {
+        var requested = PathRecoveryRequested;
         Close();
-        PathRecoveryRequested?.Invoke(this, EventArgs.Empty);
+        requested?.Invoke(this, EventArgs.Empty);
     }
     
     private async void OnCheckForUpdate(object? sender, RoutedEventArgs e)
