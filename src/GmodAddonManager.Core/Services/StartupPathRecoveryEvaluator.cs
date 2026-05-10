@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using GmodAddonManager.Core.Models;
 
 namespace GmodAddonManager.Core.Services
@@ -27,8 +29,9 @@ namespace GmodAddonManager.Core.Services
         {
             var previous = configuration?.PathState?.LastDetectedSnapshot ??
                            configuration?.PathState?.LastKnownGoodSnapshot;
+            var inferredWorkshop = InferWorkshopRootFromAddonMetadata(configuration);
             var previousGmod = previous?.GmodInstall?.InstallPath;
-            var previousWorkshop = previous?.ActiveWorkshopRoot?.RootPath;
+            var previousWorkshop = previous?.ActiveWorkshopRoot?.RootPath ?? inferredWorkshop;
             var detectedGmod = currentSnapshot.GmodInstall?.Confidence == PathCandidateConfidence.Rejected
                 ? null
                 : currentSnapshot.GmodInstall?.InstallPath;
@@ -46,16 +49,23 @@ namespace GmodAddonManager.Core.Services
             var previousMissing =
                 IsMissing(previousGmod) ||
                 IsMissing(previousWorkshop);
+            var hasPreviousPath =
+                !string.IsNullOrWhiteSpace(previousGmod) ||
+                !string.IsNullOrWhiteSpace(previousWorkshop);
             var detectedDifferent =
-                !PathsEqual(previousGmod, detectedGmod) ||
-                !PathsEqual(previousWorkshop, detectedWorkshop);
+                (!string.IsNullOrWhiteSpace(previousGmod) && !PathsEqual(previousGmod, detectedGmod)) ||
+                (!string.IsNullOrWhiteSpace(previousWorkshop) && !PathsEqual(previousWorkshop, detectedWorkshop));
+            var metadataWorkshopDifferent =
+                !string.IsNullOrWhiteSpace(inferredWorkshop) &&
+                !PathsEqual(inferredWorkshop, detectedWorkshop);
             var noDetectedCandidate =
                 string.IsNullOrWhiteSpace(detectedGmod) ||
                 string.IsNullOrWhiteSpace(detectedWorkshop);
 
             var shouldPrompt = configuredPathsInvalid ||
                                noDetectedCandidate ||
-                               (!string.IsNullOrWhiteSpace(previousGmod) && previousMissing && detectedDifferent);
+                               (hasPreviousPath && detectedDifferent) ||
+                               metadataWorkshopDifferent;
 
             return new StartupPathRecoveryDecision
             {
@@ -93,6 +103,101 @@ namespace GmodAddonManager.Core.Services
             return !string.IsNullOrWhiteSpace(path) && !Directory.Exists(path);
         }
 
+        private static string? InferWorkshopRootFromAddonMetadata(Configuration? configuration)
+        {
+            if (configuration?.AddonMetadata == null || configuration.AddonMetadata.Count == 0)
+            {
+                return null;
+            }
+
+            var roots = new List<string>();
+            foreach (var kvp in configuration.AddonMetadata)
+            {
+                if (kvp.Value == null || kvp.Value.IsLocal || !long.TryParse(kvp.Key, out _))
+                {
+                    continue;
+                }
+
+                var root = TryExtractWorkshopRoot(kvp.Value.FolderPath, kvp.Key);
+                if (!string.IsNullOrWhiteSpace(root))
+                {
+                    roots.Add(root);
+                }
+            }
+
+            return roots
+                .GroupBy(path => NormalizeForCompare(path), StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .Select(group => group.First())
+                .FirstOrDefault();
+        }
+
+        private static string? TryExtractWorkshopRoot(string? metadataPath, string addonId)
+        {
+            if (string.IsNullOrWhiteSpace(metadataPath))
+            {
+                return null;
+            }
+
+            string normalized;
+            try
+            {
+                normalized = Path.GetFullPath(metadataPath)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                return null;
+            }
+
+            var leaf = Path.GetFileName(normalized);
+            if (!string.Equals(leaf, addonId, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(Path.GetFileNameWithoutExtension(leaf), addonId, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var root = Directory.GetParent(normalized)?.FullName;
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return null;
+            }
+
+            if (!LooksLikeGmodWorkshopRoot(root))
+            {
+                return null;
+            }
+
+            return NormalizeForCompare(root);
+        }
+
+        private static bool LooksLikeGmodWorkshopRoot(string root)
+        {
+            try
+            {
+                var appId = new DirectoryInfo(root);
+                var content = appId.Parent;
+                var workshop = content?.Parent;
+                var steamApps = workshop?.Parent;
+                return content != null &&
+                       workshop != null &&
+                       steamApps != null &&
+                       string.Equals(appId.Name, "4000", StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(content.Name, "content", StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(workshop.Name, "workshop", StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(steamApps.Name, "steamapps", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string NormalizeForCompare(string path)
+        {
+            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
         private static bool PathsEqual(string? left, string? right)
         {
             if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
@@ -102,8 +207,8 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                var normalizedLeft = Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var normalizedRight = Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var normalizedLeft = NormalizeForCompare(left);
+                var normalizedRight = NormalizeForCompare(right);
                 return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase);
             }
             catch
