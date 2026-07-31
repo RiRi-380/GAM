@@ -17,7 +17,8 @@ $versionProps = @(
     "-p:Version=$normalizedVersion",
     "-p:FileVersion=$fileVersion",
     "-p:AssemblyVersion=$fileVersion",
-    "-p:InformationalVersion=$informationalVersion"
+    "-p:InformationalVersion=$informationalVersion",
+    "-p:IncludeSourceRevisionInInformationalVersion=false"
 )
 
 # Clean previous builds

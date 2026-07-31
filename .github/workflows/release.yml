@@ -42,7 +42,8 @@ jobs:
           "-p:Version=$version",
           "-p:FileVersion=$fileVersion",
           "-p:AssemblyVersion=$fileVersion",
-          "-p:InformationalVersion=$tag+$sha"
+          "-p:InformationalVersion=$tag+$sha",
+          "-p:IncludeSourceRevisionInInformationalVersion=false"
         )
 
         dotnet build -c Release @versionProps
