@@ -26,7 +26,10 @@
         <StackPanel Grid.Row="0" Margin="0,0,0,15">
             <TextBlock Text="{Binding AssetLabel}"
                        FontSize="18"
-                       FontWeight="Bold"/>
+                       FontWeight="Bold"
+                       MaxLines="1"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip.Tip="{Binding AssetLabel}"/>
             <TextBlock Text="{Binding VersionInfo}"
                        FontSize="14"
                        Opacity="0.8"
@@ -122,13 +125,6 @@
                                                    FontSize="12"/>
                                     </StackPanel>
                                     
-                                    <!-- 状態表示 -->
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding StateDisplay}"
-                                               VerticalAlignment="Center"
-                                               Opacity="0.7"
-                                               FontSize="12"
-                                               IsVisible="{Binding HasState}"/>
                                 </Grid>
                             </Border>
                         </DataTemplate>

@@ -22,6 +22,7 @@
                     CornerRadius="12"
                     BorderThickness="3"
                     BorderBrush="{Binding BorderColor}"
+                    Opacity="{Binding CardOpacity}"
                     Classes.selected="{Binding IsSelected}"
                     Classes.selectionMode="{Binding $parent[UserControl].DataContext.IsSelectionMode}"
                     PointerPressed="OnAddonPointerPressed"
@@ -93,33 +94,30 @@
                                 </Image.Transitions>
                             </Image>
 
-                            <!-- Local badge -->
-                            <Border Background="#2E7D32"
+                            <!-- Current GMod mount state -->
+                            <Border Background="{Binding ActualStateBadgeBackground}"
                                     CornerRadius="4"
                                     Padding="4,2"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Top"
-                                    IsVisible="{Binding IsLocal}">
-                                <TextBlock Text="{loc:Localize AddonGrid.BadgeLocal}"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Top">
+                                <TextBlock Text="{Binding ActualStateText}"
                                            FontSize="10"
                                            FontWeight="Bold"
                                            Foreground="White"/>
                             </Border>
 
-                            <!-- Also belongs to at least one inactive asset -->
-                            <Border Background="#455A64"
+                            <Border Background="#C97800"
                                     CornerRadius="4"
                                     Padding="4,2"
-                                    HorizontalAlignment="Right"
+                                    HorizontalAlignment="Left"
                                     VerticalAlignment="Top"
-                                    IsVisible="{Binding IsInInactiveAsset}"
-                                    ToolTip.Tip="{Binding InactiveAssetTooltip}">
-                                <TextBlock Text="{loc:Localize AddonGrid.BadgeOffAsset}"
-                                           FontSize="9"
+                                    IsVisible="{Binding IsMissing}">
+                                <TextBlock Text="{loc:Localize Addon.Missing}"
+                                           FontSize="10"
                                            FontWeight="Bold"
-                                           Foreground="#E8EEF5"/>
+                                           Foreground="White"/>
                             </Border>
-                            
+
                         </Grid>
                     </Border>
                     
@@ -165,33 +163,30 @@
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 Padding="15"
                 BoxShadow="0 2 4 0 #10000000">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                    <TextBlock Text="{loc:Localize AddonGrid.Header}" 
-                              FontSize="16" 
-                              FontWeight="Bold"
-                              VerticalAlignment="Center"/>
-                    
-                    <TextBlock VerticalAlignment="Center" Opacity="0.7" Text="{Binding AddonCountDisplay}"/>
+            <Grid RowDefinitions="Auto,Auto"
+                  RowSpacing="10">
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0"
+                               Text="{loc:Localize AddonGrid.Header}"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1"
+                               Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Opacity="0.7"
+                               Text="{Binding AddonCountDisplay}"
+                               TextWrapping="Wrap"/>
+                </Grid>
 
-                </StackPanel>
-                
-                <Grid Grid.Column="1"
-                      VerticalAlignment="Center"
-                      HorizontalAlignment="Right">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="16"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0"
-                                Orientation="Horizontal"
+                <WrapPanel Grid.Row="1"
+                           Orientation="Horizontal"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal"
                                 Spacing="10"
+                                Margin="0,0,12,6"
                                 VerticalAlignment="Center">
                         <TextBlock Text="{loc:Localize AddonGrid.FilterStateLabel}"
                                    FontSize="12"
@@ -206,116 +201,97 @@
                             <ComboBoxItem Content="{loc:Localize AddonGrid.FilterEnabled}"/>
                             <ComboBoxItem Content="{loc:Localize AddonGrid.FilterDisabled}"/>
                         </ComboBox>
-
-                        <CheckBox Content="{loc:Localize AddonGrid.ShowCurrentAssetOnly}"
-                                  IsChecked="{Binding ShowOnlyAssetAddons}"
-                                  VerticalAlignment="Center"/>
                     </StackPanel>
 
-                    <WrapPanel Grid.Column="2"
-                               Orientation="Horizontal"
-                               VerticalAlignment="Center"
-                               HorizontalAlignment="Right">
-                        <!-- 選択モードトグル -->
-                        <ToggleButton IsChecked="{Binding IsSelectionMode}"
-                                      MinWidth="110"
-                                      Height="32"
-                                      Margin="0,0,8,0"
-                                      Padding="10,0"
-                                      VerticalContentAlignment="Center"
-                                      VerticalAlignment="Center"
-                                      Classes.accent="{Binding IsSelectionMode}">
-                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                <PathIcon Data="{StaticResource EnabledIcon}" 
-                                          Width="14" Height="14"
-                                          VerticalAlignment="Center"
-                                          IsVisible="{Binding IsSelectionMode}"/>
-                                <TextBlock Text="{loc:Localize AddonGrid.SelectionMode}"
-                                           FontSize="12"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </ToggleButton>
-                        
-                        <!-- 一括選択ボタン -->
-                        <Button Command="{Binding SelectAllCommand}"
-                                IsVisible="{Binding IsSelectionMode}"
-                                MinWidth="90"
-                                Height="32"
-                                Margin="0,0,8,0"
-                                Padding="10,0"
-                                VerticalContentAlignment="Center"
-                                VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                <PathIcon Data="{StaticResource CheckIcon}"
-                                          Width="14"
-                                          Height="14"
-                                          VerticalAlignment="Center"/>
-                                <TextBlock Text="{loc:Localize AddonGrid.BulkSelect}"
-                                           FontSize="12"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                        
-                        <!-- 選択したアドオンを転送 -->
-                        <Button Command="{Binding AddSelectedAddonsCommand}"
-                                IsEnabled="{Binding HasSelectedAddons}"
-                                IsVisible="{Binding IsSelectionMode}"
-                                MinWidth="140"
-                                Height="32"
-                                Margin="0,0,8,0"
-                                Padding="10,0"
-                                VerticalContentAlignment="Center"
-                                VerticalAlignment="Center"
-                                Classes="accent">
-                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                <PathIcon Data="{StaticResource MoveIcon}"
-                                          Width="14"
-                                          Height="14"
-                                          VerticalAlignment="Center"/>
-                                <TextBlock FontSize="12"
-                                           VerticalAlignment="Center"
-                                           Text="{Binding SelectionActionLabel}"/>
-                            </StackPanel>
-                        </Button>
-                        
-                        <!-- アセットから削除 -->
-                        <Button Command="{Binding RemoveSelectedAddonsCommand}"
-                                IsEnabled="{Binding CanRemoveFromAsset}"
-                                IsVisible="{Binding IsSelectionMode}"
-                                MinWidth="140"
-                                Height="32"
-                                Margin="0,0,8,0"
-                                Padding="10,0"
-                                VerticalContentAlignment="Center"
-                                VerticalAlignment="Center"
-                                Classes="danger">
-                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                <PathIcon Data="{StaticResource DeleteIcon}"
-                                          Width="14"
-                                          Height="14"
-                                          VerticalAlignment="Center"/>
-                                <TextBlock FontSize="12"
-                                           VerticalAlignment="Center"
-                                           Text="{Binding SelectionDeleteLabel}"/>
-                            </StackPanel>
-                        </Button>
-                        
-                        <!-- 状態一括変更メニュー -->
-                        <ComboBox Name="StateChangeComboBox"
-                                  IsVisible="{Binding IsSelectionMode}"
-                                  IsEnabled="{Binding HasSelectedAddons}"
-                                  MinWidth="150"
+                    <CheckBox Content="{loc:Localize AddonGrid.ShowCurrentAssetOnly}"
+                              IsChecked="{Binding ShowOnlyAssetAddons}"
+                              Margin="0,0,12,6"
+                              VerticalAlignment="Center"/>
+
+                    <!-- 選択モードトグル -->
+                    <ToggleButton IsChecked="{Binding IsSelectionMode}"
+                                  MinWidth="110"
                                   Height="32"
-                                  Margin="0,0,0,0"
-                                  PlaceholderText="{loc:Localize AddonGrid.StateChangePlaceholder}"
+                                  Margin="0,0,8,6"
+                                  Padding="10,0"
+                                  VerticalContentAlignment="Center"
                                   VerticalAlignment="Center"
-                                  SelectedIndex="-1">
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.Enable}"/>
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.Disable}"/>
-                            <ComboBoxItem Content="{loc:Localize AddonGrid.Exclude}"/>
-                        </ComboBox>
-                    </WrapPanel>
-                </Grid>
+                                  Classes.accent="{Binding IsSelectionMode}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource EnabledIcon}"
+                                      Width="14" Height="14"
+                                      VerticalAlignment="Center"
+                                      IsVisible="{Binding IsSelectionMode}"/>
+                            <TextBlock Text="{loc:Localize AddonGrid.SelectionMode}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+
+                    <!-- 一括選択ボタン -->
+                    <Button Command="{Binding SelectAllCommand}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            MinWidth="90"
+                            Height="32"
+                            Margin="0,0,8,6"
+                            Padding="10,0"
+                            VerticalContentAlignment="Center"
+                            VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource CheckIcon}"
+                                      Width="14"
+                                      Height="14"
+                                      VerticalAlignment="Center"/>
+                            <TextBlock Text="{loc:Localize AddonGrid.BulkSelect}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- 選択したアドオンを転送 -->
+                    <Button Command="{Binding AddSelectedAddonsCommand}"
+                            IsEnabled="{Binding HasSelectedAddons}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            MinWidth="140"
+                            Height="32"
+                            Margin="0,0,8,6"
+                            Padding="10,0"
+                            VerticalContentAlignment="Center"
+                            VerticalAlignment="Center"
+                            Classes="accent">
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource MoveIcon}"
+                                      Width="14"
+                                      Height="14"
+                                      VerticalAlignment="Center"/>
+                            <TextBlock FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding SelectionActionLabel}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- アセットから削除 -->
+                    <Button Command="{Binding RemoveSelectedAddonsCommand}"
+                            IsEnabled="{Binding CanRemoveFromAsset}"
+                            IsVisible="{Binding IsSelectionMode}"
+                            MinWidth="140"
+                            Height="32"
+                            Margin="0,0,8,6"
+                            Padding="10,0"
+                            VerticalContentAlignment="Center"
+                            VerticalAlignment="Center"
+                            Classes="danger">
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <PathIcon Data="{StaticResource DeleteIcon}"
+                                      Width="14"
+                                      Height="14"
+                                      VerticalAlignment="Center"/>
+                            <TextBlock FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding SelectionDeleteLabel}"/>
+                        </StackPanel>
+                    </Button>
+                </WrapPanel>
             </Grid>
         </Border>
         
@@ -377,6 +353,25 @@
                 <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                              VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="16">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="{loc:Localize VersionManagement.SortOrderLabel}"
+                                       FontSize="12"
+                                       FontWeight="Bold"
+                                       Opacity="0.8"/>
+                            <ComboBox ItemsSource="{Binding SortModeOptions}"
+                                      SelectedIndex="{Binding SelectedSortModeIndex}"
+                                      MinHeight="32"
+                                      HorizontalAlignment="Stretch"
+                                      VerticalContentAlignment="Center"/>
+                            <Button Command="{Binding ToggleSortDirectionCommand}"
+                                    Content="{Binding SortDirectionLabel}"
+                                    MinHeight="32"
+                                    Padding="10,4"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    VerticalContentAlignment="Center"/>
+                        </StackPanel>
+
                         <StackPanel Spacing="6">
                             <TextBlock Text="{loc:Localize AddonGrid.FilterTypeHeader}" FontSize="12" FontWeight="Bold" Opacity="0.8"/>
                             <ItemsControl ItemsSource="{Binding AddonTypeFilters}">

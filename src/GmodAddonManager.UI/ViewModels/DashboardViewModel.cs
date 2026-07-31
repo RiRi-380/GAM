@@ -84,43 +84,15 @@ namespace GmodAddonManager.UI.ViewModels
             try
             {
                 var config = _addonManager.GetConfiguration();
-                TotalAddons = config.AddonMetadata.Count;
-                
-                // 邨ｱ險域ュ蝣ｱ繧定ｨ育ｮ・
-                EnabledAddons = 0;
-                DisabledAddons = 0;
-                
-                foreach (var asset in config.Assets)
-                {
-                    if (_addonManager.DisableMode == DisableMode.Hard && asset.Id == "junction-system-asset")
-                    {
-                        DisabledAddons += asset.Addons.Count;
-                    }
-                    else if (asset.Enabled)
-                    {
-                        foreach (var addonId in asset.Addons)
-                        {
-                            var state = asset.AddonStates.ContainsKey(addonId) 
-                                ? asset.AddonStates[addonId] 
-                                : asset.DefaultAddonState;
-                            
-                            if (state != Core.Models.AddonState.Excluded)
-                            {
-                                EnabledAddons++;
-                            }
-                        }
-                    }
-                }
-                
-                // 驥崎､・ｒ髯､蜴ｻ
-                EnabledAddons = Math.Min(EnabledAddons, TotalAddons - DisabledAddons);
+                var resolvedStates = _addonManager.GetResolvedAddonStates();
+                TotalAddons = resolvedStates.Count;
+                EnabledAddons = resolvedStates.Values.Count(state => state.DesiredEnabled);
+                DisabledAddons = TotalAddons - EnabledAddons;
                 
                 // 繧ｵ繧､繧ｺ繧定ｨ育ｮ・
-                long totalBytes = 0;
-                foreach (var addon in config.AddonMetadata.Values)
-                {
-                    totalBytes += addon.Size;
-                }
+                var totalBytes = resolvedStates.Keys
+                    .Where(config.AddonMetadata.ContainsKey)
+                    .Sum(addonId => config.AddonMetadata[addonId].Size);
                 
                 TotalSize = FormatFileSize(totalBytes);
             }
@@ -186,12 +158,6 @@ namespace GmodAddonManager.UI.ViewModels
                 L.Get("Dashboard.Tip5"),
                 L.Get("Dashboard.Tip8")
             };
-
-            if (_addonManager.DisableMode == DisableMode.Hard)
-            {
-                tips.Add(L.Get("Dashboard.Tip6"));
-                tips.Add(L.Get("Dashboard.Tip7"));
-            }
             
             CurrentTip = tips[RandomNumberGenerator.GetInt32(tips.Count)];
         }

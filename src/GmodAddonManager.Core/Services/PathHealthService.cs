@@ -16,13 +16,11 @@ namespace GmodAddonManager.Core.Services
         public IReadOnlyList<string> Issues { get; set; } = Array.Empty<string>();
         public IReadOnlyList<StaleMetadataRepairCandidate> MetadataRepairCandidates { get; set; } = Array.Empty<StaleMetadataRepairCandidate>();
         public AddonNoMountMigrationPlan AddonNoMountMigrationPlan { get; set; } = new AddonNoMountMigrationPlan();
-        public IReadOnlyList<StaleWorkshopFolderCleanupCandidate> CleanupCandidates { get; set; } = Array.Empty<StaleWorkshopFolderCleanupCandidate>();
         public IReadOnlyList<ManagedDataMigrationCandidate> ManagedDataMigrationCandidates { get; set; } = Array.Empty<ManagedDataMigrationCandidate>();
 
         public int IssueCount => Issues.Count;
         public int MetadataRepairCount => MetadataRepairCandidates.Count;
         public int AddonNoMountMigrationCount => AddonNoMountMigrationPlan.ToMigrateIds.Count;
-        public int CleanupCandidateCount => CleanupCandidates.Count;
         public int ManagedMigrationCandidateCount => ManagedDataMigrationCandidates.Count;
     }
 
@@ -46,14 +44,6 @@ namespace GmodAddonManager.Core.Services
                                ToMigrateIds.Count > 0;
     }
 
-    public sealed class StaleWorkshopFolderCleanupCandidate
-    {
-        public string WorkshopRootPath { get; set; } = string.Empty;
-        public string FolderPath { get; set; } = string.Empty;
-        public string AddonId { get; set; } = string.Empty;
-        public string Reason { get; set; } = string.Empty;
-    }
-
     public sealed class ManagedDataMigrationCandidate
     {
         public string AddonId { get; set; } = string.Empty;
@@ -66,7 +56,6 @@ namespace GmodAddonManager.Core.Services
     public sealed class PathHealthOperationResult
     {
         public int ChangedCount { get; set; }
-        public int DeletedCount { get; set; }
         public int MovedCount { get; set; }
         public int SkippedCount { get; set; }
         public IReadOnlyList<string> Messages { get; set; } = Array.Empty<string>();
@@ -142,7 +131,6 @@ namespace GmodAddonManager.Core.Services
 
             var metadataCandidates = BuildMetadataRepairCandidates(configuration, currentSnapshot);
             var addonNoMountPlan = BuildAddonNoMountMigrationPlan(configuration, currentSnapshot);
-            var cleanupCandidates = BuildCleanupCandidates(configuration, currentSnapshot, issues);
             var managedCandidates = BuildManagedMigrationCandidates(configuration, addonsPath, issues);
 
             if (metadataCandidates.Count > 0)
@@ -153,11 +141,6 @@ namespace GmodAddonManager.Core.Services
             if (addonNoMountPlan.HasWork)
             {
                 issues.Add($"{addonNoMountPlan.ToMigrateIds.Count} addonnomount entrie(s) can be copied from the previous GMod install.");
-            }
-
-            if (cleanupCandidates.Count > 0)
-            {
-                issues.Add($"{cleanupCandidates.Count} stale empty Workshop folder(s) can be deleted after confirmation.");
             }
 
             if (managedCandidates.Count > 0)
@@ -173,7 +156,6 @@ namespace GmodAddonManager.Core.Services
                 Issues = issues,
                 MetadataRepairCandidates = metadataCandidates,
                 AddonNoMountMigrationPlan = addonNoMountPlan,
-                CleanupCandidates = cleanupCandidates,
                 ManagedDataMigrationCandidates = managedCandidates
             };
         }
@@ -231,46 +213,6 @@ namespace GmodAddonManager.Core.Services
 
             WriteAddonNoMountIds(plan.TargetPath, targetIds);
             return new PathHealthOperationResult { ChangedCount = added };
-        }
-
-        public static PathHealthOperationResult CleanupStaleEmptyWorkshopFolders(IEnumerable<StaleWorkshopFolderCleanupCandidate> candidates)
-        {
-            var deleted = 0;
-            var skipped = 0;
-            var messages = new List<string>();
-
-            foreach (var candidate in candidates)
-            {
-                if (!Directory.Exists(candidate.FolderPath))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                if (IsReparsePoint(candidate.FolderPath) || AddonPayloadValidator.HasValidAddonPayload(candidate.FolderPath))
-                {
-                    skipped++;
-                    messages.Add($"Skipped {candidate.FolderPath}: folder is no longer safe to delete.");
-                    continue;
-                }
-
-                if (!IsSafeDescendant(candidate.FolderPath, candidate.WorkshopRootPath))
-                {
-                    skipped++;
-                    messages.Add($"Skipped {candidate.FolderPath}: folder is outside the expected Workshop root.");
-                    continue;
-                }
-
-                Directory.Delete(candidate.FolderPath, recursive: true);
-                deleted++;
-            }
-
-            return new PathHealthOperationResult
-            {
-                DeletedCount = deleted,
-                SkippedCount = skipped,
-                Messages = messages
-            };
         }
 
         public static PathHealthOperationResult MigrateManagedData(IEnumerable<ManagedDataMigrationCandidate> candidates)
@@ -415,64 +357,6 @@ namespace GmodAddonManager.Core.Services
             };
         }
 
-        private static List<StaleWorkshopFolderCleanupCandidate> BuildCleanupCandidates(
-            Configuration configuration,
-            PathSnapshot currentSnapshot,
-            List<string> issues)
-        {
-            var candidates = new List<StaleWorkshopFolderCleanupCandidate>();
-            var activeRoot = currentSnapshot.ActiveWorkshopRoot?.RootPath;
-            var roots = new[]
-            {
-                configuration.PathState?.PreviousDetectedSnapshot?.ActiveWorkshopRoot?.RootPath,
-                configuration.PathState?.LastKnownGoodSnapshot?.ActiveWorkshopRoot?.RootPath
-            }
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(path => !PathsEqual(path, activeRoot))
-            .ToList();
-
-            foreach (var root in roots)
-            {
-                if (!Directory.Exists(root))
-                {
-                    continue;
-                }
-
-                foreach (var dir in SafeEnumerateDirectories(root))
-                {
-                    var addonId = Path.GetFileName(dir);
-                    if (string.IsNullOrWhiteSpace(addonId) || !long.TryParse(addonId, out _))
-                    {
-                        continue;
-                    }
-
-                    if (IsReparsePoint(dir))
-                    {
-                        issues.Add($"Skipped stale Workshop folder cleanup candidate because it is a reparse point: {dir}");
-                        continue;
-                    }
-
-                    if (AddonPayloadValidator.HasValidAddonPayload(dir))
-                    {
-                        issues.Add($"Old Workshop folder still has valid payload and will not be cleaned automatically: {dir}");
-                        continue;
-                    }
-
-                    candidates.Add(new StaleWorkshopFolderCleanupCandidate
-                    {
-                        WorkshopRootPath = root!,
-                        FolderPath = dir,
-                        AddonId = addonId,
-                        Reason = "Numeric Workshop folder is outside the active root and has no valid addon payload."
-                    });
-                }
-            }
-
-            return candidates;
-        }
-
         private static List<ManagedDataMigrationCandidate> BuildManagedMigrationCandidates(
             Configuration configuration,
             string currentAddonsPath,
@@ -595,8 +479,15 @@ namespace GmodAddonManager.Core.Services
 
         private static bool IsUsableSnapshot(PathSnapshot snapshot)
         {
-            return snapshot.GmodInstall?.Confidence == PathCandidateConfidence.High ||
-                   snapshot.ActiveWorkshopRoot?.Confidence == PathCandidateConfidence.High;
+            var gmodInstall = snapshot.GmodInstall;
+            var workshopRoot = snapshot.ActiveWorkshopRoot;
+            return gmodInstall != null &&
+                   gmodInstall.Confidence != PathCandidateConfidence.Rejected &&
+                   PathOverrideResolver.IsDirectoryUsable(
+                       Path.Combine(gmodInstall.InstallPath, "garrysmod")) &&
+                   workshopRoot != null &&
+                   workshopRoot.Confidence != PathCandidateConfidence.Rejected &&
+                   PathOverrideResolver.IsDirectoryUsable(workshopRoot.RootPath);
         }
 
         private static void AddSnapshotPathChange(PathState state, string kind, string? oldPath, string? newPath)
@@ -691,18 +582,6 @@ namespace GmodAddonManager.Core.Services
             catch
             {
                 return true;
-            }
-        }
-
-        private static IEnumerable<string> SafeEnumerateDirectories(string path)
-        {
-            try
-            {
-                return Directory.EnumerateDirectories(path).ToList();
-            }
-            catch
-            {
-                return Array.Empty<string>();
             }
         }
 

@@ -8,13 +8,18 @@ public static class SafeFileLogger
     private static readonly object LockObject = new();
     private const string ErrorLogFileName = "runtime_errors.log";
     private const string InfoLogFileName = "runtime_info.log";
+    private const string LogDirectoryEnvironmentVariable = "GAM_RUNTIME_LOG_DIR";
 
     private static string GetLogPath(string fileName)
     {
-        var baseDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "GmodAddonManager",
-            "logs");
+        var overrideDirectory = Environment.GetEnvironmentVariable(
+            LogDirectoryEnvironmentVariable);
+        var baseDir = string.IsNullOrWhiteSpace(overrideDirectory)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GmodAddonManager",
+                "logs")
+            : Path.GetFullPath(overrideDirectory.Trim());
         return Path.Combine(baseDir, fileName);
     }
 

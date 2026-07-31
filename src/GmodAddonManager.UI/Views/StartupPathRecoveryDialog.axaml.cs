@@ -46,11 +46,13 @@ public partial class StartupPathRecoveryDialog : Window
 
     private void PopulateInitialState()
     {
+        HeadingText.Text = L.Get(GetHeadingKey(decision.Reason));
+        DescriptionText.Text = L.Get(GetDescriptionKey(decision.Reason));
         PreviousGmodText.Text = EmptyIfNull(decision.PreviousGmodInstallPath);
         PreviousWorkshopText.Text = EmptyIfNull(decision.PreviousWorkshopRootPath);
         CandidateGmodText.Text = EmptyIfNull(decision.DetectedGmodInstallPath);
         CandidateWorkshopText.Text = EmptyIfNull(decision.DetectedWorkshopRootPath);
-        ReasonText.Text = decision.Reason;
+        ReasonText.Text = L.Get($"StartupPathRecovery.Reason.{decision.Reason}");
         StatusText.Text = decision.HasDetectedCandidate
             ? L.Get("StartupPathRecovery.Ready")
             : L.Get("StartupPathRecovery.NoCandidate");
@@ -82,9 +84,9 @@ public partial class StartupPathRecoveryDialog : Window
             if (!PathOverrideResolver.TryResolveSelectedFolder(
                     selectedPath,
                     out selectedResolution,
-                    out var error))
+                    out _))
             {
-                StatusText.Text = L.Format("StartupPathRecovery.InvalidFolder", error);
+                StatusText.Text = L.Get("StartupPathRecovery.InvalidFolder");
                 return;
             }
 
@@ -93,9 +95,9 @@ public partial class StartupPathRecoveryDialog : Window
             StatusText.Text = L.Get("StartupPathRecovery.ManualReady");
             UseButton.IsEnabled = true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            StatusText.Text = L.Format("StartupPathRecovery.InvalidFolder", ex.Message);
+            StatusText.Text = L.Get("StartupPathRecovery.InvalidFolder");
         }
     }
 
@@ -134,5 +136,35 @@ public partial class StartupPathRecoveryDialog : Window
     private static string EmptyIfNull(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? L.Get("PathHealth.None") : value;
+    }
+
+    private static string GetHeadingKey(StartupPathRecoveryReason reason)
+    {
+        return reason switch
+        {
+            StartupPathRecoveryReason.ConfiguredPathInvalid => "StartupPathRecovery.Heading.Invalid",
+            StartupPathRecoveryReason.GmodPathUnavailable => "StartupPathRecovery.Heading.GmodUnavailable",
+            StartupPathRecoveryReason.WorkshopPathUnavailable => "StartupPathRecovery.Heading.WorkshopUnavailable",
+            StartupPathRecoveryReason.RequiredPathsUnavailable => "StartupPathRecovery.Heading.RequiredPathsUnavailable",
+            StartupPathRecoveryReason.RecordedPathMissing or
+            StartupPathRecoveryReason.RecordedPathChanged => "StartupPathRecovery.Heading.Changed",
+            StartupPathRecoveryReason.ManualRequest => "StartupPathRecovery.Heading.Manual",
+            _ => "StartupPathRecovery.Heading.Default"
+        };
+    }
+
+    private static string GetDescriptionKey(StartupPathRecoveryReason reason)
+    {
+        return reason switch
+        {
+            StartupPathRecoveryReason.ConfiguredPathInvalid => "StartupPathRecovery.Description.Invalid",
+            StartupPathRecoveryReason.GmodPathUnavailable => "StartupPathRecovery.Description.GmodUnavailable",
+            StartupPathRecoveryReason.WorkshopPathUnavailable => "StartupPathRecovery.Description.WorkshopUnavailable",
+            StartupPathRecoveryReason.RequiredPathsUnavailable => "StartupPathRecovery.Description.RequiredPathsUnavailable",
+            StartupPathRecoveryReason.RecordedPathMissing or
+            StartupPathRecoveryReason.RecordedPathChanged => "StartupPathRecovery.Description.Changed",
+            StartupPathRecoveryReason.ManualRequest => "StartupPathRecovery.Description.Manual",
+            _ => "StartupPathRecovery.Description.Default"
+        };
     }
 }

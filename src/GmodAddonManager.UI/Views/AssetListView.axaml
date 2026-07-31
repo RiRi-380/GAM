@@ -12,7 +12,6 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         
         <!-- ヘッダー -->
@@ -36,14 +35,6 @@
                             Orientation="Horizontal"
                             Spacing="8"
                             VerticalAlignment="Center">
-                    <Button Command="{Binding ImportAssetCommand}"
-                            ToolTip.Tip="{loc:Localize AssetList.ImportTooltip}"
-                            Padding="10,4">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <PathIcon Data="{StaticResource ImportIcon}" Width="12" Height="12"/>
-                            <TextBlock Text="{loc:Localize AssetList.Import}"/>
-                        </StackPanel>
-                    </Button>
                     <Button Command="{Binding CreateAssetCommand}"
                             Content="{loc:Localize AssetList.CreateNew}"
                             ToolTip.Tip="{loc:Localize AssetList.CreateNewTooltip}"
@@ -165,6 +156,9 @@
                                               Text="{Binding Name}" 
                                               FontSize="16"
                                               FontWeight="Bold"
+                                              MaxLines="1"
+                                              TextTrimming="CharacterEllipsis"
+                                              ToolTip.Tip="{Binding Name}"
                                               Classes.selected="{Binding IsSelected}">
                                         <TextBlock.Styles>
                                             <Style Selector="TextBlock.selected">
@@ -197,7 +191,7 @@
                                                Orientation="Horizontal"
                                                IsVisible="{Binding CanEditAddonDefaultState}">
                                         <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{loc:Localize AssetList.Enabled}"
+                                                    Content="{Binding EnabledStateLabel}"
                                                     IsChecked="{Binding IsEnabledState}"
                                                     Command="{Binding SetEnabledCommand}"
                                                     Margin="0,0,8,0"
@@ -209,7 +203,7 @@
                                             </RadioButton.Styles>
                                         </RadioButton>
                                         <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{loc:Localize AssetList.Disabled}"
+                                                    Content="{Binding DisabledStateLabel}"
                                                     IsChecked="{Binding IsDisabledState}"
                                                     Command="{Binding SetDisabledCommand}"
                                                     Margin="0,0,8,0"
@@ -224,6 +218,7 @@
                                                     Content="{loc:Localize AssetList.Excluded}"
                                                     IsChecked="{Binding IsExcludedState}"
                                                     Command="{Binding SetExcludedCommand}"
+                                                    IsVisible="{Binding CanSetExcluded}"
                                                     Margin="0,0,8,0"
                                                     FontSize="11">
                                             <RadioButton.Styles>
@@ -233,15 +228,6 @@
                                             </RadioButton.Styles>
                                         </RadioButton>
                                     </StackPanel>
-                                    <Button Grid.Column="1"
-                                            Command="{Binding ApplyExclusiveCommand}"
-                                            Content="{loc:Localize AssetList.ApplyExclusive}"
-                                            ToolTip.Tip="{loc:Localize AssetList.ApplyExclusiveTooltip}"
-                                            IsVisible="{Binding CanApplyExclusive}"
-                                            Padding="8,4"
-                                            FontSize="11"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"/>
                                 </Grid>
                                     
                                 <!-- バージョン + 共有ボタン -->
@@ -251,6 +237,12 @@
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Center"
                                             Spacing="6">
+                                    <Button Command="{Binding ShowDetailsCommand}"
+                                            Width="24" Height="24"
+                                            Padding="4"
+                                            ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}">
+                                        <PathIcon Data="{StaticResource InfoIcon}" Width="12" Height="12"/>
+                                    </Button>
                                     <Button Content="{Binding VersionDisplay}"
                                             Command="{Binding VersionManageCommand}"
                                             IsVisible="{Binding CanManageVersions}"
@@ -261,13 +253,28 @@
                                             HorizontalContentAlignment="Center"
                                             VerticalContentAlignment="Center"
                                             ToolTip.Tip="{loc:Localize AssetList.ManageVersionsTooltip}"/>
-                                    <Button Command="{Binding ShareCommand}"
-                                            Width="24" Height="24"
-                                            ToolTip.Tip="{Binding ShareButtonText}"
-                                            IsVisible="{Binding CanShare}">
-                                        <PathIcon Width="12" Height="12"
-                                                 Data="{StaticResource cloud-upload}"/>
-                                    </Button>
+                                    <ToggleButton IsChecked="{Binding IsFavorite, Mode=OneWay}"
+                                                  Command="{Binding ToggleFavoriteCommand}"
+                                                  Width="24" Height="24"
+                                                  Padding="0"
+                                                  Background="Transparent"
+                                                  BorderThickness="0"
+                                                  ToolTip.Tip="{Binding FavoriteButtonText}"
+                                                  IsVisible="{Binding CanFavorite}">
+                                        <TextBlock Text="♥"
+                                                   FontSize="14"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Styles>
+                                                <Style Selector="TextBlock">
+                                                    <Setter Property="Foreground" Value="#777777"/>
+                                                </Style>
+                                                <Style Selector="ToggleButton:checked TextBlock">
+                                                    <Setter Property="Foreground" Value="#E85D75"/>
+                                                </Style>
+                                            </TextBlock.Styles>
+                                        </TextBlock>
+                                    </ToggleButton>
                                 </StackPanel>
                                     
                                 <!-- 削除ボタン -->
@@ -291,74 +298,5 @@
             </ItemsRepeater>
         </ScrollViewer>
         
-        <!-- ジャンクションアセット（下部表示） -->
-        <Border Grid.Row="2" 
-                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
-                BorderThickness="0,1,0,0"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                IsVisible="{Binding ShowJunctionAsset}">
-            <ItemsControl ItemsSource="{Binding JunctionAsset}" Margin="5">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:AssetItemViewModel">
-                        <Border Margin="0,2" 
-                                Padding="10,8"
-                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
-                                CornerRadius="4"
-                                Classes.selected="{Binding IsSelected}"
-                                PointerPressed="OnAssetPointerPressed">
-                            
-                            <Border.Styles>
-                                <Style Selector="Border.selected">
-                                    <Setter Property="Background" Value="#3A3A3A"/>
-                                </Style>
-                                <Style Selector="Border:pointerover">
-                                    <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
-                                </Style>
-                            </Border.Styles>
-                            
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                
-                                <!-- ジャンクションアイコン -->
-                                <TextBlock Grid.Column="0" 
-                                          Text="迫" 
-                                          FontSize="16"
-                                          Margin="0,0,8,0"
-                                          VerticalAlignment="Center"/>
-                                
-                                <!-- アセット情報 -->
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Name}" 
-                                              FontSize="16"
-                                              FontWeight="Bold"
-                                              Classes.selected="{Binding IsSelected}">
-                                        <TextBlock.Styles>
-                                            <Style Selector="TextBlock.selected">
-                                                <Setter Property="Foreground" Value="White"/>
-                                            </Style>
-                                        </TextBlock.Styles>
-                                    </TextBlock>
-                                    
-                                    <TextBlock FontSize="11" 
-                                              Opacity="0.7"
-                                              Classes.selected="{Binding IsSelected}"
-                                              Text="{Binding DisabledAddonCountDisplay}">
-                                        <TextBlock.Styles>
-                                            <Style Selector="TextBlock.selected">
-                                                <Setter Property="Foreground" Value="White"/>
-                                                <Setter Property="Opacity" Value="0.9"/>
-                                            </Style>
-                                        </TextBlock.Styles>
-                                    </TextBlock>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </Border>
     </Grid>
 </UserControl>

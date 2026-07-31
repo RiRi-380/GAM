@@ -4,12 +4,8 @@
 
 ## 1. 更新元リポジトリの設定
 
-**方法A: アプリの設定画面から指定（推奨）**
-1. 設定 > Updates にある「GitHub repository (owner/name)」にリポジトリを入力
-   - 例: `RiRi-380/GAM`
-2. 保存してアプリを再起動
+製品版の既定値は `RiRi-380/GAM` です。開発・検証で変更する場合のみ、環境変数を使います。
 
-**方法B: 環境変数で指定**
 - `GAM_UPDATE_REPO` に `owner/name` を設定
 
 PowerShell（現在のセッションのみ）:
@@ -21,7 +17,7 @@ $env:GAM_UPDATE_REPO = "owner/repo"
 
 GitHub API にアクセスするためのトークンが必要です。
 
-- 環境変数 `GAM_GITHUB_TOKEN`（または `GITHUB_TOKEN`）を設定
+- 環境変数 `GAM_GITHUB_TOKEN` を設定
 
 PowerShell（現在のセッションのみ）:
 ```powershell
@@ -58,16 +54,11 @@ $env:GAM_UPDATE_INCLUDE_PRERELEASE = "1"
 - 拡張子が `.exe`
 - ファイル名に `setup` または `installer` が含まれる
   - 例: `GAM-Setup-v1.2.3.exe`
+- GitHub Releases APIのassetに有効な `sha256:` digestがある
 
 **ZIPのみの場合はアップデート検出に失敗**します。
 
 ## 6. 動作確認手順
-
-**手動チェック（必ず実行）**
-1. 設定 > Updates > 「アップデートを確認」をクリック
-2. 結果:
-   - 更新があればダイアログが出ます
-   - 失敗した場合はエラー理由が表示されます
 
 **自動チェック（起動後）**
 - 起動5秒後に自動チェックが走ります
@@ -85,6 +76,5 @@ $env:GAM_UPDATE_INCLUDE_PRERELEASE = "1"
 
 ### ユーザー向けメモ
 
-- 設定したリポジトリは `settings.json` に保存されます:
-  `%APPDATA%\GmodAddonManager\settings.json`
-- トークンはファイルには保存されません（環境変数のみ）
+- 更新元の上書きとトークンはファイルには保存されません（環境変数のみ）。
+- ダウンロード後はGitHub Releases APIのSHA-256 digestと照合し、一致しないインストーラは実行しません。

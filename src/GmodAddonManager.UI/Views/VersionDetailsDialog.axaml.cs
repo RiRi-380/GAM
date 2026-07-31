@@ -46,6 +46,7 @@ namespace GmodAddonManager.UI.Views
         private readonly List<AssetVersion> _versionHistory;
         private readonly List<string> _currentAddonIds;
         private readonly List<string> _previousAddonIds;
+        private readonly int? _previousVersion;
         private bool _disposed;
         private List<VersionAddonItem> displayAddons = new();
         
@@ -55,28 +56,17 @@ namespace GmodAddonManager.UI.Views
             _targetVersion = targetVersion;
             _versionHistory = versionHistory;
             
-            // 現在のバージョンのアドオンID取得
-            if (targetVersion == asset.CurrentVersion)
-            {
-                _currentAddonIds = new List<string>(asset.Addons);
-            }
-            else
-            {
-                var version = versionHistory.FirstOrDefault(v => v.Version == targetVersion);
-                _currentAddonIds = version?.AddonIds ?? new List<string>();
-            }
+            var targetSnapshot =
+                versionHistory.FirstOrDefault(version => version.Version == targetVersion);
+            _currentAddonIds = targetSnapshot?.AddonIds ?? new List<string>();
             
-            // 前バージョンのアドオンID取得
-            var previousVersion = targetVersion - 1;
-            if (previousVersion > 0)
-            {
-                var prevVer = versionHistory.FirstOrDefault(v => v.Version == previousVersion);
-                _previousAddonIds = prevVer?.AddonIds ?? new List<string>();
-            }
-            else
-            {
-            _previousAddonIds = new List<string>();
-        }
+            // Gaps are valid because deleting a snapshot never renumbers history.
+            var previousVersion = versionHistory
+                .Where(version => version.Version < targetVersion)
+                .OrderByDescending(version => version.Version)
+                .FirstOrDefault();
+            _previousVersion = previousVersion?.Version;
+            _previousAddonIds = previousVersion?.AddonIds ?? new List<string>();
             
             // 表示用のアドオンリストを作成
             CreateDisplayAddons();
@@ -86,10 +76,13 @@ namespace GmodAddonManager.UI.Views
         public string AssetName => GetAssetDisplayName();
         public string AssetLabel => L.Format("VersionDetails.AssetLabel", AssetName);
         public string VersionInfo => L.Format("VersionDetails.VersionInfoFormat", _targetVersion);
-        public bool HasPreviousVersion => _previousAddonIds.Count > 0;
+        public bool HasPreviousVersion => _previousVersion.HasValue;
         
         public string DiffSummary => HasPreviousVersion 
-            ? L.Format("VersionDetails.DiffSummaryFormat", _targetVersion - 1, _targetVersion) 
+            ? L.Format(
+                "VersionDetails.DiffSummaryFormat",
+                _previousVersion!.Value,
+                _targetVersion)
             : L.Get("VersionDetails.FirstVersion");
         
         public int AddedCount => _currentAddonIds.Except(_previousAddonIds).Count();
@@ -120,8 +113,7 @@ namespace GmodAddonManager.UI.Views
                 {
                     AddonId = id,
                     Title = L.Format("VersionDetails.WorkshopIdFormat", id),
-                    Status = AddonDiffStatus.Removed,
-                    HasState = false
+                    Status = AddonDiffStatus.Removed
                 });
             }
             
@@ -132,8 +124,7 @@ namespace GmodAddonManager.UI.Views
                 {
                     AddonId = id,
                     Title = L.Format("VersionDetails.WorkshopIdFormat", id),
-                    Status = AddonDiffStatus.Added,
-                    HasState = false
+                    Status = AddonDiffStatus.Added
                 });
             }
             
@@ -144,8 +135,7 @@ namespace GmodAddonManager.UI.Views
                 {
                     AddonId = id,
                     Title = L.Format("VersionDetails.WorkshopIdFormat", id),
-                    Status = AddonDiffStatus.Unchanged,
-                    HasState = false
+                    Status = AddonDiffStatus.Unchanged
                 });
             }
 
@@ -157,7 +147,6 @@ namespace GmodAddonManager.UI.Views
             return _asset.Id switch
             {
                 "subscribe-system-asset" => L.Get("Asset.SubscribeAsset"),
-                "junction-system-asset" => L.Get("Asset.Junction"),
                 _ => _asset.Name
             };
         }
@@ -198,8 +187,6 @@ namespace GmodAddonManager.UI.Views
         public string AddonId { get; set; } = "";
         public string Title { get; set; } = "";
         public AddonDiffStatus Status { get; set; }
-        public bool HasState { get; set; }
-        public string StateDisplay { get; set; } = "";
         
         public string BorderColor => Status switch
         {

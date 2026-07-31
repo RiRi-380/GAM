@@ -27,6 +27,7 @@ namespace GmodAddonManager.Core.Services
         private readonly string workshopPath;
         private readonly string managerPath;
         private readonly string configPath;
+        private readonly string configurationPathMutexName;
         private readonly string pendingPath;
         private readonly string addonsPath;
         private readonly string? gmodCachePath;
@@ -43,13 +44,17 @@ namespace GmodAddonManager.Core.Services
         
         private readonly JunctionService junctionService;
         private readonly SteamPathDetector steamPathDetector;
-        private readonly WorkshopInstallIndex workshopInstallIndex;
         private readonly WorkshopIconResolver workshopIconResolver;
         private readonly PathSnapshot? pathSnapshot;
         private readonly string? customGmodInstallPath;
         private readonly string? customWorkshopPath;
         private readonly SteamWorkshopService steamWorkshopService;
         private readonly UndoManager undoManager;
+        private readonly AssetStateResolver assetStateResolver;
+        private readonly AssetVersionService assetVersionService;
+        private readonly ConfigurationMigrationService configurationMigrationService;
+        private readonly InitialAddonStateImportService initialAddonStateImportService;
+        private readonly SubscriptionObservationService subscriptionObservationService;
         private readonly IErrorHandler errorHandler;
         private readonly ExperimentEventLogger eventLogger;
         private readonly AsyncLocal<LinkOperationMetrics?> linkMetricsContext = new AsyncLocal<LinkOperationMetrics?>();
@@ -62,12 +67,17 @@ namespace GmodAddonManager.Core.Services
         private int _softModeNoFileOpsNoticeLogged = 0;
         private int _localManagementDisabledNoticeLogged = 0;
         private int _sessionLogged = 0;
+        private bool _initializationCompleted;
         private readonly object _scanCacheLock = new object();
         private List<WorkshopAddon>? _scanCache;
         private DateTime _scanCacheTimestampUtc = DateTime.MinValue;
         private TimeSpan _scanCacheTtl = TimeSpan.Zero;
         private int _bulkStateUpdateDepth = 0;
         private readonly int _maxParallelAddonStateUpdates;
+        private readonly SemaphoreSlim _configurationSaveGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _runtimeReconcileGate = new SemaphoreSlim(1, 1);
+        private static readonly TimeSpan ConfigurationPathMutexTimeout =
+            TimeSpan.FromSeconds(10);
 
         public DisableMode DisableMode { get; private set; }
         public bool StrictLinkMode
@@ -96,6 +106,8 @@ namespace GmodAddonManager.Core.Services
         public bool IsExperimentContextActive => eventLogger.IsExperimentContextActive;
         public Func<bool?>? GmodRunningProvider { get; set; }
         public Func<int?>? PendingChangeCountProvider { get; set; }
+        public Action? QueueRuntimeApplyProvider { get; set; }
+        public int PendingDownloadCount { get; private set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int StateMatchPollIntervalMs { get; set; } = 200;
         public TimeSpan ScanCacheTtl
@@ -160,7 +172,6 @@ namespace GmodAddonManager.Core.Services
                 ? null
                 : options.CustomWorkshopPath;
             steamPathDetector = new SteamPathDetector();
-            workshopInstallIndex = new WorkshopInstallIndex(steamPathDetector);
             junctionService = new JunctionService();
             
             // Initialize WorkshopIconResolver
@@ -177,8 +188,14 @@ namespace GmodAddonManager.Core.Services
             workshopIconResolver.SetWorkshopService(steamWorkshopService);
             
             undoManager = new UndoManager();
-            errorHandler = options.ErrorHandler ?? new DefaultErrorHandler();
-            eventLogger = ExperimentEventLogger.CreateDefault();
+            assetStateResolver = new AssetStateResolver();
+            assetVersionService = new AssetVersionService();
+            configurationMigrationService = new ConfigurationMigrationService();
+            initialAddonStateImportService = new InitialAddonStateImportService();
+            subscriptionObservationService = new SubscriptionObservationService();
+            errorHandler = options.ErrorHandler ?? new DefaultErrorHandler(
+                Path.Combine(appDataPath, "logs"));
+            eventLogger = ExperimentEventLogger.CreateDefault(appDataPath);
             StrictLinkMode = GetStrictLinkModeFromEnvironment();
             EnableLocalAddonManagement = options.EnableLocalAddonsExperimental;
             customWorkshopCacheFilePaths = options.CustomWorkshopCacheFilePaths;
@@ -218,10 +235,19 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            var hasCustomWorkshopPath = !string.IsNullOrEmpty(customWorkshopPath);
+            // A valid Workshop override remains useful even when the paired GMod
+            // override cannot form a complete snapshot. Never adopt a raw,
+            // unreadable Workshop path merely because it was configured.
+            var hasCustomWorkshopPath =
+                !string.IsNullOrWhiteSpace(customWorkshopPath) &&
+                PathOverrideResolver.IsDirectoryUsable(customWorkshopPath);
+            var detectedWorkshopPath = pathSnapshot?.ActiveWorkshopRoot?.RootPath;
             workshopPath = hasCustomWorkshopPath
                 ? customWorkshopPath!
-                : pathSnapshot?.ActiveWorkshopRoot?.RootPath ?? steamPathDetector.DetectWorkshopPath();
+                : !string.IsNullOrWhiteSpace(detectedWorkshopPath) &&
+                  PathOverrideResolver.IsDirectoryUsable(detectedWorkshopPath)
+                    ? detectedWorkshopPath
+                    : Path.Combine(appDataPath, "unavailable-workshop");
 
             if (DisableMode == DisableMode.Soft)
             {
@@ -237,6 +263,8 @@ namespace GmodAddonManager.Core.Services
                 pendingPath = Path.Combine(managerPath, "pending.json");
                 addonsPath = Path.Combine(managerPath, "addons");
             }
+
+            configurationPathMutexName = BuildConfigurationPathMutexName(configPath);
 
             localManagedRootPath = Path.Combine(managerPath, "local-addons");
             
@@ -420,13 +448,6 @@ namespace GmodAddonManager.Core.Services
             return result;
         }
 
-        public Task<PathHealthOperationResult> CleanupStaleEmptyWorkshopFoldersAsync()
-        {
-            var report = GetPathHealthReport();
-            var result = PathHealthService.CleanupStaleEmptyWorkshopFolders(report.CleanupCandidates);
-            return Task.FromResult(result);
-        }
-
         public async Task<PathHealthOperationResult> MigrateManagedDataAsync()
         {
             var report = GetPathHealthReport();
@@ -549,7 +570,7 @@ namespace GmodAddonManager.Core.Services
                 // 起動時に古いログをクリーンアップ
                 operationLogManager.CleanupOldLogs();
 
-                if (File.Exists(configPath))
+                if (File.Exists(configPath) || File.Exists(configPath + ".bak"))
                 {
                     await LoadConfigurationAsync();
                     
@@ -585,15 +606,20 @@ namespace GmodAddonManager.Core.Services
                 
                 // Subscribeアセットに全アドオンが含まれていることを確認
                 await EnsureAllAddonsInSubscribeAssetAsync();
-                
-                // 初期化後、全アドオンの状態を確実に更新
-                await UpdateAddonStatesAsync();
+
+                // 新規profileだけ、既存のGMod無効状態をread-onlyで一度取り込む。
+                // 起動時にはaddonnomount.txtへ書き戻さない。
+                await TryRunInitialAddonStateImportAsync();
                 
                 // 最後にサブスクライブ解除されたアドオンをクリーンアップ
-                // UpdateAddonStatesAsyncの後に実行することで、ジャンクション再作成を防ぐ
                 await modeStrategy.CleanupUnsubscribedAddonsAsync(this);
 
-                _ = CleanupStaleIconCacheAsync();
+                await SaveConfigurationImmediatelyAsync();
+
+                // Initialization owns this cleanup. Await it so callers can safely dispose or
+                // replace the manager directory as soon as InitializeAsync completes.
+                await CleanupStaleIconCacheAsync();
+                _initializationCompleted = true;
                 
                 // Addon Manager initialization complete
             }
@@ -607,23 +633,18 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
-                var activeIds = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var id in GetSubscribedAddonIdsFromCache())
+                var snapshot = GetWorkshopSnapshotFromCache();
+                if (!snapshot.IsAuthoritative)
                 {
-                    if (!string.IsNullOrWhiteSpace(id))
-                    {
-                        activeIds.Add(id);
-                    }
+                    errorHandler.HandleWarning(
+                        "Steam subscription state is not authoritative; skipping stale icon cleanup.",
+                        "InitializeAsync");
+                    return;
                 }
 
-                foreach (var id in workshopInstallIndex.GetInstalledIds())
-                {
-                    if (!string.IsNullOrWhiteSpace(id))
-                    {
-                        activeIds.Add(id);
-                    }
-                }
-
+                var activeIds = new HashSet<string>(
+                    snapshot.SubscribedIds,
+                    StringComparer.Ordinal);
                 await workshopIconResolver.CleanupStaleIconsAsync(activeIds, TimeSpan.FromDays(30));
             }
             catch (Exception ex)
@@ -779,61 +800,97 @@ namespace GmodAddonManager.Core.Services
         private async Task EnsureAllAddonsInSubscribeAssetAsync()
         {
             var subscribeAsset = configuration.Assets.FirstOrDefault(a => a.Id == SubscribeSystemAssetId);
-            if (subscribeAsset == null) return;
-            
-            bool needsSave = false;
-            var subscriptionTruthAvailable = TryGetSubscribedAddonIdSet(
-                "EnsureAllAddonsInSubscribeAsset",
-                out var subscribedAddonIds);
-            
-            // 全てのアドオン（フォルダとGMAの両方）をSubscribeアセットに追加
-            foreach (var kvp in configuration.AddonMetadata)
+            if (subscribeAsset == null)
             {
-                if (kvp.Value.IsLocal && !EnableLocalAddonManagement)
+                subscribeAsset = new Asset("Subscribe Asset", true)
                 {
-                    continue;
-                }
-
-                if (!kvp.Value.IsLocal &&
-                    !IsCurrentInventoryAddon(kvp.Key, subscribedAddonIds, subscriptionTruthAvailable, "EnsureAllAddonsInSubscribeAsset"))
-                {
-                    continue;
-                }
-
-                // Runtime check to ensure correct IsGmaFile flag (skip local addons)
-                if (!kvp.Value.IsLocal)
-                {
-                    bool isGmaRuntime = IsGmaAddonRuntime(kvp.Key);
-                    if (kvp.Value.IsGmaFile != isGmaRuntime)
-                    {
-                        errorHandler.HandleWarning(
-                            $"Addon {kvp.Key} metadata mismatch: IsGmaFile={kvp.Value.IsGmaFile}, Runtime={isGmaRuntime}. Correcting metadata.",
-                            "EnsureAllAddonsInSubscribeAsset"
-                        );
-                        kvp.Value.IsGmaFile = isGmaRuntime;
-                        needsSave = true;
-                    }
-                }
-                
-                if (!subscribeAsset.Addons.Contains(kvp.Key))
-                {
-                    // ジャンクションアセットに属するアドオンは除外
-                    var junctionAsset = configuration.Assets.FirstOrDefault(a => a.Id == JunctionSystemAssetId);
-                    if (junctionAsset != null && junctionAsset.Addons.Contains(kvp.Key))
-                    {
-                        continue;
-                    }
-                    
-                    subscribeAsset.AddAddon(kvp.Key, kvp.Value.IsEnabled ? AddonState.Enabled : AddonState.Disabled);
-                    needsSave = true;
-                }
+                    Id = SubscribeSystemAssetId
+                };
+                configuration.Assets.Insert(0, subscribeAsset);
             }
-            
-            // メタデータが修正された場合は保存
+
+            var needsSave =
+                subscribeAsset.Name != "Subscribe Asset" ||
+                !subscribeAsset.IsSystem ||
+                !subscribeAsset.ContainsAllAddons() ||
+                subscribeAsset.Addons.Count != 1 ||
+                subscribeAsset.AddonStates.Count > 0;
+
+            subscribeAsset.Name = "Subscribe Asset";
+            subscribeAsset.IsSystem = true;
+            subscribeAsset.IsFavorite = false;
+            subscribeAsset.SetAllAddons();
+            subscribeAsset.AddonStates.Clear();
+
+            var snapshot = GetWorkshopSnapshotFromCache();
+            var observation = subscriptionObservationService.Observe(configuration, snapshot);
+            PendingDownloadCount = observation.PendingDownloadCount;
+            needsSave |= observation.Changed;
+
             if (needsSave)
             {
                 await SaveConfigurationAsync();
             }
+        }
+
+        private async Task TryRunInitialAddonStateImportAsync()
+        {
+            if (configuration.InitialRuntimeImportCompleted)
+            {
+                return;
+            }
+
+            var workshopSnapshot = GetWorkshopSnapshotFromCache();
+            PendingDownloadCount = workshopSnapshot.SubscribedIds
+                .Except(workshopSnapshot.InstalledIds, StringComparer.Ordinal)
+                .Count();
+
+            if (!workshopSnapshot.IsAuthoritative)
+            {
+                errorHandler.HandleWarning(
+                    "Steam Workshop subscription state is not authoritative; initial GMod state import will be retried later.",
+                    "InitialAddonStateImport");
+                return;
+            }
+
+            if (gmodAddonStateStore == null)
+            {
+                errorHandler.HandleWarning(
+                    "Garry's Mod settings path is unavailable; initial GMod state import will be retried later.",
+                    "InitialAddonStateImport");
+                return;
+            }
+
+            AddonMountSnapshot runtimeSnapshot;
+            try
+            {
+                runtimeSnapshot = gmodAddonStateStore.ReadSnapshot();
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to read addonnomount.txt for initial import: {ex.Message}",
+                    "InitialAddonStateImport");
+                return;
+            }
+
+            if (!runtimeSnapshot.IsValidFormat)
+            {
+                errorHandler.HandleWarning(
+                    "addonnomount.txt is malformed; initial import was not marked complete and will be retried after repair.",
+                    "InitialAddonStateImport");
+                return;
+            }
+
+            initialAddonStateImportService.Import(
+                configuration,
+                workshopSnapshot.SubscribedIds,
+                runtimeSnapshot.DisabledIds,
+                DateTime.UtcNow);
+            // The completion marker is a one-time import boundary. Persist it before
+            // initialization can return so a crash cannot repeat the import and create
+            // a second Excluded asset on the next launch.
+            await SaveConfigurationImmediatelyAsync();
         }
         
 
@@ -1298,8 +1355,119 @@ namespace GmodAddonManager.Core.Services
             }
 
             var result = await modeStrategy.ScanWorkshopFolderAsync(this);
+            result = await FinalizeWorkshopInventoryAsync(result);
             StoreScanCache(result);
             return result;
+        }
+
+        private async Task<List<WorkshopAddon>> FinalizeWorkshopInventoryAsync(
+            List<WorkshopAddon> scannedAddons)
+        {
+            var snapshot = GetWorkshopSnapshotFromCache();
+            var observation = subscriptionObservationService.Observe(configuration, snapshot);
+            var changed = observation.Changed;
+
+            if (!snapshot.IsAuthoritative)
+            {
+                PendingDownloadCount = 0;
+                return scannedAddons;
+            }
+
+            var subscribedIds = new HashSet<string>(snapshot.SubscribedIds, StringComparer.Ordinal);
+            var visibleAddons = scannedAddons
+                .Where(addon => addon.IsLocal || subscribedIds.Contains(addon.Id))
+                .GroupBy(addon => addon.Id, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            var visibleWorkshopIds = new HashSet<string>(
+                visibleAddons.Where(addon => !addon.IsLocal).Select(addon => addon.Id),
+                StringComparer.Ordinal);
+
+            PendingDownloadCount = subscribedIds.Except(visibleWorkshopIds, StringComparer.Ordinal).Count();
+
+            foreach (var addon in visibleAddons.Where(addon => !addon.IsLocal))
+            {
+                addon.IsAvailable = true;
+                addon.IsDownloadPending = false;
+                if (configuration.SubscriptionFirstSeenAtUtc.TryGetValue(addon.Id, out var firstSeen))
+                {
+                    addon.FirstSeenSubscribedAtUtc = firstSeen;
+                }
+            }
+
+            foreach (var asset in configuration.Assets.Where(asset => !IsSystemInventoryAsset(asset)))
+            {
+                var missingIds = asset.Addons
+                    .Where(id => id != "*" && !subscribedIds.Contains(id))
+                    .ToList();
+                if (missingIds.Count == 0)
+                {
+                    continue;
+                }
+
+                if (configuration.RetainMissingAssetReferences)
+                {
+                    foreach (var addonId in missingIds)
+                    {
+                        if (configuration.AddonMetadata.TryGetValue(addonId, out var metadata))
+                        {
+                            if (metadata.IsAvailable || metadata.IsDownloadPending)
+                            {
+                                changed = true;
+                            }
+                            metadata.IsAvailable = false;
+                            metadata.IsDownloadPending = false;
+                        }
+                        else
+                        {
+                            configuration.AddonMetadata[addonId] = new WorkshopAddon(addonId, string.Empty)
+                            {
+                                Title = $"Workshop-{addonId}",
+                                NeedsTitleUpdate = true,
+                                IsAvailable = false,
+                                IsDownloadPending = false
+                            };
+                            changed = true;
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var addonId in missingIds)
+                    {
+                        asset.RemoveAddon(addonId);
+                    }
+                    changed = true;
+                }
+            }
+
+            if (!configuration.RetainMissingAssetReferences)
+            {
+                var referencedIds = new HashSet<string>(
+                    configuration.Assets
+                        .Where(asset => !IsSystemInventoryAsset(asset))
+                        .SelectMany(asset => asset.Addons)
+                        .Where(id => id != "*"),
+                    StringComparer.Ordinal);
+                var staleMetadataIds = configuration.AddonMetadata
+                    .Where(kvp => !kvp.Value.IsLocal &&
+                                  !subscribedIds.Contains(kvp.Key) &&
+                                  !referencedIds.Contains(kvp.Key))
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+                foreach (var addonId in staleMetadataIds)
+                {
+                    configuration.AddonMetadata.Remove(addonId);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            return visibleAddons;
         }
 
         internal async Task<List<WorkshopAddon>> ScanWorkshopFolderHardAsync()
@@ -1540,6 +1708,24 @@ namespace GmodAddonManager.Core.Services
                         savedAddon.FolderPath = directory;
                         savedAddon.IsGmaFile = IsGmaAddonRuntime(addonId);
                         savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        try
+                        {
+                            var directoryInfo = new DirectoryInfo(directory);
+                            var lastUpdatedUtc = directoryInfo.LastWriteTimeUtc;
+                            if (savedAddon.Size <= 0 ||
+                                savedAddon.LastUpdated != lastUpdatedUtc)
+                            {
+                                savedAddon.Size =
+                                    await CalculateDirectorySizeAsync(directoryInfo);
+                                savedAddon.LastUpdated = lastUpdatedUtc;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            errorHandler.HandleWarning(
+                                $"Failed to refresh addon size metadata for {addonId}: {ex.Message}",
+                                "ScanWorkshopFolderSoftAsync");
+                        }
                         addons.Add(savedAddon);
                     }
                     else
@@ -1572,7 +1758,7 @@ namespace GmodAddonManager.Core.Services
                         if (!string.IsNullOrEmpty(gmodCachePath))
                         {
                             gmaPath = Path.Combine(gmodCachePath, $"{kvp.Key}.gma");
-                            if (File.Exists(gmaPath))
+                            if (HasNonEmptyFile(gmaPath))
                             {
                                 addonExists = true;
                             }
@@ -1584,9 +1770,9 @@ namespace GmodAddonManager.Core.Services
 
                         if (!addonExists)
                         {
-                            var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
-                            var workshopGmaPath = Path.Combine(workshopDirPath, $"{kvp.Key}.gma");
-                            if (File.Exists(workshopGmaPath))
+                        var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
+                        var workshopGmaPath = Path.Combine(workshopDirPath, $"{kvp.Key}.gma");
+                        if (HasNonEmptyFile(workshopGmaPath))
                             {
                                 gmaPath = workshopGmaPath;
                                 addonExists = true;
@@ -1628,6 +1814,14 @@ namespace GmodAddonManager.Core.Services
                         continue;
                     }
 
+                    if (!HasNonEmptyFile(gmaFile))
+                    {
+                        errorHandler.HandleInfo(
+                            $"Skipping empty GMA cache placeholder: {gmaFile}",
+                            "ScanWorkshopFolderSoftAsync");
+                        continue;
+                    }
+
                     if (processedIds.Contains(addonId))
                     {
                         continue;
@@ -1641,6 +1835,9 @@ namespace GmodAddonManager.Core.Services
                         savedAddon.FolderPath = gmaFile;
                         savedAddon.IsGmaFile = true;
                         savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        var fileInfo = new FileInfo(gmaFile);
+                        savedAddon.Size = fileInfo.Length;
+                        savedAddon.LastUpdated = fileInfo.LastWriteTimeUtc;
                         configuration.AddonMetadata[addonId] = savedAddon;
                         addons.Add(savedAddon);
                     }
@@ -2521,9 +2718,14 @@ namespace GmodAddonManager.Core.Services
                 // Check if we already know about this addon
         private List<string> GetSubscribedAddonIdsFromCache()
         {
+            return GetWorkshopSnapshotFromCache().SubscribedIds.ToList();
+        }
+
+        private SteamWorkshopSnapshot GetWorkshopSnapshotFromCache()
+        {
             return customWorkshopCacheFilePaths != null
-                ? SteamWorkshopCacheReader.GetSubscribedAddonIds(customWorkshopCacheFilePaths)
-                : SteamWorkshopCacheReader.GetSubscribedAddonIds();
+                ? SteamWorkshopCacheReader.GetWorkshopSnapshot(customWorkshopCacheFilePaths)
+                : SteamWorkshopCacheReader.GetWorkshopSnapshot();
         }
 
         private Dictionary<string, WorkshopItemInfo> GetAddonDetailsFromCache()
@@ -2536,42 +2738,25 @@ namespace GmodAddonManager.Core.Services
         private bool TryGetSubscribedAddonIdSet(string operationName, out HashSet<string> subscribedAddonIds)
         {
             subscribedAddonIds = new HashSet<string>(StringComparer.Ordinal);
-
-            IReadOnlyList<string> cacheFilePaths;
             try
             {
-                cacheFilePaths = customWorkshopCacheFilePaths
-                    ?? SteamWorkshopCacheReader.GetWorkshopCacheFilePaths();
-            }
-            catch (Exception ex)
-            {
-                errorHandler.HandleWarning($"Failed to locate Steam Workshop cache files: {ex.Message}", operationName);
-                return false;
-            }
-
-            var existingCacheFiles = cacheFilePaths
-                .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
-                .ToArray();
-
-            if (existingCacheFiles.Length == 0)
-            {
-                return false;
-            }
-
-            try
-            {
-                foreach (var addonId in SteamWorkshopCacheReader.GetSubscribedAddonIds(existingCacheFiles))
+                var snapshot = GetWorkshopSnapshotFromCache();
+                PendingDownloadCount = snapshot.SubscribedIds
+                    .Except(snapshot.InstalledIds, StringComparer.Ordinal)
+                    .Count();
+                if (!snapshot.IsAuthoritative)
                 {
-                    subscribedAddonIds.Add(addonId);
+                    return false;
                 }
+
+                subscribedAddonIds.UnionWith(snapshot.SubscribedIds);
+                return true;
             }
             catch (Exception ex)
             {
                 errorHandler.HandleWarning($"Failed to read Steam Workshop subscription cache: {ex.Message}", operationName);
                 return false;
             }
-
-            return true;
         }
 
         private bool IsCurrentInventoryAddon(
@@ -2580,9 +2765,9 @@ namespace GmodAddonManager.Core.Services
             bool subscriptionTruthAvailable,
             string operationName)
         {
-            if (subscriptionTruthAvailable && subscribedAddonIds != null && subscribedAddonIds.Contains(addonId))
+            if (subscriptionTruthAvailable)
             {
-                return true;
+                return subscribedAddonIds != null && subscribedAddonIds.Contains(addonId);
             }
 
             var workshopDirPath = Path.Combine(workshopPath, addonId);
@@ -2671,10 +2856,13 @@ namespace GmodAddonManager.Core.Services
             var newAddons = new List<WorkshopAddon>();
             var config = configuration ?? throw new InvalidOperationException("Configuration not initialized.");
 
-            // First, try to get addon IDs from Steam Workshop cache (much faster)
-            var subscriptionTruthAvailable = TryGetSubscribedAddonIdSet(
-                "ScanForNewAddonsAsync",
-                out var cachedAddonIds);
+            var workshopSnapshot = GetWorkshopSnapshotFromCache();
+            var subscriptionTruthAvailable = workshopSnapshot.IsAuthoritative;
+            var cachedAddonIds = new HashSet<string>(
+                workshopSnapshot.SubscribedIds,
+                StringComparer.Ordinal);
+            var observation = subscriptionObservationService.Observe(config, workshopSnapshot);
+            PendingDownloadCount = observation.PendingDownloadCount;
             if (subscriptionTruthAvailable && cachedAddonIds.Count > 0)
             {
                 errorHandler.HandleInfo($"Found {cachedAddonIds.Count} addon IDs in Steam Workshop cache", "ScanForNewAddonsAsync");
@@ -2716,7 +2904,13 @@ namespace GmodAddonManager.Core.Services
                     Id = dirName,
                     Title = $"Workshop-{dirName}",
                     IsEnabled = true, // It's in the workshop folder, so it's enabled
-                    IsGmaFile = IsGmaAddonRuntime(dirName) // 実際のファイルをチェック
+                    IsGmaFile = IsGmaAddonRuntime(dirName), // 実際のファイルをチェック
+                    IsAvailable = true,
+                    IsDownloadPending = false,
+                    FirstSeenSubscribedAtUtc =
+                        config.SubscriptionFirstSeenAtUtc.TryGetValue(dirName, out var firstSeen)
+                            ? firstSeen
+                            : (DateTime?)null
                 };
                 
                 // Try to get more info
@@ -2742,52 +2936,6 @@ namespace GmodAddonManager.Core.Services
                 newAddons.Add(addon);
             }
             
-            // Check if this is a GMA file addon - both from metadata and runtime check
-            if (cachedAddonIds.Any())
-            {
-                var missingAddonIds = cachedAddonIds
-                    .Except(downloadedAddonIds)
-                    .Where(id => !config.AddonMetadata.ContainsKey(id))
-                    .ToList();
-
-                var cachedDetails = new Dictionary<string, WorkshopItemInfo>(StringComparer.Ordinal);
-                try
-                {
-                    cachedDetails = GetAddonDetailsFromCache();
-                }
-                catch (Exception ex)
-                {
-                    errorHandler?.HandleInfo($"Failed to read Steam cache details: {ex.Message}", "ReadSteamCache");
-                }
-                
-                foreach (var addonId in missingAddonIds)
-                {
-                    // This addon is subscribed but not yet downloaded/visible
-                    var addon = new WorkshopAddon
-                    {
-                        Id = addonId,
-                        Title = $"Workshop-{addonId} (Pending Download)",
-                        IsEnabled = false, // Not yet available
-                        IsGmaFile = false,
-                        NeedsTitleUpdate = true // Mark for future update when available
-                    };
-                    
-                    if (cachedDetails.TryGetValue(addonId, out var info))
-                    {
-                        if (!string.IsNullOrEmpty(info.Title))
-                        {
-                            addon.Title = info.Title;
-                            addon.NeedsTitleUpdate = false;
-                        }
-
-                        if (info.TimeUpdated.HasValue)
-                            addon.LastUpdated = info.TimeUpdated.Value;
-                    }
-                    
-                    newAddons.Add(addon);
-                }
-            }
-            
             // Also scan cache folder for new GMA files
             if (!string.IsNullOrEmpty(gmodCachePath) && Directory.Exists(gmodCachePath))
             {
@@ -2803,6 +2951,8 @@ namespace GmodAddonManager.Core.Services
 
                     if (subscriptionTruthAvailable && !cachedAddonIds.Contains(addonId))
                         continue;
+
+                    downloadedAddonIds.Add(addonId);
                         
                     // Check if we already know about this addon
                     if (config.AddonMetadata.ContainsKey(addonId))
@@ -2816,7 +2966,13 @@ namespace GmodAddonManager.Core.Services
                         Size = new FileInfo(gmaFile).Length,
                         LastUpdated = File.GetLastWriteTime(gmaFile),
                         IsGmaFile = true,
-                        IsEnabled = true
+                        IsEnabled = true,
+                        IsAvailable = true,
+                        IsDownloadPending = false,
+                        FirstSeenSubscribedAtUtc =
+                            config.SubscriptionFirstSeenAtUtc.TryGetValue(addonId, out var firstSeen)
+                                ? firstSeen
+                                : (DateTime?)null
                     };
                     
                     // Try to read metadata
@@ -2826,6 +2982,14 @@ namespace GmodAddonManager.Core.Services
                 }
             }
             
+            PendingDownloadCount = subscriptionTruthAvailable
+                ? cachedAddonIds.Except(downloadedAddonIds, StringComparer.Ordinal).Count()
+                : 0;
+            if (observation.Changed)
+            {
+                await SaveConfigurationAsync();
+            }
+
             return newAddons;
         }
 
@@ -2978,32 +3142,47 @@ namespace GmodAddonManager.Core.Services
                     continue;
                 }
 
-                if (addon.Tags != null && addon.Tags.Length > 0)
-                {
-                    continue;
-                }
-
                 if (!cachedDetails.TryGetValue(addon.Id, out var info))
                 {
                     continue;
                 }
 
-                if (string.IsNullOrWhiteSpace(info.Tags))
+                if (info.TimeUpdated.HasValue)
+                {
+                    var workshopUpdatedAtUtc =
+                        NormalizeWorkshopTimestampUtc(info.TimeUpdated.Value);
+                    if (addon.WorkshopUpdatedAtUtc != workshopUpdatedAtUtc)
+                    {
+                        addon.WorkshopUpdatedAtUtc = workshopUpdatedAtUtc;
+                        updated = true;
+                    }
+                }
+
+                if ((addon.Tags != null && addon.Tags.Length > 0) ||
+                    string.IsNullOrWhiteSpace(info.Tags))
                 {
                     continue;
                 }
 
                 var tags = SplitTagsFromCache(info.Tags);
-                if (tags.Length == 0)
+                if (tags.Length > 0)
                 {
-                    continue;
+                    addon.Tags = tags;
+                    updated = true;
                 }
-
-                addon.Tags = tags;
-                updated = true;
             }
 
             return updated;
+        }
+
+        private static DateTime NormalizeWorkshopTimestampUtc(DateTime value)
+        {
+            return value.Kind switch
+            {
+                DateTimeKind.Utc => value,
+                DateTimeKind.Local => value.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            };
         }
 
         private static string[] SplitTagsFromCache(string raw)
@@ -3257,6 +3436,20 @@ namespace GmodAddonManager.Core.Services
             });
         }
 
+        private static bool HasNonEmptyFile(string path)
+        {
+            try
+            {
+                return !string.IsNullOrWhiteSpace(path) &&
+                       File.Exists(path) &&
+                       new FileInfo(path).Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
         {
             var result = AddonPayloadValidator.Validate(directoryPath);
@@ -3359,25 +3552,7 @@ namespace GmodAddonManager.Core.Services
             // Exception: if we removed a disabled stub, fall through to restore workshop/cache presence.
             if (!IsBulkStateUpdate)
             {
-                try
-                {
-                    if (gmodAddonStateStore == null)
-                    {
-                        errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableAddon");
-                    }
-                    else
-                    {
-                        var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
-                        if (!persisted)
-                        {
-                            errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableAddon");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableAddon");
-                }
+                TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon");
             }
 
             // Remove any legacy stub directory first (for backward compatibility)
@@ -3499,25 +3674,7 @@ namespace GmodAddonManager.Core.Services
         {
             if (!IsBulkStateUpdate)
             {
-                try
-                {
-                    if (gmodAddonStateStore == null)
-                    {
-                        errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableAddon");
-                    }
-                    else
-                    {
-                        var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
-                        if (!persisted)
-                        {
-                            errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableAddon");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableAddon");
-                }
+                TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon");
             }
 
             if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
@@ -3556,25 +3713,7 @@ namespace GmodAddonManager.Core.Services
         {
             if (!IsBulkStateUpdate)
             {
-                try
-                {
-                    if (gmodAddonStateStore == null)
-                    {
-                        errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "DisableAddon");
-                    }
-                    else
-                    {
-                        var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
-                        if (!persisted)
-                        {
-                            errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "DisableAddon");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "DisableAddon");
-                }
+                TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon");
             }
 
 	            var runtimeIsGma = IsGmaAddonRuntime(addonId);
@@ -3633,25 +3772,7 @@ namespace GmodAddonManager.Core.Services
         {
             if (!IsBulkStateUpdate)
             {
-                try
-                {
-                    if (gmodAddonStateStore == null)
-                    {
-                        errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "DisableAddon");
-                    }
-                    else
-                    {
-                        var persisted = gmodAddonStateStore.SetEnabled(addonId, false);
-                        if (!persisted)
-                        {
-                            errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "DisableAddon");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "DisableAddon");
-                }
+                TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon");
             }
 
             var runtimeIsGma = IsGmaAddonRuntime(addonId);
@@ -3670,25 +3791,7 @@ namespace GmodAddonManager.Core.Services
 	        {
             if (!IsBulkStateUpdate)
             {
-                try
-                {
-                    if (gmodAddonStateStore == null)
-                    {
-                        errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", "EnableGmaAddon");
-                    }
-                    else
-                    {
-                        var persisted = gmodAddonStateStore.SetEnabled(addonId, true);
-                        if (!persisted)
-                        {
-                            errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", "EnableGmaAddon");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", "EnableGmaAddon");
-                }
+                TryPersistSingleAddonRuntimeState(addonId, true, "EnableGmaAddon");
             }
             
 		            // Remove any legacy stub directory first (for backward compatibility)
@@ -4459,11 +4562,50 @@ namespace GmodAddonManager.Core.Services
         {
             if (DisableMode == DisableMode.Soft && gmodAddonStateStore != null)
             {
-                var disabledIds = gmodAddonStateStore.GetDisabledIds();
-                var softSnapshotStates = new Dictionary<string, bool>(StringComparer.Ordinal);
+                AddonMountSnapshot mountSnapshot;
+                try
+                {
+                    mountSnapshot = gmodAddonStateStore.ReadSnapshot();
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning(
+                        $"Failed to read actual GMod addon state: {ex.Message}",
+                        "CaptureState");
+                    return BuildSnapshot(
+                        new Dictionary<string, bool>(StringComparer.Ordinal),
+                        "actual:addonnomount.txt:unavailable");
+                }
 
-                foreach (var addonId in configuration.AddonMetadata.Keys
-                             .Where(id => id != "*")
+                if (!mountSnapshot.IsValidFormat)
+                {
+                    errorHandler.HandleWarning(
+                        "GMod addonnomount.txt has an invalid format; actual state is unknown.",
+                        "CaptureState");
+                    return BuildSnapshot(
+                        new Dictionary<string, bool>(StringComparer.Ordinal),
+                        "actual:addonnomount.txt:invalid");
+                }
+
+                var disabledIds = new HashSet<string>(
+                    mountSnapshot.DisabledIds,
+                    StringComparer.Ordinal);
+                var softSnapshotStates = new Dictionary<string, bool>(StringComparer.Ordinal);
+                var actualStateIds = new HashSet<string>(
+                    configuration.AddonMetadata.Keys.Where(id => id != "*"),
+                    StringComparer.Ordinal);
+                if (TryGetSubscribedAddonIdSet("CaptureState", out var subscribedAddonIds))
+                {
+                    actualStateIds.UnionWith(subscribedAddonIds);
+                }
+                else
+                {
+                    actualStateIds.UnionWith(
+                        configuration.KnownSubscribedAddonIds
+                            .Where(IsWorkshopNumericId));
+                }
+
+                foreach (var addonId in actualStateIds
                              .OrderBy(id => id, StringComparer.Ordinal))
                 {
                     if (!ShouldIncludeAddonInState(addonId))
@@ -4534,6 +4676,38 @@ namespace GmodAddonManager.Core.Services
             return BuildExpectedStates();
         }
 
+        public ResolvedAddonState GetResolvedAddonState(string addonId)
+        {
+            var runtimeTargets = GetRuntimeTargetAddonIds("GetResolvedAddonState");
+            return assetStateResolver.Resolve(addonId, configuration.Assets, runtimeTargets);
+        }
+
+        public IReadOnlyDictionary<string, ResolvedAddonState> GetResolvedAddonStates()
+        {
+            var runtimeTargets = GetRuntimeTargetAddonIds("GetResolvedAddonStates");
+            return runtimeTargets.ToDictionary(
+                addonId => addonId,
+                addonId => assetStateResolver.Resolve(addonId, configuration.Assets, runtimeTargets),
+                StringComparer.Ordinal);
+        }
+
+        public bool? GetActualAddonEnabledState(string addonId)
+        {
+            if (string.IsNullOrWhiteSpace(addonId))
+            {
+                return null;
+            }
+
+            if (DisableMode == DisableMode.Soft && gmodAddonStateStore != null)
+            {
+                return gmodAddonStateStore.GetEnabled(addonId);
+            }
+
+            return configuration.AddonMetadata.TryGetValue(addonId, out var addon)
+                ? addon.IsEnabled
+                : (bool?)null;
+        }
+
         public string ComputeStateHash(AddonStateSnapshot snapshot)
         {
             using var sha = SHA256.Create();
@@ -4544,28 +4718,51 @@ namespace GmodAddonManager.Core.Services
 
         private Dictionary<string, bool> BuildExpectedStates()
         {
-            var enabledAssets = configuration.Assets.Where(asset => asset.Enabled).ToList();
-            return BuildExpectedStatesForAssets(enabledAssets);
+            return BuildExpectedStatesForAssets(configuration.Assets);
         }
 
         private Dictionary<string, bool> BuildExpectedStatesForAssets(
             IReadOnlyList<Asset> enabledAssets)
         {
+            var subscribedAddonIds = GetRuntimeTargetAddonIds("BuildExpectedStates");
+            return BuildExpectedStatesForAssets(enabledAssets, subscribedAddonIds);
+        }
+
+        private Dictionary<string, bool> BuildExpectedStatesForAssets(
+            IReadOnlyList<Asset> enabledAssets,
+            ISet<string> subscribedAddonIds)
+        {
             var states = new Dictionary<string, bool>(StringComparer.Ordinal);
 
-            foreach (var addonId in configuration.AddonMetadata.Keys
-                         .Where(id => id != "*")
-                         .OrderBy(id => id, StringComparer.Ordinal))
+            foreach (var addonId in subscribedAddonIds.OrderBy(id => id, StringComparer.Ordinal))
             {
                 if (!ShouldIncludeAddonInState(addonId))
                 {
                     continue;
                 }
 
-                states[addonId] = CalculateFinalAddonState(addonId, enabledAssets);
+                states[addonId] = assetStateResolver
+                    .Resolve(addonId, enabledAssets, subscribedAddonIds)
+                    .DesiredEnabled;
             }
 
             return states;
+        }
+
+        private HashSet<string> GetRuntimeTargetAddonIds(string operationName)
+        {
+            if (TryGetSubscribedAddonIdSet(operationName, out var subscribedAddonIds))
+            {
+                return subscribedAddonIds;
+            }
+
+            errorHandler.HandleWarning(
+                "Steam subscription state is unavailable; using the last known subscription set for read-only state display.",
+                operationName);
+            return new HashSet<string>(
+                configuration.KnownSubscribedAddonIds
+                    .Where(IsWorkshopNumericId),
+                StringComparer.Ordinal);
         }
 
         private bool ShouldIncludeAddonInState(string addonId)
@@ -4601,8 +4798,8 @@ namespace GmodAddonManager.Core.Services
                 return null;
             }
 
-            var enabledAssets = configuration.Assets.Where(a => a.Id == assetId).ToList();
-            var states = BuildExpectedStatesForAssets(enabledAssets);
+            var selectedAssets = configuration.Assets.Where(a => a.Id == assetId).ToList();
+            var states = BuildExpectedStatesForAssets(selectedAssets);
             return BuildSnapshot(states, GetExpectedScopeLabel(assetSpecific: true));
         }
 
@@ -4638,6 +4835,22 @@ namespace GmodAddonManager.Core.Services
         private bool? GetGmodRunning()
         {
             return GmodRunningProvider?.Invoke();
+        }
+
+        internal bool IsGmodCurrentlyRunning()
+        {
+            return GetGmodRunning() ?? SteamProcessChecker.IsGmodRunning();
+        }
+
+        private bool DeferRuntimeApplyIfGmodRunning()
+        {
+            if (!IsGmodCurrentlyRunning())
+            {
+                return false;
+            }
+
+            QueueRuntimeApplyProvider?.Invoke();
+            return true;
         }
 
         private int? GetPendingChangeCount()
@@ -4821,40 +5034,88 @@ namespace GmodAddonManager.Core.Services
 
         public async Task LoadConfigurationAsync()
         {
-            if (File.Exists(configPath))
+            var backupPath = configPath + ".bak";
+            if (File.Exists(configPath) || File.Exists(backupPath))
             {
                 try
                 {
-                    string json = await Task.Run(() => File.ReadAllText(configPath));
-                    
-                    // Validate JSON before deserialization
-                    if (string.IsNullOrWhiteSpace(json))
-                    {
-                        throw new InvalidOperationException("Configuration file is empty");
-                    }
-                    
+                    (string Json, JObject Raw, Configuration Value) loaded;
                     try
                     {
-                        // Parse JSON first to validate structure
-                        var jsonObj = Newtonsoft.Json.Linq.JObject.Parse(json);
-                        
-                        // Deserialize with error handling
-                        configuration = JsonConvert.DeserializeObject<Configuration>(json, new JsonSerializerSettings
-                        {
-                            Error = (sender, args) => 
-                            {
-                                // Log error but don't throw - allows partial deserialization
-                                args.ErrorContext.Handled = true;
-                            }
-                        }) ?? new Configuration();
+                        loaded = await ReadConfigurationFileAsync(configPath);
                     }
-                    catch (Newtonsoft.Json.JsonException ex)
+                    catch (UnsupportedConfigurationSchemaException)
                     {
-                        throw new InvalidOperationException($"Invalid configuration file format: {ex.Message}", ex);
+                        // A newer GAM owns this profile. Falling back to an older
+                        // backup would silently discard its fields on the next save.
+                        throw;
                     }
-                    
-                    // Migrate system asset names from Japanese to English
-                    MigrateSystemAssetNames();
+                    catch (Exception primaryException) when (File.Exists(backupPath))
+                    {
+                        try
+                        {
+                            loaded = await ReadConfigurationFileAsync(backupPath);
+                        }
+                        catch (UnsupportedConfigurationSchemaException)
+                        {
+                            throw;
+                        }
+                        catch (Exception backupException)
+                        {
+                            throw new InvalidOperationException(
+                                "Both the primary configuration and its backup are unreadable.",
+                                new AggregateException(primaryException, backupException));
+                        }
+
+                        await RestoreConfigurationBackupAsync(backupPath);
+                        errorHandler.HandleWarning(
+                            "Recovered configuration from config.json.bak; the invalid primary was preserved.",
+                            "LoadConfiguration");
+                    }
+
+                    var jsonObj = loaded.Raw;
+                    configuration = loaded.Value;
+
+                    // This marker was introduced after schema v2. An existing v2
+                    // profile without it is not a new profile and must not run the
+                    // one-time addonnomount import.
+                    var missingInitialRuntimeImportMarker =
+                        jsonObj.Property(
+                            "initialRuntimeImportCompleted",
+                            StringComparison.OrdinalIgnoreCase) == null;
+
+                    if (configurationMigrationService.RequiresMigration(jsonObj))
+                    {
+                        var migrationBackupPath = configPath + ".pre-v2.bak";
+                        if (!File.Exists(migrationBackupPath))
+                        {
+                            File.Copy(configPath, migrationBackupPath, overwrite: false);
+                        }
+
+                        var migrationResult = configurationMigrationService.Migrate(
+                            jsonObj,
+                            configuration,
+                            removeLegacyJunctionAsset: DisableMode == DisableMode.Soft);
+                        errorHandler.HandleInfo(
+                            $"Migrated configuration to schema {Configuration.CurrentSchemaVersion}. " +
+                            $"Review assets: {migrationResult.NeedsReviewAssetIds.Count}.",
+                            "LoadConfiguration");
+                        await SaveConfigurationImmediatelyAsync();
+                    }
+                    else
+                    {
+                        configurationMigrationService.NormalizeCurrentSchema(
+                            configuration,
+                            removeLegacyJunctionAsset: DisableMode == DisableMode.Soft);
+                        MigrateSystemAssetNames();
+
+                        if (missingInitialRuntimeImportMarker)
+                        {
+                            configuration.InitialRuntimeImportCompleted = true;
+                            configuration.InitialRuntimeImportCompletedAtUtc ??= DateTime.UtcNow;
+                            await SaveConfigurationImmediatelyAsync();
+                        }
+                    }
                     
                     // Fix any invalid CurrentVersion values
                     FixInvalidCurrentVersions();
@@ -4863,7 +5124,76 @@ namespace GmodAddonManager.Core.Services
                 catch (Exception ex)
                 {
                     errorHandler.HandleError(ex, "Failed to load configuration", ErrorSeverity.Error);
-                    configuration = new Configuration();
+                    throw;
+                }
+            }
+        }
+
+        private async Task<(string Json, JObject Raw, Configuration Value)> ReadConfigurationFileAsync(
+            string path)
+        {
+            var json = await Task.Run(() => File.ReadAllText(path, Encoding.UTF8));
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                throw new InvalidOperationException("Configuration file is empty");
+            }
+
+            try
+            {
+                var raw = JObject.Parse(json);
+                configurationMigrationService.EnsureSupportedSchema(raw);
+                var value = JsonConvert.DeserializeObject<Configuration>(
+                    json,
+                    new JsonSerializerSettings
+                    {
+                        MissingMemberHandling = MissingMemberHandling.Ignore
+                    }) ?? throw new InvalidOperationException("Configuration deserialized to null.");
+                return (json, raw, value);
+            }
+            catch (UnsupportedConfigurationSchemaException)
+            {
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException($"Invalid configuration file format: {ex.Message}", ex);
+            }
+        }
+
+        private async Task RestoreConfigurationBackupAsync(string backupPath)
+        {
+            var tempPath = configPath + $".{Guid.NewGuid():N}.recovery.tmp";
+            var corruptArchivePath =
+                configPath + $".corrupt-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}.bak";
+            try
+            {
+                await Task.Run(() => ExecuteWithConfigurationPathMutex(() =>
+                {
+                    File.Copy(backupPath, tempPath, overwrite: false);
+                    if (File.Exists(configPath))
+                    {
+                        File.Replace(tempPath, configPath, corruptArchivePath);
+                    }
+                    else
+                    {
+                        File.Move(tempPath, configPath);
+                    }
+                }));
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.HandleWarning(
+                        $"Failed to clean up configuration recovery temp file: {ex.Message}",
+                        "LoadConfiguration");
                 }
             }
         }
@@ -4907,9 +5237,12 @@ namespace GmodAddonManager.Core.Services
                 }
                 
                 // インポートベースラインがある場合でも、CurrentVersionは0以上であるべき
-                if (asset.CurrentVersion < 0)
+                if (asset.CurrentVersion < 0 ||
+                    (asset.CurrentVersion > 0 &&
+                     asset.VersionHistory.All(
+                         version => version.Version != asset.CurrentVersion)))
                 {
-                    // [AddonManager] Fixing negative CurrentVersion {asset.CurrentVersion} for asset '{asset.Name}' to 0
+                    // Missing/invalid version labels must not survive normalization.
                     asset.CurrentVersion = 0;
                 }
             }
@@ -4993,6 +5326,19 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         private async Task SaveConfigurationInternalAsync()
         {
+            await _configurationSaveGate.WaitAsync();
+            try
+            {
+                await SaveConfigurationCoreAsync();
+            }
+            finally
+            {
+                _configurationSaveGate.Release();
+            }
+        }
+
+        private async Task SaveConfigurationCoreAsync()
+        {
             const int maxRetries = 3;
             string? json = null;
 
@@ -5028,12 +5374,24 @@ namespace GmodAddonManager.Core.Services
 
                         var configCopy = new Configuration
                         {
+                            SchemaVersion = configuration.SchemaVersion,
                             Version = configuration.Version,
                             LastUpdated = now,
                             Assets = configuration.Assets.ToList(),
                             AddonMetadata = addonMetadataSnapshot,
                             JunctionHistory = junctionHistorySnapshot,
-                            PathState = configuration.PathState ?? new PathState()
+                            PathState = configuration.PathState ?? new PathState(),
+                            InitialRuntimeImportCompleted = configuration.InitialRuntimeImportCompleted,
+                            InitialRuntimeImportCompletedAtUtc = configuration.InitialRuntimeImportCompletedAtUtc,
+                            SubscriptionBaselineInitialized = configuration.SubscriptionBaselineInitialized,
+                            KnownSubscribedAddonIds = configuration.KnownSubscribedAddonIds?.ToList() ?? new List<string>(),
+                            SubscriptionFirstSeenAtUtc =
+                                configuration.SubscriptionFirstSeenAtUtc != null
+                                    ? new Dictionary<string, DateTime>(
+                                        configuration.SubscriptionFirstSeenAtUtc,
+                                        StringComparer.Ordinal)
+                                    : new Dictionary<string, DateTime>(StringComparer.Ordinal),
+                            RetainMissingAssetReferences = configuration.RetainMissingAssetReferences
                         };
 
                         // Initialize WorkshopIconResolver
@@ -5055,40 +5413,45 @@ namespace GmodAddonManager.Core.Services
 
             if (string.IsNullOrEmpty(json))
             {
-                errorHandler.HandleError(new InvalidOperationException("Failed to create configuration snapshot"),
-                    "Failed to save configuration - could not create snapshot", ErrorSeverity.Error);
-                return;
+                var snapshotError = new InvalidOperationException(
+                    "Failed to create configuration snapshot.");
+                errorHandler.HandleError(
+                    snapshotError,
+                    "Failed to save configuration - could not create snapshot",
+                    ErrorSeverity.Error);
+                throw snapshotError;
             }
 
+            var tempPath = configPath + $".{Guid.NewGuid():N}.tmp";
             try
             {
-                // Initialize WorkshopIconResolver
-                var tempPath = configPath + ".tmp";
                 var backupPath = configPath + ".bak";
 
-                // Initialize WorkshopIconResolver
-                await Task.Run(() => File.WriteAllText(tempPath, json));
+                await Task.Run(() => ExecuteWithConfigurationPathMutex(() =>
+                {
+                    File.WriteAllText(tempPath, json);
 
-                // Initialize WorkshopIconResolver
-                if (File.Exists(configPath))
-                {
-                    File.Replace(tempPath, configPath, backupPath);
-                }
-                else
-                {
-                    File.Move(tempPath, configPath);
-                }
+                    if (File.Exists(configPath))
+                    {
+                        File.Replace(tempPath, configPath, backupPath);
+                    }
+                    else
+                    {
+                        File.Move(tempPath, configPath);
+                    }
+                }));
 
                 errorHandler.HandleInfo($"Configuration saved successfully (atomic). Assets count: {configuration.Assets.Count}", "SaveConfiguration");
             }
             catch (Exception ex)
             {
                 errorHandler.HandleError(ex, "Failed to save configuration", ErrorSeverity.Error);
-
-                // Initialize WorkshopIconResolver
+                throw;
+            }
+            finally
+            {
                 try
                 {
-                    var tempPath = configPath + ".tmp";
                     if (File.Exists(tempPath))
                     {
                         File.Delete(tempPath);
@@ -5100,6 +5463,52 @@ namespace GmodAddonManager.Core.Services
                     errorHandler.HandleInfo($"Failed to clean up temp file", "SaveConfiguration");
                 }
             }
+        }
+
+        private void ExecuteWithConfigurationPathMutex(Action action)
+        {
+            using var pathMutex = new Mutex(
+                initiallyOwned: false,
+                name: configurationPathMutexName);
+            var acquired = false;
+            try
+            {
+                try
+                {
+                    acquired = pathMutex.WaitOne(ConfigurationPathMutexTimeout);
+                }
+                catch (AbandonedMutexException)
+                {
+                    acquired = true;
+                }
+
+                if (!acquired)
+                {
+                    throw new TimeoutException(
+                        $"Timed out after {ConfigurationPathMutexTimeout.TotalSeconds:0} seconds " +
+                        "while waiting to save the shared GAM configuration.");
+                }
+
+                action();
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    pathMutex.ReleaseMutex();
+                }
+            }
+        }
+
+        private static string BuildConfigurationPathMutexName(string path)
+        {
+            var normalizedPath = Path.GetFullPath(path)
+                .Trim()
+                .ToUpperInvariant();
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(normalizedPath));
+            var hex = BitConverter.ToString(hash).Replace("-", string.Empty);
+            return "GmodAddonManager_Configuration_" + hex;
         }
         
         /// <summary>
@@ -5160,7 +5569,7 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentException("Asset name cannot be empty.", nameof(newName));
             }
 
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && (!a.IsSystem || a.Id == "subscribe-system-asset"));
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
                 throw new InvalidOperationException($"Asset not found or is system asset: {assetId}");
@@ -5177,7 +5586,51 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidOperationException($"Asset name already exists: {trimmed}");
             }
 
+            undoManager.RecordAction(new UndoAction(
+                UndoActionType.AssetRenamed,
+                $"Renamed asset '{asset.Name}' to '{trimmed}'")
+            {
+                AssetId = asset.Id,
+                AssetName = trimmed,
+                PreviousAssetName = asset.Name
+            });
             asset.Name = trimmed;
+        }
+
+        public async Task SetAssetFavoriteAsync(string assetId, bool isFavorite)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            if (asset == null)
+            {
+                throw new InvalidOperationException($"Custom asset not found: {assetId}");
+            }
+
+            if (asset.IsFavorite == isFavorite)
+            {
+                return;
+            }
+
+            var previousFavorite = asset.IsFavorite;
+            var undoAction = new UndoAction(
+                UndoActionType.AssetFavoriteChanged,
+                $"{(isFavorite ? "Favorited" : "Unfavorited")} asset '{asset.Name}'")
+            {
+                AssetId = asset.Id,
+                AssetName = asset.Name,
+                PreviousFavoriteState = previousFavorite
+            };
+            undoManager.RecordAction(undoAction);
+            asset.IsFavorite = isFavorite;
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                asset.IsFavorite = previousFavorite;
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
         }
 
         public string? ResolveAssetImagePath(Asset asset)
@@ -5221,13 +5674,39 @@ namespace GmodAddonManager.Core.Services
             var fullPath = Path.Combine(imageDir, fileName);
             ValidatePath(fullPath, "assetImagePath");
 
+            var previousPath = asset.ImagePath;
+            byte[]? previousBytes = null;
+            var resolvedPreviousPath = ResolveAssetImagePath(asset);
+            if (!string.IsNullOrWhiteSpace(resolvedPreviousPath) && File.Exists(resolvedPreviousPath))
+            {
+                previousBytes = File.ReadAllBytes(resolvedPreviousPath);
+            }
+
             File.WriteAllBytes(fullPath, pngBytes);
 
             asset.ImagePath = Path.Combine(AssetImageDirectoryName, fileName);
+            undoManager.RecordAction(new UndoAction(
+                UndoActionType.AssetImageChanged,
+                $"Changed image for asset '{asset.Name}'")
+            {
+                AssetId = asset.Id,
+                AssetName = asset.Name,
+                PreviousImagePath = previousPath,
+                PreviousImageBytes = previousBytes
+            });
             return asset.ImagePath;
         }
 
         public string SetAssetImageFromFile(string assetId, string sourcePath, AssetImageCrop? crop)
+        {
+            return SetAssetImage(
+                assetId,
+                CreateAssetImagePngFromFile(sourcePath, crop));
+        }
+
+        private static byte[] CreateAssetImagePngFromFile(
+            string sourcePath,
+            AssetImageCrop? crop)
         {
             if (string.IsNullOrWhiteSpace(sourcePath))
             {
@@ -5283,7 +5762,173 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidOperationException("Failed to encode image.");
             }
 
-            return SetAssetImage(assetId, data.ToArray());
+            return data.ToArray();
+        }
+
+        public async Task<bool> ApplyAssetEditAsync(
+            string assetId,
+            string newName,
+            string? sourceImagePath,
+            AssetImageCrop? crop,
+            bool removeImage)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a =>
+                a.Id == assetId &&
+                (!a.IsSystem || a.Id == SubscribeSystemAssetId));
+            if (asset == null)
+            {
+                throw new InvalidOperationException($"Asset not found: {assetId}");
+            }
+
+            var normalizedName = newName?.Trim() ?? string.Empty;
+            var nameChanged =
+                !asset.IsSystem &&
+                !string.Equals(
+                    asset.Name,
+                    normalizedName,
+                    StringComparison.CurrentCultureIgnoreCase);
+            if (nameChanged)
+            {
+                if (string.IsNullOrWhiteSpace(normalizedName))
+                {
+                    throw new ArgumentException(
+                        "Asset name cannot be empty.",
+                        nameof(newName));
+                }
+
+                if (configuration.Assets.Any(other =>
+                        other.Id != asset.Id &&
+                        string.Equals(
+                            other.Name,
+                            normalizedName,
+                            StringComparison.CurrentCultureIgnoreCase)))
+                {
+                    throw new InvalidOperationException(
+                        $"Asset name already exists: {normalizedName}");
+                }
+            }
+
+            var replacementImageBytes =
+                !removeImage && !string.IsNullOrWhiteSpace(sourceImagePath)
+                    ? CreateAssetImagePngFromFile(sourceImagePath, crop)
+                    : null;
+            var previousImageReference = asset.ImagePath;
+            var previousImagePath = ResolveAssetImagePath(asset);
+            var imageChanged =
+                replacementImageBytes != null ||
+                (removeImage &&
+                 (!string.IsNullOrWhiteSpace(previousImageReference) ||
+                  (!string.IsNullOrWhiteSpace(previousImagePath) &&
+                   File.Exists(previousImagePath))));
+            if (!nameChanged && !imageChanged)
+            {
+                return false;
+            }
+
+            string? replacementImagePath = null;
+            if (replacementImageBytes != null)
+            {
+                replacementImagePath = Path.Combine(
+                    GetAssetImageDirectory(),
+                    $"{asset.Id}.png");
+                ValidatePath(replacementImagePath, "assetImagePath");
+            }
+
+            var fileSnapshots =
+                new Dictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)>(
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (var path in new[] { previousImagePath, replacementImagePath }
+                         .Where(path => !string.IsNullOrWhiteSpace(path))
+                         .Cast<string>()
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var exists = File.Exists(path);
+                fileSnapshots[path] = exists
+                    ? (true, File.ReadAllBytes(path), File.GetAttributes(path))
+                    : (false, null, FileAttributes.Normal);
+            }
+
+            var previousName = asset.Name;
+            UndoAction? undoAction = null;
+            try
+            {
+                if (nameChanged)
+                {
+                    asset.Name = normalizedName;
+                }
+
+                if (replacementImageBytes != null)
+                {
+                    File.WriteAllBytes(replacementImagePath!, replacementImageBytes);
+                    asset.ImagePath = Path.Combine(
+                        AssetImageDirectoryName,
+                        $"{asset.Id}.png");
+                }
+                else if (imageChanged)
+                {
+                    if (!string.IsNullOrWhiteSpace(previousImagePath) &&
+                        File.Exists(previousImagePath))
+                    {
+                        File.SetAttributes(previousImagePath, FileAttributes.Normal);
+                        File.Delete(previousImagePath);
+                    }
+                    asset.ImagePath = null;
+                }
+
+                var previousImageBytes =
+                    !string.IsNullOrWhiteSpace(previousImagePath) &&
+                    fileSnapshots.TryGetValue(previousImagePath, out var previousSnapshot) &&
+                    previousSnapshot.Exists
+                        ? previousSnapshot.Bytes
+                        : null;
+                undoAction = new UndoAction(
+                    UndoActionType.AssetEdited,
+                    $"Edited asset '{previousName}'")
+                {
+                    AssetId = asset.Id,
+                    AssetName = asset.Name,
+                    PreviousAssetName = previousName,
+                    PreviousImagePath = previousImageReference,
+                    PreviousImageBytes = previousImageBytes,
+                    AssetNameChanged = nameChanged,
+                    AssetImageChanged = imageChanged
+                };
+                undoManager.RecordAction(undoAction);
+                await SaveConfigurationImmediatelyAsync();
+                return true;
+            }
+            catch
+            {
+                asset.Name = previousName;
+                asset.ImagePath = previousImageReference;
+                foreach (var snapshot in fileSnapshots)
+                {
+                    if (!snapshot.Value.Exists)
+                    {
+                        if (File.Exists(snapshot.Key))
+                        {
+                            File.SetAttributes(snapshot.Key, FileAttributes.Normal);
+                            File.Delete(snapshot.Key);
+                        }
+                        continue;
+                    }
+
+                    var directory = Path.GetDirectoryName(snapshot.Key);
+                    if (!string.IsNullOrWhiteSpace(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    File.WriteAllBytes(snapshot.Key, snapshot.Value.Bytes!);
+                    File.SetAttributes(snapshot.Key, snapshot.Value.Attributes);
+                }
+
+                if (undoAction != null &&
+                    ReferenceEquals(undoManager.PeekLastAction(), undoAction))
+                {
+                    undoManager.PopLastAction();
+                }
+                throw;
+            }
         }
 
         public void RemoveAssetImage(string assetId)
@@ -5296,13 +5941,25 @@ namespace GmodAddonManager.Core.Services
             }
 
             var existingPath = ResolveAssetImagePath(asset);
+            byte[]? previousBytes = null;
             if (!string.IsNullOrWhiteSpace(existingPath) && File.Exists(existingPath))
             {
+                previousBytes = File.ReadAllBytes(existingPath);
                 File.SetAttributes(existingPath, FileAttributes.Normal);
                 File.Delete(existingPath);
             }
 
+            var previousPath = asset.ImagePath;
             asset.ImagePath = null;
+            undoManager.RecordAction(new UndoAction(
+                UndoActionType.AssetImageChanged,
+                $"Removed image from asset '{asset.Name}'")
+            {
+                AssetId = asset.Id,
+                AssetName = asset.Name,
+                PreviousImagePath = previousPath,
+                PreviousImageBytes = previousBytes
+            });
         }
 
         private string GetAssetImageDirectory()
@@ -5410,6 +6067,29 @@ namespace GmodAddonManager.Core.Services
             });
         }
 
+        public async Task<Asset> CreateAssetAsync(string name)
+        {
+            var previousIds = new HashSet<string>(
+                configuration.Assets.Select(asset => asset.Id),
+                StringComparer.Ordinal);
+            CreateAsset(name);
+            var created = configuration.Assets
+                .Single(asset => !previousIds.Contains(asset.Id));
+            var undoAction = undoManager.PeekLastAction();
+
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+                return created;
+            }
+            catch
+            {
+                configuration.Assets.Remove(created);
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+        }
+
         public void DeleteAsset(string assetId)
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
@@ -5429,19 +6109,280 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        public async Task<bool> DeleteAssetAsync(string assetId)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            if (asset == null)
+            {
+                return false;
+            }
+
+            var assetIndex = configuration.Assets.IndexOf(asset);
+            DeleteAsset(assetId);
+            var undoAction = undoManager.PeekLastAction();
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                if (configuration.Assets.All(current => current.Id != asset.Id))
+                {
+                    configuration.Assets.Insert(
+                        Math.Min(assetIndex, configuration.Assets.Count),
+                        asset);
+                }
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "Asset deletion was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+            return true;
+        }
+
+        public async Task SetAllOffAsync()
+        {
+            var previousStates = configuration.Assets.ToDictionary(
+                asset => asset.Id,
+                asset => asset.GetWholeState(),
+                StringComparer.Ordinal);
+            var changed = false;
+
+            foreach (var asset in configuration.Assets)
+            {
+                if (asset.Id == SubscribeSystemAssetId)
+                {
+                    if (asset.GetWholeState() != AddonState.Disabled)
+                    {
+                        asset.SetWholeState(AddonState.Disabled);
+                        changed = true;
+                    }
+                    continue;
+                }
+
+                if (!asset.IsSystem && asset.GetWholeState() == AddonState.Enabled)
+                {
+                    asset.SetWholeState(AddonState.Disabled);
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            var undoAction = new UndoAction(
+                UndoActionType.AllOff,
+                "Turned all addon sources off")
+            {
+                PreviousAssetStates = previousStates
+            };
+            undoManager.RecordAction(undoAction);
+
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                foreach (var previous in previousStates)
+                {
+                    configuration.Assets
+                        .FirstOrDefault(asset => asset.Id == previous.Key)
+                        ?.SetWholeState(previous.Value);
+                }
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "All-off was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+        }
+
+        public async Task<AssetVersion> CreateAssetVersionAsync(string assetId, string? note = null)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            if (asset == null)
+            {
+                throw new InvalidOperationException($"Custom asset not found: {assetId}");
+            }
+
+            var previousCurrentVersion = asset.CurrentVersion;
+            var snapshot = assetVersionService.CreateSnapshot(asset, note);
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                asset.VersionHistory.Remove(snapshot);
+                asset.CurrentVersion = previousCurrentVersion;
+                throw;
+            }
+            return snapshot;
+        }
+
+        public async Task<bool> RestoreAssetVersionAsync(string assetId, int version)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            if (asset == null)
+            {
+                return false;
+            }
+
+            var previousMembership = asset.Addons.ToList();
+            var previousCurrentVersion = asset.CurrentVersion;
+            if (!assetVersionService.RestoreSnapshot(asset, version))
+            {
+                return false;
+            }
+
+            var undoAction = new UndoAction(
+                UndoActionType.AssetVersionRestored,
+                $"Restored version {version} of asset '{asset.Name}'")
+            {
+                AssetId = asset.Id,
+                AssetName = asset.Name,
+                PreviousMembership = previousMembership,
+                PreviousCurrentVersion = previousCurrentVersion
+            };
+            undoManager.RecordAction(undoAction);
+
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                asset.Addons = previousMembership;
+                asset.CurrentVersion = previousCurrentVersion;
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "Version restore was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+            return true;
+        }
+
+        public async Task<bool> DeleteAssetVersionAsync(string assetId, int version)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            var snapshot = asset?.VersionHistory
+                .FirstOrDefault(item => item.Version == version);
+            if (asset == null || snapshot == null)
+            {
+                return false;
+            }
+
+            var snapshotIndex = asset.VersionHistory.IndexOf(snapshot);
+            var previousCurrentVersion = asset.CurrentVersion;
+            if (!assetVersionService.DeleteSnapshot(asset, version))
+            {
+                return false;
+            }
+
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                asset.VersionHistory.Insert(
+                    Math.Min(snapshotIndex, asset.VersionHistory.Count),
+                    snapshot);
+                asset.CurrentVersion = previousCurrentVersion;
+                throw;
+            }
+            return true;
+        }
+
+        public async Task<int> ClearAssetVersionHistoryAsync(string assetId)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            if (asset == null)
+            {
+                return 0;
+            }
+
+            var previousHistory = asset.VersionHistory.ToList();
+            var previousCurrentVersion = asset.CurrentVersion;
+            var removed = assetVersionService.ClearHistory(asset);
+            if (removed > 0)
+            {
+                try
+                {
+                    await SaveConfigurationImmediatelyAsync();
+                }
+                catch
+                {
+                    asset.VersionHistory = previousHistory;
+                    asset.CurrentVersion = previousCurrentVersion;
+                    throw;
+                }
+            }
+            return removed;
+        }
+
+        public bool AssetVersionHasMembershipChanges(string assetId, int version)
+        {
+            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
+            var snapshot = asset?.VersionHistory.FirstOrDefault(item => item.Version == version);
+            return asset != null &&
+                   snapshot != null &&
+                   assetVersionService.HasMembershipChanges(asset, snapshot);
+        }
+
         public void AddAddonToAsset(string assetId, string addonId, AddonState state = AddonState.Enabled)
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
-            if (asset != null && !asset.ContainsAllAddons())
+            var normalizedAddonId = addonId?.Trim();
+            if (asset != null &&
+                !asset.ContainsAllAddons() &&
+                !string.IsNullOrWhiteSpace(normalizedAddonId) &&
+                !asset.Addons.Contains(normalizedAddonId))
             {
+                addonId = normalizedAddonId;
                 var operationId = eventLogger.NewOperationId();
                 var beforeSnapshot = CaptureState();
                 var beforeHash = ComputeStateHash(beforeSnapshot);
                 var stopwatch = Stopwatch.StartNew();
 
                 // Undo險倬鹸
-                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId) 
-                    ? configuration.AddonMetadata[addonId] 
+                var addonInfo = configuration.AddonMetadata.ContainsKey(addonId)
+                    ? configuration.AddonMetadata[addonId]
                     : null;
                 var addonName = addonInfo?.Title ?? addonId;
                 
@@ -5544,33 +6485,105 @@ namespace GmodAddonManager.Core.Services
         public void AddAddonsToAssetBatch(string assetId, List<string> addonIds, AddonState state = AddonState.Enabled, IProgress<(int current, int total)>? progress = null)
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
-            if (asset != null && !asset.ContainsAllAddons() && addonIds.Count > 0)
+            if (asset == null ||
+                asset.ContainsAllAddons() ||
+                addonIds == null ||
+                addonIds.Count == 0)
             {
-                // Initialize WorkshopIconResolver
-                undoManager.RecordAction(new UndoAction(
-                    UndoActionType.AddonAddedToAsset,
-                    $"Added {addonIds.Count} addons to asset '{asset.Name}'")
-                {
-                    AssetId = assetId,
-                    AssetName = asset.Name,
-                    AffectedAddonIds = new List<string>(addonIds),
-                    AddonState = state
-                });
-                
-            // Undo記録
-                var total = addonIds.Count;
-                progress?.Report((0, total));
+                return;
+            }
 
-                var current = 0;
-                foreach (var addonId in addonIds)
+            var addedAddonIds = addonIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .Where(id => !asset.Addons.Contains(id))
+                .ToList();
+            if (addedAddonIds.Count == 0)
+            {
+                return;
+            }
+
+            // Record only IDs whose membership actually changes. Otherwise Undo
+            // could remove a member that existed before this operation.
+            var undoAction = new UndoAction(
+                UndoActionType.AddonAddedToAsset,
+                $"Added {addedAddonIds.Count} addons to asset '{asset.Name}'")
+            {
+                AssetId = assetId,
+                AssetName = asset.Name,
+                AffectedAddonIds = new List<string>(addedAddonIds),
+                AddonState = state
+            };
+            undoManager.RecordAction(undoAction);
+
+            // Undo記録
+            var total = addedAddonIds.Count;
+            progress?.Report((0, total));
+
+            var current = 0;
+            foreach (var id in addedAddonIds)
+            {
+                asset.AddAddon(id, state);
+                current++;
+                progress?.Report((current, total));
+            }
+
+            try
+            {
+                SaveConfigurationImmediatelySynchronously();
+            }
+            catch
+            {
+                foreach (var addonId in addedAddonIds)
                 {
-                    asset.AddAddon(addonId, state);
-                    current++;
-                    progress?.Report((current, total));
+                    asset.RemoveAddon(addonId);
                 }
-                
-                // Initialize WorkshopIconResolver
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            try
+            {
                 UpdateAddonStates();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "Asset membership was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+        }
+
+        /// <summary>
+        /// Completes an Asset-created workflow without recording a second Undo unit.
+        /// Undoing the existing AssetCreated action removes the new Asset together
+        /// with every member added by this batch.
+        /// </summary>
+        public void AddAddonsToNewAssetBatch(
+            string assetId,
+            List<string> addonIds,
+            AddonState state = AddonState.Enabled,
+            IProgress<(int current, int total)>? progress = null)
+        {
+            var latestAction = undoManager.PeekLastAction();
+            var canFoldIntoCreation =
+                latestAction?.Type == UndoActionType.AssetCreated &&
+                string.Equals(
+                    latestAction.AssetId,
+                    assetId,
+                    StringComparison.Ordinal);
+            if (!canFoldIntoCreation)
+            {
+                AddAddonsToAssetBatch(assetId, addonIds, state, progress);
+                return;
+            }
+
+            using (undoManager.SuppressRecording())
+            {
+                AddAddonsToAssetBatch(assetId, addonIds, state, progress);
             }
         }
 
@@ -5646,8 +6659,10 @@ namespace GmodAddonManager.Core.Services
                 description = $"Removed {removedAddonIds.Count} addons from asset '{asset.Name}'";
             }
 
-            // Initialize WorkshopIconResolver
-            undoManager.RecordAction(new UndoAction(
+            var originalAddons = asset.Addons.ToList();
+            var originalAddonStates =
+                new Dictionary<string, AddonState>(asset.AddonStates);
+            var undoAction = new UndoAction(
                 UndoActionType.AddonRemovedFromAsset,
                 description)
             {
@@ -5658,7 +6673,8 @@ namespace GmodAddonManager.Core.Services
                 AddonState = singleAddonState,
                 AffectedAddonIds = removedAddonIds,
                 PreviousAddonStates = previousStates
-            });
+            };
+            undoManager.RecordAction(undoAction);
 
             var total = normalizedAddonIds.Count;
             progress?.Report((0, total));
@@ -5677,7 +6693,30 @@ namespace GmodAddonManager.Core.Services
                     progress?.Report((current, total));
                 }
 
-                UpdateAddonStates();
+                try
+                {
+                    SaveConfigurationImmediatelySynchronously();
+                }
+                catch
+                {
+                    asset.Addons = originalAddons;
+                    asset.AddonStates = originalAddonStates;
+                    undoManager.RemoveAction(undoAction);
+                    throw;
+                }
+
+                try
+                {
+                    UpdateAddonStates();
+                }
+                catch (Exception ex)
+                {
+                    QueueRuntimeApplyProvider?.Invoke();
+                    errorHandler.HandleError(
+                        ex,
+                        "Asset membership was saved; runtime reconciliation was queued",
+                        ErrorSeverity.Warning);
+                }
 
                 stopwatch.Stop();
                 var afterSnapshot = CaptureState();
@@ -5872,6 +6911,23 @@ namespace GmodAddonManager.Core.Services
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
+            if (!Enum.IsDefined(typeof(AddonState), newDefaultState))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(newDefaultState),
+                    newDefaultState,
+                    "Unknown Asset state.");
+            }
+            if (asset.Id == SubscribeSystemAssetId &&
+                newDefaultState == AddonState.Excluded)
+            {
+                throw new InvalidOperationException(
+                    "Subscribe Asset supports only Enabled and Disabled.");
+            }
+            if (asset.GetWholeState() == newDefaultState)
+            {
+                return;
+            }
 
             var addonIds = asset.ContainsAllAddons()
                 ? configuration.AddonMetadata.Keys.Where(id => id != "*").ToList()
@@ -5922,12 +6978,27 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                using var suppressRecording = undoManager.SuppressRecording();
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                asset.SetWholeState(
+                    undoAction.PreviousDefaultAddonState ?? AddonState.Disabled);
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            try
+            {
                 await UpdateAddonStatesAsync(progress);
             }
-            finally
+            catch (Exception ex)
             {
-                undoManager.MoveToTop(undoAction);
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "Asset state was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
             }
         }
 
@@ -6016,12 +7087,17 @@ namespace GmodAddonManager.Core.Services
                 matchResult = await UpdateAddonStatesInternalAsync(logEvents: true, parentOperationId: operationId, progress: progress);
                 await SaveConfigurationAsync();
 
-                result.Success = matchResult.Matched;
+                result.Success = matchResult.Succeeded;
                 afterSnapshot = matchResult.Snapshot;
                 expectedSnapshot = matchResult.ExpectedSnapshot;
                 result.AfterHash = ComputeStateHash(afterSnapshot);
                 result.ExpectedHash = ComputeStateHash(expectedSnapshot);
-                errorCode = matchResult.Matched ? null : "state_mismatch";
+                errorCode = matchResult.Succeeded
+                    ? null
+                    : matchResult.FailureCode ??
+                      (matchResult.RuntimeWriteSucceeded
+                          ? "state_mismatch"
+                          : "runtime_write_failed");
             }
             catch (StrictLinkModeException ex)
             {
@@ -6105,9 +7181,25 @@ namespace GmodAddonManager.Core.Services
         /// <summary>
         // Initialize WorkshopIconResolver
         /// </summary>
-        public async Task UpdateAddonStatesAsync(IProgress<(int current, int total)>? progress = null)
+        public async Task<bool> UpdateAddonStatesAsync(IProgress<(int current, int total)>? progress = null)
         {
-            await UpdateAddonStatesInternalAsync(logEvents: true, parentOperationId: null, progress: progress);
+            await SaveConfigurationImmediatelyAsync();
+
+            if (DeferRuntimeApplyIfGmodRunning())
+            {
+                return false;
+            }
+
+            var result = await UpdateAddonStatesInternalAsync(
+                logEvents: true,
+                parentOperationId: null,
+                progress: progress);
+            if (!result.Succeeded)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+            }
+
+            return result.Succeeded;
         }
 
         private sealed class AssetResolution
@@ -6655,6 +7747,12 @@ namespace GmodAddonManager.Core.Services
             public bool Matched { get; }
             public long DurationMs { get; }
             public ExperimentEventMetrics? Metrics { get; }
+            public bool RuntimeWriteSucceeded { get; set; } = true;
+            public string? FailureCode { get; set; }
+            public bool Succeeded =>
+                Matched &&
+                RuntimeWriteSucceeded &&
+                string.IsNullOrWhiteSpace(FailureCode);
         }
 
         private sealed class LinkOperationMetrics
@@ -6704,11 +7802,25 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private void ApplyAddonStateStoreBulk(Dictionary<string, bool> expectedStates)
+        private bool ApplyAddonStateStoreBulk(
+            Dictionary<string, bool> expectedStates)
         {
-            if (gmodAddonStateStore == null || expectedStates == null || expectedStates.Count == 0)
+            if (expectedStates == null || expectedStates.Count == 0)
             {
-                return;
+                return true;
+            }
+
+            if (gmodAddonStateStore == null)
+            {
+                errorHandler.HandleWarning(
+                    "Garry's Mod settings path is unknown; addonnomount.txt will not be updated.",
+                    "UpdateAddonStates");
+                return false;
+            }
+
+            if (DeferRuntimeApplyIfGmodRunning())
+            {
+                return false;
             }
 
             try
@@ -6719,7 +7831,7 @@ namespace GmodAddonManager.Core.Services
 
                 if (filteredStates.Count == 0)
                 {
-                    return;
+                    return true;
                 }
 
                 var persisted = gmodAddonStateStore.SetEnabledBulk(filteredStates);
@@ -6727,23 +7839,99 @@ namespace GmodAddonManager.Core.Services
                 {
                     errorHandler.HandleWarning("Failed to persist addon states to addonnomount.txt.", "UpdateAddonStates");
                 }
+
+                return persisted;
             }
             catch (Exception ex)
             {
                 errorHandler.HandleWarning($"Failed to update addonnomount.txt state store: {ex.Message}", "UpdateAddonStates");
+                return false;
+            }
+        }
+
+        private bool TryPersistSingleAddonRuntimeState(string addonId, bool enabled, string operationName)
+        {
+            if (DeferRuntimeApplyIfGmodRunning())
+            {
+                return false;
+            }
+
+            if (gmodAddonStateStore == null)
+            {
+                errorHandler.HandleWarning("Garry's Mod settings path is unknown; addonnomount.txt will not be updated.", operationName);
+                return false;
+            }
+
+            try
+            {
+                var persisted = gmodAddonStateStore.SetEnabled(addonId, enabled);
+                if (!persisted)
+                {
+                    errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", operationName);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", operationName);
+                return false;
             }
         }
 
         private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents, string? parentOperationId = null, IProgress<(int current, int total)>? progress = null)
         {
-            var allAddonIds = configuration.AddonMetadata.Keys
-                .Where(addonId => addonId != "*" && ShouldIncludeAddonInState(addonId))
-                .ToList();
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
+                return await UpdateAddonStatesCoreAsync(
+                    logEvents,
+                    parentOperationId,
+                    progress);
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
+
+        private async Task<StateMatchResult> UpdateAddonStatesCoreAsync(
+            bool logEvents,
+            string? parentOperationId,
+            IProgress<(int current, int total)>? progress)
+        {
+            if (!TryGetSubscribedAddonIdSet(
+                    "UpdateAddonStates",
+                    out var subscribedAddonIds))
+            {
+                errorHandler.HandleWarning(
+                    "Steam subscription state is unavailable; runtime addon state was not changed.",
+                    "UpdateAddonStates");
+                var unavailableActual = CaptureState();
+                var unavailableExpected = BuildSnapshot(
+                    new Dictionary<string, bool>(StringComparer.Ordinal),
+                    "expected:steam-subscription-unavailable");
+                return new StateMatchResult(
+                    unavailableActual,
+                    unavailableExpected,
+                    matched: false,
+                    durationMs: 0,
+                    metrics: null)
+                {
+                    RuntimeWriteSucceeded = false,
+                    FailureCode = "subscription_state_unavailable"
+                };
+            }
+
+            var expectedStates = BuildExpectedStatesForAssets(
+                configuration.Assets,
+                subscribedAddonIds);
+            var allAddonIds = expectedStates.Keys.ToList();
 
             var totalAddons = allAddonIds.Count;
             progress?.Report((0, totalAddons));
 
-            var expectedStates = BuildExpectedStates();
             var linkMetrics = logEvents ? new LinkOperationMetrics() : null;
             linkMetricsContext.Value = linkMetrics;
 
@@ -6771,7 +7959,7 @@ namespace GmodAddonManager.Core.Services
             var stopwatch = Stopwatch.StartNew();
 
             Exception? updateError = null;
-
+            var runtimeWriteSucceeded = false;
             try
             {
                 var progressCurrent = 0;
@@ -6857,13 +8045,21 @@ namespace GmodAddonManager.Core.Services
                 }
                 finally
                 {
-                    ApplyAddonStateStoreBulk(expectedStates);
+                    runtimeWriteSucceeded = ApplyAddonStateStoreBulk(expectedStates);
                     Interlocked.Decrement(ref _bulkStateUpdateDepth);
                     InvalidateWorkshopScanCache();
                 }
 
                 var metrics = linkMetrics?.ToEventMetrics();
                 var matchResult = await WaitForExpectedStateAsync(expectedStates, metrics);
+                matchResult.RuntimeWriteSucceeded =
+                    runtimeWriteSucceeded &&
+                    updateError == null;
+                matchResult.FailureCode = updateError != null
+                    ? "update_failed"
+                    : runtimeWriteSucceeded
+                        ? null
+                        : "runtime_write_failed";
                 stopwatch.Stop();
 
                 if (eventLogger.IsExperimentContextActive)
@@ -6875,10 +8071,9 @@ namespace GmodAddonManager.Core.Services
                 {
                     var afterHash = ComputeStateHash(matchResult.Snapshot);
                     var expectedHash = ComputeStateHash(matchResult.ExpectedSnapshot);
-                    var result = updateError == null && matchResult.Matched ? "success" : "fail";
-                    var errorCode = updateError != null
-                        ? "update_failed"
-                        : (matchResult.Matched ? null : "state_mismatch");
+                    var result = matchResult.Succeeded ? "success" : "fail";
+                    var errorCode = matchResult.FailureCode ??
+                                    (matchResult.Matched ? null : "state_mismatch");
 
                     LogExperimentEvent(
                         "UpdateAddonStatesEnd",
@@ -6913,7 +8108,7 @@ namespace GmodAddonManager.Core.Services
             var expectedNormalized = expectedSnapshot.NormalizedState;
             var stopwatch = Stopwatch.StartNew();
 
-            var currentSnapshot = CaptureState();
+            var currentSnapshot = CaptureStateForExpectedScope(expectedStates.Keys);
             var pollInterval = Math.Max(50, StateMatchPollIntervalMs);
 
             if (StateMatchTimeout <= TimeSpan.Zero)
@@ -6930,97 +8125,69 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 await Task.Delay(pollInterval);
-                currentSnapshot = CaptureState();
+                currentSnapshot = CaptureStateForExpectedScope(expectedStates.Keys);
             }
 
             var finalMatch = string.Equals(currentSnapshot.NormalizedState, expectedNormalized, StringComparison.Ordinal);
             return new StateMatchResult(currentSnapshot, expectedSnapshot, finalMatch, stopwatch.ElapsedMilliseconds, metrics);
+        }
+
+        private AddonStateSnapshot CaptureStateForExpectedScope(
+            IEnumerable<string> expectedAddonIds)
+        {
+            var actualSnapshot = CaptureState();
+            var expectedIdSet = new HashSet<string>(
+                expectedAddonIds ?? Enumerable.Empty<string>(),
+                StringComparer.Ordinal);
+            var projectedStates = actualSnapshot.States
+                .Where(entry => expectedIdSet.Contains(entry.Key))
+                .ToDictionary(
+                    entry => entry.Key,
+                    entry => entry.Value,
+                    StringComparer.Ordinal);
+
+            return BuildSnapshot(
+                projectedStates,
+                actualSnapshot.Source + ":managed-scope");
         }
         
         /// <summary>
         // Initialize WorkshopIconResolver
         private void UpdateAddonStates()
         {
-            var expectedStates = BuildExpectedStates();
-            Interlocked.Increment(ref _bulkStateUpdateDepth);
-            try
+            var wasGmodRunning = IsGmodCurrentlyRunning();
+            var applied = Task.Run(() => UpdateAddonStatesAsync())
+                .GetAwaiter()
+                .GetResult();
+            if (!applied && !wasGmodRunning)
             {
-                foreach (var kvp in expectedStates)
-                {
-                    var addonId = kvp.Key;
-                    var finalState = kvp.Value;
-
-                    try
-                    {
-                        if (finalState)
-                        {
-                            EnableAddon(addonId);
-                        }
-                        else
-                        {
-                            DisableAddon(addonId);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FindStrictLinkModeException(ex) != null)
-                        {
-                            throw;
-                        }
-
-                        errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
-                    }
-                }
+                throw new InvalidOperationException(
+                    "The desired addon state was saved, but runtime reconciliation did not complete.");
             }
-            finally
-            {
-                ApplyAddonStateStoreBulk(expectedStates);
-                Interlocked.Decrement(ref _bulkStateUpdateDepth);
-                InvalidateWorkshopScanCache();
-            }
+        }
+
+        private void SaveConfigurationImmediatelySynchronously()
+        {
+            Task.Run(() => SaveConfigurationImmediatelyAsync())
+                .GetAwaiter()
+                .GetResult();
         }
         
         /// <summary>
         // Initialize WorkshopIconResolver
         private bool CalculateFinalAddonState(string addonId)
         {
-            var enabledAssets = configuration.Assets.Where(a => a.Enabled).ToList();
-            return CalculateFinalAddonState(addonId, enabledAssets);
-        }
-
-        private static bool CalculateFinalAddonState(
-            string addonId,
-            IReadOnlyList<Asset> enabledAssets)
-        {
-            var disabledByEnabledAsset = false;
-            var enabledByEnabledAsset = false;
-
-            foreach (var asset in enabledAssets)
+            if (!TryGetSubscribedAddonIdSet(
+                    "CalculateFinalAddonState",
+                    out var runtimeTargets))
             {
-                if (asset.ContainsAllAddons() || asset.Addons.Contains(addonId))
-                {
-                    var state = asset.GetAddonState(addonId);
-                    if (state == AddonState.Excluded)
-                    {
-                        return false;
-                    }
-                    if (state == AddonState.Disabled)
-                    {
-                        disabledByEnabledAsset = true;
-                    }
-                    else if (state == AddonState.Enabled)
-                    {
-                        enabledByEnabledAsset = true;
-                    }
-                }
+                throw new InvalidOperationException(
+                    "Steam subscription state is unavailable; addon state cannot be safely applied.");
             }
 
-            if (disabledByEnabledAsset)
-            {
-                return false;
-            }
-
-            return enabledByEnabledAsset;
+            return assetStateResolver
+                .Resolve(addonId, configuration.Assets, runtimeTargets)
+                .DesiredEnabled;
         }
         
         /// <summary>
@@ -7242,6 +8409,11 @@ namespace GmodAddonManager.Core.Services
             bool success = false;
             string? errorCode = null;
             StrictLinkModeException? strictFailure = null;
+            var actionHandled = false;
+            var configurationPersisted = false;
+            var requiresRuntimeReconcile = false;
+            var previousLastUpdated = configuration.LastUpdated;
+            Action? rollbackMutation = null;
 
             try
             {
@@ -7251,18 +8423,36 @@ namespace GmodAddonManager.Core.Services
                         // Initialize WorkshopIconResolver
                         if (action.AssetId != null)
                         {
-                            configuration.Assets.RemoveAll(a => a.Id == action.AssetId);
-                            await SaveConfigurationAsync();
+                            var assetIndex = configuration.Assets.FindIndex(a => a.Id == action.AssetId);
+                            if (assetIndex >= 0)
+                            {
+                                var removedAsset = configuration.Assets[assetIndex];
+                                rollbackMutation = () =>
+                                {
+                                    if (configuration.Assets.All(a => a.Id != removedAsset.Id))
+                                    {
+                                        configuration.Assets.Insert(
+                                            Math.Min(assetIndex, configuration.Assets.Count),
+                                            removedAsset);
+                                    }
+                                };
+                                configuration.Assets.RemoveAt(assetIndex);
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
+                            }
                         }
                         break;
                         
                     case UndoActionType.AssetDeleted:
                         // Initialize WorkshopIconResolver
-                        if (action.DeletedAsset != null)
+                        if (action.DeletedAsset != null &&
+                            configuration.Assets.All(a => a.Id != action.DeletedAsset.Id))
                         {
-                            configuration.Assets.Add(action.DeletedAsset);
-                            await SaveConfigurationAsync();
-                            UpdateAddonStates();
+                            var restoredAsset = action.DeletedAsset;
+                            rollbackMutation = () => configuration.Assets.Remove(restoredAsset);
+                            configuration.Assets.Add(restoredAsset);
+                            actionHandled = true;
+                            requiresRuntimeReconcile = true;
                         }
                         break;
                         
@@ -7275,26 +8465,22 @@ namespace GmodAddonManager.Core.Services
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
                             if (asset != null)
                             {
-                                if (action.PreviousEnabledState.HasValue)
-                                {
-                                    asset.Enabled = action.PreviousEnabledState.Value;
-                                }
-                                
+                                var currentState = asset.GetWholeState();
+                                rollbackMutation = () => asset.SetWholeState(currentState);
                                 if (action.PreviousDefaultAddonState.HasValue)
                                 {
-                                    asset.DefaultAddonState = action.PreviousDefaultAddonState.Value;
+                                    asset.SetWholeState(action.PreviousDefaultAddonState.Value);
                                 }
-                                
-                                if (action.PreviousAddonStates != null)
+                                else if (action.PreviousEnabledState.HasValue)
                                 {
-                                    foreach (var kvp in action.PreviousAddonStates)
-                                    {
-                                        asset.SetAddonState(kvp.Key, kvp.Value);
-                                    }
+                                    asset.SetWholeState(
+                                        action.PreviousEnabledState.Value
+                                            ? AddonState.Enabled
+                                            : AddonState.Disabled);
                                 }
                                 
-                                await SaveConfigurationAsync();
-                                UpdateAddonStates();
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
                             }
                         }
                         break;
@@ -7306,6 +8492,8 @@ namespace GmodAddonManager.Core.Services
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
                             if (asset != null)
                             {
+                                var currentState = asset.GetWholeState();
+                                rollbackMutation = () => asset.SetWholeState(currentState);
                                 if (action.AffectedAddonIds != null && action.PreviousAddonStates != null)
                                 {
                                     foreach (var addonId in action.AffectedAddonIds)
@@ -7321,8 +8509,8 @@ namespace GmodAddonManager.Core.Services
                                     asset.SetAddonState(action.AddonId, action.PreviousAddonState.Value);
                                 }
 
-                                await SaveConfigurationAsync();
-                                UpdateAddonStates();
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
                             }
                         }
                         break;
@@ -7334,6 +8522,14 @@ namespace GmodAddonManager.Core.Services
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
                             if (asset != null)
                             {
+                                var currentAddons = asset.Addons.ToList();
+                                var currentAddonStates =
+                                    new Dictionary<string, AddonState>(asset.AddonStates);
+                                rollbackMutation = () =>
+                                {
+                                    asset.Addons = currentAddons;
+                                    asset.AddonStates = currentAddonStates;
+                                };
                                 var addonIds = action.AffectedAddonIds;
                                 if ((addonIds == null || addonIds.Count == 0) && !string.IsNullOrEmpty(action.AddonId))
                                 {
@@ -7348,8 +8544,8 @@ namespace GmodAddonManager.Core.Services
                                     }
                                 }
 
-                                await SaveConfigurationAsync();
-                                UpdateAddonStates();
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
                             }
                         }
                         break;
@@ -7361,6 +8557,14 @@ namespace GmodAddonManager.Core.Services
                             var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
                             if (asset != null)
                             {
+                                var currentAddons = asset.Addons.ToList();
+                                var currentAddonStates =
+                                    new Dictionary<string, AddonState>(asset.AddonStates);
+                                rollbackMutation = () =>
+                                {
+                                    asset.Addons = currentAddons;
+                                    asset.AddonStates = currentAddonStates;
+                                };
                                 if (action.AffectedAddonIds != null && action.PreviousAddonStates != null)
                                 {
                                     foreach (var addonId in action.AffectedAddonIds)
@@ -7376,11 +8580,285 @@ namespace GmodAddonManager.Core.Services
                                     asset.AddAddon(action.AddonId, action.AddonState.Value);
                                 }
 
-                                await SaveConfigurationAsync();
-                                UpdateAddonStates();
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
                             }
                         }
                         break;
+
+                    case UndoActionType.AssetEdited:
+                        if (action.AssetId != null)
+                        {
+                            var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
+                            if (asset != null)
+                            {
+                                var currentName = asset.Name;
+                                var currentImageReference = asset.ImagePath;
+                                var currentImagePath = ResolveAssetImagePath(asset);
+                                asset.ImagePath = action.PreviousImagePath;
+                                var previousImagePath = ResolveAssetImagePath(asset);
+                                asset.ImagePath = currentImageReference;
+
+                                var imageSnapshots =
+                                    new Dictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)>(
+                                        StringComparer.OrdinalIgnoreCase);
+                                if (action.AssetImageChanged)
+                                {
+                                    foreach (var path in new[] { currentImagePath, previousImagePath }
+                                                 .Where(path => !string.IsNullOrWhiteSpace(path))
+                                                 .Cast<string>()
+                                                 .Distinct(StringComparer.OrdinalIgnoreCase))
+                                    {
+                                        var exists = File.Exists(path);
+                                        imageSnapshots[path] = exists
+                                            ? (true, File.ReadAllBytes(path), File.GetAttributes(path))
+                                            : (false, null, FileAttributes.Normal);
+                                    }
+                                }
+
+                                rollbackMutation = () =>
+                                {
+                                    asset.Name = currentName;
+                                    asset.ImagePath = currentImageReference;
+                                    foreach (var snapshot in imageSnapshots)
+                                    {
+                                        if (!snapshot.Value.Exists)
+                                        {
+                                            if (File.Exists(snapshot.Key))
+                                            {
+                                                File.SetAttributes(snapshot.Key, FileAttributes.Normal);
+                                                File.Delete(snapshot.Key);
+                                            }
+                                            continue;
+                                        }
+
+                                        var directory = Path.GetDirectoryName(snapshot.Key);
+                                        if (!string.IsNullOrWhiteSpace(directory))
+                                        {
+                                            Directory.CreateDirectory(directory);
+                                        }
+                                        File.WriteAllBytes(snapshot.Key, snapshot.Value.Bytes!);
+                                        File.SetAttributes(snapshot.Key, snapshot.Value.Attributes);
+                                    }
+                                };
+
+                                if (action.AssetNameChanged &&
+                                    action.PreviousAssetName != null)
+                                {
+                                    asset.Name = action.PreviousAssetName;
+                                }
+
+                                if (action.AssetImageChanged)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(currentImagePath) &&
+                                        File.Exists(currentImagePath))
+                                    {
+                                        File.SetAttributes(currentImagePath, FileAttributes.Normal);
+                                        File.Delete(currentImagePath);
+                                    }
+
+                                    asset.ImagePath = action.PreviousImagePath;
+                                    if (action.PreviousImageBytes != null &&
+                                        !string.IsNullOrWhiteSpace(previousImagePath))
+                                    {
+                                        var directory = Path.GetDirectoryName(previousImagePath);
+                                        if (!string.IsNullOrWhiteSpace(directory))
+                                        {
+                                            Directory.CreateDirectory(directory);
+                                        }
+                                        File.WriteAllBytes(
+                                            previousImagePath,
+                                            action.PreviousImageBytes);
+                                    }
+                                }
+
+                                actionHandled = true;
+                            }
+                        }
+                        break;
+
+                    case UndoActionType.AssetRenamed:
+                        if (action.AssetId != null && action.PreviousAssetName != null)
+                        {
+                            var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
+                            if (asset != null)
+                            {
+                                var currentName = asset.Name;
+                                rollbackMutation = () => asset.Name = currentName;
+                                asset.Name = action.PreviousAssetName;
+                                actionHandled = true;
+                            }
+                        }
+                        break;
+
+                    case UndoActionType.AssetFavoriteChanged:
+                        if (action.AssetId != null && action.PreviousFavoriteState.HasValue)
+                        {
+                            var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
+                            if (asset != null)
+                            {
+                                var currentFavorite = asset.IsFavorite;
+                                rollbackMutation = () => asset.IsFavorite = currentFavorite;
+                                asset.IsFavorite = action.PreviousFavoriteState.Value;
+                                actionHandled = true;
+                            }
+                        }
+                        break;
+
+                    case UndoActionType.AssetImageChanged:
+                        if (action.AssetId != null)
+                        {
+                            var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
+                            if (asset != null)
+                            {
+                                var currentImageReference = asset.ImagePath;
+                                var currentImagePath = ResolveAssetImagePath(asset);
+                                asset.ImagePath = action.PreviousImagePath;
+                                var previousImagePath = ResolveAssetImagePath(asset);
+                                asset.ImagePath = currentImageReference;
+
+                                var imageSnapshots =
+                                    new Dictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)>(
+                                        StringComparer.OrdinalIgnoreCase);
+                                foreach (var path in new[] { currentImagePath, previousImagePath }
+                                             .Where(path => !string.IsNullOrWhiteSpace(path))
+                                             .Cast<string>()
+                                             .Distinct(StringComparer.OrdinalIgnoreCase))
+                                {
+                                    var exists = File.Exists(path);
+                                    imageSnapshots[path] = exists
+                                        ? (true, File.ReadAllBytes(path), File.GetAttributes(path))
+                                        : (false, null, FileAttributes.Normal);
+                                }
+
+                                rollbackMutation = () =>
+                                {
+                                    asset.ImagePath = currentImageReference;
+                                    foreach (var snapshot in imageSnapshots)
+                                    {
+                                        if (!snapshot.Value.Exists)
+                                        {
+                                            if (File.Exists(snapshot.Key))
+                                            {
+                                                File.SetAttributes(snapshot.Key, FileAttributes.Normal);
+                                                File.Delete(snapshot.Key);
+                                            }
+                                            continue;
+                                        }
+
+                                        var directory = Path.GetDirectoryName(snapshot.Key);
+                                        if (!string.IsNullOrWhiteSpace(directory))
+                                        {
+                                            Directory.CreateDirectory(directory);
+                                        }
+                                        File.WriteAllBytes(snapshot.Key, snapshot.Value.Bytes!);
+                                        File.SetAttributes(snapshot.Key, snapshot.Value.Attributes);
+                                    }
+                                };
+
+                                if (!string.IsNullOrWhiteSpace(currentImagePath) && File.Exists(currentImagePath))
+                                {
+                                    File.SetAttributes(currentImagePath, FileAttributes.Normal);
+                                    File.Delete(currentImagePath);
+                                }
+
+                                asset.ImagePath = action.PreviousImagePath;
+                                if (action.PreviousImageBytes != null &&
+                                    !string.IsNullOrWhiteSpace(previousImagePath))
+                                {
+                                    var imageDirectory = Path.GetDirectoryName(previousImagePath);
+                                    if (!string.IsNullOrWhiteSpace(imageDirectory))
+                                    {
+                                        Directory.CreateDirectory(imageDirectory);
+                                    }
+                                    File.WriteAllBytes(previousImagePath, action.PreviousImageBytes);
+                                }
+                                actionHandled = true;
+                            }
+                        }
+                        break;
+
+                    case UndoActionType.AllOff:
+                        if (action.PreviousAssetStates != null)
+                        {
+                            var currentStates = configuration.Assets
+                                .Where(asset => action.PreviousAssetStates.ContainsKey(asset.Id))
+                                .ToDictionary(
+                                    asset => asset.Id,
+                                    asset => asset.GetWholeState(),
+                                    StringComparer.Ordinal);
+                            rollbackMutation = () =>
+                            {
+                                foreach (var current in currentStates)
+                                {
+                                    configuration.Assets
+                                        .FirstOrDefault(asset => asset.Id == current.Key)
+                                        ?.SetWholeState(current.Value);
+                                }
+                            };
+                            foreach (var previous in action.PreviousAssetStates)
+                            {
+                                var asset = configuration.Assets.FirstOrDefault(a => a.Id == previous.Key);
+                                asset?.SetWholeState(previous.Value);
+                            }
+                            actionHandled = true;
+                            requiresRuntimeReconcile = true;
+                        }
+                        break;
+
+                    case UndoActionType.AssetVersionRestored:
+                        if (action.AssetId != null && action.PreviousMembership != null)
+                        {
+                            var asset = configuration.Assets.FirstOrDefault(a => a.Id == action.AssetId);
+                            if (asset != null)
+                            {
+                                var currentMembership = asset.Addons.ToList();
+                                var currentVersion = asset.CurrentVersion;
+                                rollbackMutation = () =>
+                                {
+                                    asset.Addons = currentMembership;
+                                    asset.CurrentVersion = currentVersion;
+                                };
+                                asset.Addons = action.PreviousMembership
+                                    .Distinct(StringComparer.Ordinal)
+                                    .ToList();
+                                if (action.PreviousCurrentVersion.HasValue)
+                                {
+                                    asset.CurrentVersion =
+                                        action.PreviousCurrentVersion.Value;
+                                }
+                                actionHandled = true;
+                                requiresRuntimeReconcile = true;
+                            }
+                        }
+                        break;
+                }
+
+                if (!actionHandled)
+                {
+                    throw new InvalidOperationException(
+                        $"Undo target is no longer available for action {action.Id}.");
+                }
+
+                await SaveConfigurationImmediatelyAsync();
+                configurationPersisted = true;
+
+                if (requiresRuntimeReconcile)
+                {
+                    try
+                    {
+                        UpdateAddonStates();
+                    }
+                    catch (Exception ex)
+                    {
+                        // The desired state is already durable. Runtime failure follows
+                        // the same latest-full-reconcile contract as other mutations.
+                        QueueRuntimeApplyProvider?.Invoke();
+                        errorHandler.HandleError(
+                            ex,
+                            "Undo was saved; runtime reconciliation was queued",
+                            ErrorSeverity.Warning);
+                    }
                 }
                 
                 success = true;
@@ -7388,6 +8866,32 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
+                if (configurationPersisted)
+                {
+                    QueueRuntimeApplyProvider?.Invoke();
+                    errorHandler.HandleError(
+                        ex,
+                        "Undo was saved; runtime reconciliation was queued",
+                        ErrorSeverity.Warning);
+                    success = true;
+                    return true;
+                }
+
+                try
+                {
+                    rollbackMutation?.Invoke();
+                    configuration.LastUpdated = previousLastUpdated;
+                }
+                catch (Exception rollbackException)
+                {
+                    errorHandler.HandleError(
+                        rollbackException,
+                        "Failed to roll back an unsuccessful Undo mutation",
+                        ErrorSeverity.Error);
+                }
+
+                undoManager.RecordAction(action);
+
                 if (FindStrictLinkModeException(ex) is StrictLinkModeException strict)
                 {
                     strictFailure = strict;
@@ -7744,53 +9248,108 @@ namespace GmodAddonManager.Core.Services
         
         public async Task ResetManagerAsync()
         {
-            errorHandler.HandleInfo("Starting full reset of addon manager", "ResetManager");
+            errorHandler.HandleInfo("Starting GAM configuration reset", "ResetManager");
 
-            if (DisableMode == DisableMode.Soft)
+            var originalAssets = configuration.Assets;
+            var existingSubscribeAsset = configuration.Assets
+                .FirstOrDefault(asset => asset.Id == SubscribeSystemAssetId);
+            var originalSubscribeName = existingSubscribeAsset?.Name;
+            var originalSubscribeIsSystem = existingSubscribeAsset?.IsSystem;
+            var originalSubscribeFavorite = existingSubscribeAsset?.IsFavorite;
+            var originalSubscribeImagePath = existingSubscribeAsset?.ImagePath;
+            var originalSubscribeState = existingSubscribeAsset?.GetWholeState();
+            var originalSubscribeAddons = existingSubscribeAsset?.Addons.ToList();
+            var originalSubscribeAddonStates = existingSubscribeAsset == null
+                ? null
+                : new Dictionary<string, AddonState>(existingSubscribeAsset.AddonStates);
+            var originalSubscribeVersions = existingSubscribeAsset?.VersionHistory.ToList();
+            var originalSubscribeCurrentVersion = existingSubscribeAsset?.CurrentVersion;
+            var originalInitialImportCompleted =
+                configuration.InitialRuntimeImportCompleted;
+            var originalInitialImportCompletedAtUtc =
+                configuration.InitialRuntimeImportCompletedAtUtc;
+            var originalAddonFavorites = configuration.AddonMetadata.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.IsFavorite,
+                StringComparer.Ordinal);
+            var subscribeAsset = existingSubscribeAsset;
+            if (subscribeAsset == null)
             {
-                await ResetManagerSoftAsync();
-                errorHandler.HandleInfo("Soft reset completed successfully", "ResetManager");
-                return;
-            }
-            
-            // キャッシュ管理ディレクトリを削除
-            await RestoreOriginalStateAsync();
-            
-            // 設定を再初期化
-            configuration = new Configuration();
-            
-            // Initialize WorkshopIconResolver
-            await InitializeAsync();
-            
-            errorHandler.HandleInfo("Full reset completed successfully", "ResetManager");
-        }
-
-        private async Task ResetManagerSoftAsync()
-        {
-            errorHandler.HandleInfo("Starting soft reset of addon manager", "ResetManager");
-
-            var localRestored = await RestoreManagedLocalAddonsAsync();
-            if (!localRestored)
-            {
-                errorHandler.HandleWarning(
-                    "Local addon data could not be fully restored; leaving local manager data in place.",
-                    "ResetManager");
-            }
-
-            if (File.Exists(configPath))
-            {
-                ValidatePath(configPath, "configPath");
-                File.Delete(configPath);
+                subscribeAsset = new Asset("Subscribe Asset", true)
+                {
+                    Id = SubscribeSystemAssetId
+                };
             }
 
-            if (File.Exists(pendingPath))
+            subscribeAsset.Name = "Subscribe Asset";
+            subscribeAsset.IsSystem = true;
+            subscribeAsset.IsFavorite = false;
+            subscribeAsset.ImagePath = null;
+            subscribeAsset.VersionHistory.Clear();
+            subscribeAsset.CurrentVersion = 0;
+            subscribeAsset.SetAllAddons();
+            subscribeAsset.SetWholeState(AddonState.Enabled);
+
+            configuration.Assets = new List<Asset> { subscribeAsset };
+            configuration.InitialRuntimeImportCompleted = true;
+            configuration.InitialRuntimeImportCompletedAtUtc = DateTime.UtcNow;
+
+            foreach (var addon in configuration.AddonMetadata.Values)
             {
-                ValidatePath(pendingPath, "pendingPath");
-                File.Delete(pendingPath);
+                addon.IsFavorite = false;
             }
 
-            configuration = new Configuration();
-            await InitializeAsync();
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                configuration.Assets = originalAssets;
+                if (existingSubscribeAsset != null)
+                {
+                    existingSubscribeAsset.Name = originalSubscribeName!;
+                    existingSubscribeAsset.IsSystem = originalSubscribeIsSystem!.Value;
+                    existingSubscribeAsset.IsFavorite = originalSubscribeFavorite!.Value;
+                    existingSubscribeAsset.ImagePath = originalSubscribeImagePath;
+                    existingSubscribeAsset.SetWholeState(
+                        originalSubscribeState!.Value);
+                    existingSubscribeAsset.Addons = originalSubscribeAddons!;
+                    existingSubscribeAsset.AddonStates = originalSubscribeAddonStates!;
+                    existingSubscribeAsset.VersionHistory = originalSubscribeVersions!;
+                    existingSubscribeAsset.CurrentVersion =
+                        originalSubscribeCurrentVersion!.Value;
+                }
+                configuration.InitialRuntimeImportCompleted =
+                    originalInitialImportCompleted;
+                configuration.InitialRuntimeImportCompletedAtUtc =
+                    originalInitialImportCompletedAtUtc;
+                foreach (var favorite in originalAddonFavorites)
+                {
+                    if (configuration.AddonMetadata.TryGetValue(
+                            favorite.Key,
+                            out var addon))
+                    {
+                        addon.IsFavorite = favorite.Value;
+                    }
+                }
+                throw;
+            }
+
+            undoManager.Clear();
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    "GAM reset was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+            errorHandler.HandleInfo("GAM configuration reset completed", "ResetManager");
         }
         
         public async Task RestoreOriginalStateAsync()
@@ -8383,18 +9942,19 @@ namespace GmodAddonManager.Core.Services
                 LogExperimentEvent("SessionEnd", eventScope: "system", result: "success");
             }
 
-            bool shouldFlushPendingSave;
             lock (_saveLock)
             {
                 _saveDebounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
-                shouldFlushPendingSave = _saveRequested;
                 _saveRequested = false;
             }
 
-            if (shouldFlushPendingSave)
+            if (_initializationCompleted)
             {
                 try
                 {
+                    // Always enqueue one final snapshot. The save gate places it after
+                    // any debounce callback that already cleared _saveRequested but is
+                    // still serializing or waiting to write.
                     var saveTask = Task.Run(() => SaveConfigurationInternalAsync());
                     if (!saveTask.Wait(DisposeSaveFlushTimeout))
                     {
@@ -8903,6 +10463,22 @@ namespace GmodAddonManager.Core.Services
                 var subscriptionTruthAvailable = TryGetSubscribedAddonIdSet(
                     "CleanupDeletedWorkshopAddons",
                     out var subscribedAddonIds);
+
+                if (!PathOverrideResolver.IsDirectoryUsable(workshopPath))
+                {
+                    errorHandler.HandleWarning(
+                        "Workshop root is unavailable; skipping deleted-addon cleanup.",
+                        "CleanupDeletedWorkshopAddons");
+                    return deletedAddonIds;
+                }
+
+                if (!subscriptionTruthAvailable)
+                {
+                    errorHandler.HandleWarning(
+                        "Steam subscription state is not authoritative; skipping deleted-addon cleanup.",
+                        "CleanupDeletedWorkshopAddons");
+                    return deletedAddonIds;
+                }
                 
                 // Initialize WorkshopIconResolver
                 foreach (var kvp in configuration.AddonMetadata)
@@ -8926,8 +10502,7 @@ namespace GmodAddonManager.Core.Services
                         string? cacheManagerGmaPath = !string.IsNullOrEmpty(gmodCacheAddonsPath) ? 
                             Path.Combine(gmodCacheAddonsPath, $"{addonId}.gma") : null;
 
-                        var cacheFileCountsAsCurrent =
-                            !subscriptionTruthAvailable || subscribedAddonIds.Contains(addonId);
+                        var cacheFileCountsAsCurrent = subscribedAddonIds.Contains(addonId);
                         
                         fileExists = File.Exists(managedGmaPath) || 
                                    (cacheFileCountsAsCurrent && cacheGmaPath != null && File.Exists(cacheGmaPath)) ||
@@ -9064,13 +10639,23 @@ namespace GmodAddonManager.Core.Services
             var toDelete = new List<string>();
             
             errorHandler.HandleInfo("Checking for unsubscribed addons...", "CleanupUnsubscribedAddons");
+
+            if (!TryGetSubscribedAddonIdSet(
+                    "CleanupUnsubscribedAddons",
+                    out var subscribedAddonIds))
+            {
+                errorHandler.HandleWarning(
+                    "Steam subscription state is not authoritative; skipping unsubscribed-addon cleanup.",
+                    "CleanupUnsubscribedAddons");
+                return;
+            }
             
             foreach (var kvp in configuration.AddonMetadata)
             {
                 var addonId = kvp.Key;
                 var addon = kvp.Value;
 
-                if (addon.IsLocal)
+                if (addon.IsLocal || subscribedAddonIds.Contains(addonId))
                 {
                     continue;
                 }

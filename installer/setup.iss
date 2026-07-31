@@ -26,7 +26,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; Visual C++ Redistributable - ダウンロードURL: https://aka.ms/vs/17/release/vc_redist.x64.exe
-Source: "..\redist\VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist; Check: VCRedistNeedsInstall
+Source: "..\redist\VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: VCRedistNeedsInstall
 
 [Icons]
 Name: "{group}\Gmod Addon Manager"; Filename: "{app}\GmodAddonManager.UI.exe"

@@ -1,4 +1,5 @@
 using GmodAddonManager.Core.Services;
+using System.Diagnostics;
 
 namespace GmodAddonManager.Core.Tests;
 
@@ -70,6 +71,76 @@ public sealed class SteamPathDetectorSnapshotTests
 
         Assert.DoesNotContain("111111111", ids);
         Assert.Contains("222222222", ids);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_RejectsWorkshopRootWhoseJunctionTargetIsMissing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var env = new SteamLayout();
+        var library = env.CreateLibrary("LibraryDanglingWorkshop");
+        env.WriteLibraryFolders(library);
+        SteamLayout.WriteGmodInstall(library, "GarrysMod");
+        SteamLayout.WriteWorkshopManifest(library);
+
+        var workshopRoot = Path.Combine(
+            library,
+            "steamapps",
+            "workshop",
+            "content",
+            "4000");
+        Directory.CreateDirectory(Path.GetDirectoryName(workshopRoot)!);
+        var missingTarget = Path.Combine(library, "missing-workshop-target");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add("mklink");
+            startInfo.ArgumentList.Add("/J");
+            startInfo.ArgumentList.Add(workshopRoot);
+            startInfo.ArgumentList.Add(missingTarget);
+
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            process.WaitForExit();
+            Assert.True(
+                process.ExitCode == 0,
+                $"Could not create test junction: {process.StandardError.ReadToEnd()}");
+
+            var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+            Assert.Null(snapshot.ActiveWorkshopRoot);
+            var rejected = Assert.Single(
+                snapshot.WorkshopRoots,
+                candidate => string.Equals(
+                    candidate.RootPath,
+                    workshopRoot,
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(PathCandidateConfidence.Rejected, rejected.Confidence);
+            Assert.False(rejected.ContentRootExists);
+            Assert.Contains(
+                rejected.RejectReasons,
+                reason => reason.Contains("Failed to inspect", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(workshopRoot))
+            {
+                Directory.Delete(workshopRoot);
+            }
+        }
     }
 
     private sealed class SteamLayout : IDisposable

@@ -59,22 +59,6 @@ public partial class PathHealthDialog : Window
         }
     }
 
-    private async void OnCleanupEmptyFolders(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is not PathHealthViewModel viewModel)
-        {
-            return;
-        }
-
-        var confirmed = await dialogService.ShowConfirmAsync(
-            L.Get("PathHealth.ConfirmDeleteTitle"),
-            L.Format("PathHealth.ConfirmCleanup", viewModel.CleanupCandidateCount));
-        if (confirmed)
-        {
-            await viewModel.CleanupEmptyFoldersAsync();
-        }
-    }
-
     private async void OnMigrateManagedData(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not PathHealthViewModel viewModel)

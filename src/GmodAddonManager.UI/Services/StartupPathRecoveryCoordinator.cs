@@ -7,6 +7,7 @@ using GmodAddonManager.Core.Utils;
 using GmodAddonManager.UI.Models;
 using GmodAddonManager.UI.Views;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace GmodAddonManager.UI.Services;
 
@@ -38,20 +39,9 @@ public static class StartupPathRecoveryCoordinator
         {
             var metadataResult = await manager.RepairStalePathMetadataAsync();
             var addonNoMountResult = await manager.MigrateAddonNoMountEntriesAsync();
-            var stateApplyResult = "applied";
-            if (processWatcher.IsGmodRunning)
-            {
-                pendingChangeManager.QueueApplyStates();
-                stateApplyResult = "queued";
-            }
-            else
-            {
-                await manager.UpdateAddonStatesAsync();
-                await manager.SaveConfigurationAsync();
-            }
 
             errorHandler.HandleInfo(
-                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}, stateApply={stateApplyResult}",
+                $"Startup path recovery applied: metadata={metadataResult.ChangedCount}, addonnomount={addonNoMountResult.ChangedCount}, stateApply=not-requested",
                 "StartupPathRecovery");
         }
         catch (Exception ex)
@@ -67,24 +57,18 @@ public static class StartupPathRecoveryCoordinator
     {
         var configuration = TryLoadExistingConfiguration(appDataPath);
         var snapshot = DetectStartupPathSnapshot(settings);
-        var pathSignature = BuildPathRecoverySignature(snapshot);
-        var promptForUnconfirmedPaths =
-            forcePrompt ||
-            (!string.IsNullOrWhiteSpace(pathSignature) &&
-             !string.Equals(settings.DismissedPathRecoverySignature, pathSignature, StringComparison.OrdinalIgnoreCase));
         var decision = StartupPathRecoveryEvaluator.Evaluate(
             configuration,
             snapshot,
             settings.CustomGmodInstallPath,
             settings.CustomWorkshopPath,
-            promptForUnconfirmedPaths,
             settings.ConfirmedGmodInstallPath,
             settings.ConfirmedWorkshopPath);
 
         if (forcePrompt && !decision.ShouldPrompt)
         {
             decision.ShouldPrompt = true;
-            decision.Reason = L.Get("StartupPathRecovery.ManualReason");
+            decision.Reason = StartupPathRecoveryReason.ManualRequest;
         }
 
         if (!decision.ShouldPrompt)
@@ -95,12 +79,6 @@ public static class StartupPathRecoveryCoordinator
         var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
         if (!result.Accepted)
         {
-            if (!forcePrompt && !string.IsNullOrWhiteSpace(pathSignature))
-            {
-                settings.DismissedPathRecoverySignature = pathSignature;
-                settings.Save();
-            }
-
             return new StartupPathRecoveryRunResult();
         }
 
@@ -110,33 +88,11 @@ public static class StartupPathRecoveryCoordinator
         settings.ConfirmedWorkshopPath = result.WorkshopRootPath;
         settings.DismissedPathRecoverySignature = null;
         settings.Save();
-        return new StartupPathRecoveryRunResult { Accepted = true, ApplyRepairs = true };
-    }
-
-    private static string? BuildPathRecoverySignature(PathSnapshot snapshot)
-    {
-        var gmod = snapshot.GmodInstall?.InstallPath;
-        var workshop = snapshot.ActiveWorkshopRoot?.RootPath;
-        if (string.IsNullOrWhiteSpace(gmod) || string.IsNullOrWhiteSpace(workshop))
+        return new StartupPathRecoveryRunResult
         {
-            return null;
-        }
-
-        return $"{NormalizePathForSignature(gmod)}|{NormalizePathForSignature(workshop)}";
-    }
-
-    private static string NormalizePathForSignature(string path)
-    {
-        try
-        {
-            return Path.GetFullPath(path)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .ToUpperInvariant();
-        }
-        catch
-        {
-            return path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant();
-        }
+            Accepted = true,
+            ApplyRepairs = forcePrompt
+        };
     }
 
     private static PathSnapshot DetectStartupPathSnapshot(AppSettings settings)
@@ -165,21 +121,59 @@ public static class StartupPathRecoveryCoordinator
 
     private static Configuration? TryLoadExistingConfiguration(string appDataPath)
     {
+        var configPath = Path.Combine(appDataPath, "config.json");
+        var backupPath = configPath + ".bak";
+        if (!File.Exists(configPath) && !File.Exists(backupPath))
+        {
+            return null;
+        }
+
         try
         {
-            var configPath = Path.Combine(appDataPath, "config.json");
-            if (!File.Exists(configPath))
+            try
             {
-                return null;
+                return ReadValidatedConfiguration(configPath);
             }
-
-            var json = File.ReadAllText(configPath);
-            return JsonConvert.DeserializeObject<Configuration>(json);
+            catch (UnsupportedConfigurationSchemaException)
+            {
+                throw;
+            }
+            catch (Exception primaryException) when (File.Exists(backupPath))
+            {
+                try
+                {
+                    return ReadValidatedConfiguration(backupPath);
+                }
+                catch (UnsupportedConfigurationSchemaException)
+                {
+                    throw;
+                }
+                catch (Exception backupException)
+                {
+                    throw new InvalidOperationException(
+                        "Both the primary configuration and its backup are unreadable.",
+                        new AggregateException(primaryException, backupException));
+                }
+            }
         }
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("StartupPathRecoveryCoordinator.TryLoadExistingConfiguration", ex);
-            return null;
+            throw;
         }
+    }
+
+    private static Configuration ReadValidatedConfiguration(string path)
+    {
+        var json = File.ReadAllText(path);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            throw new InvalidOperationException("Configuration file is empty.");
+        }
+
+        var raw = JObject.Parse(json);
+        new ConfigurationMigrationService().EnsureSupportedSchema(raw);
+        return JsonConvert.DeserializeObject<Configuration>(json)
+            ?? throw new InvalidOperationException("Configuration deserialized to null.");
     }
 }

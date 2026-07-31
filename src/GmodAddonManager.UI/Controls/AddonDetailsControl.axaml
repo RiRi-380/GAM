@@ -168,6 +168,52 @@
                         </ItemsControl>
                     </Grid>
                 </StackPanel>
+
+                <!-- GAMが管理する状態（実状態と次回適用する希望状態を分離） -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{loc:Localize AddonDetails.StateInfo}"
+                               FontWeight="Bold"
+                               FontSize="14"
+                               Opacity="0.7"/>
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                            CornerRadius="4"
+                            Padding="12">
+                        <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+                              ColumnDefinitions="100,*"
+                              RowSpacing="6">
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.ActualState}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1"
+                                       Text="{Binding ActualStateText}"
+                                       FontWeight="SemiBold"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.DesiredState}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1"
+                                       Text="{Binding DesiredStateText}"
+                                       FontWeight="SemiBold"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.StateReason}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1"
+                                       Text="{Binding StateReasonText}"
+                                       TextWrapping="Wrap"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.PendingState}"
+                                       Opacity="0.7"
+                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1"
+                                       Text="{Binding PendingStateText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SystemAccentColor}"
+                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
                 
                 <!-- タグ -->
                 <StackPanel Spacing="8"
@@ -351,7 +397,7 @@
                                           Text="{loc:Localize AddonDetails.CurrentState}"
                                           Opacity="0.7"/>
                                 <TextBlock Grid.Row="0" Grid.Column="1" 
-                                          Text="{Binding StateText}"/>
+                                           Text="{Binding ActualStateText}"/>
                                 
                                 <TextBlock Grid.Row="1" Grid.Column="0" 
                                           Text="{loc:Localize AddonDetails.IsGmaFile}"

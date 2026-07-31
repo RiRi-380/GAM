@@ -55,7 +55,6 @@ public partial class AssetEditDialog : Window
                 AssetNameTextBox.Text = asset.Id switch
                 {
                     "subscribe-system-asset" => L.Get("Asset.SubscribeAsset"),
-                    "junction-system-asset" => L.Get("Asset.Junction"),
                     _ => asset.Name
                 };
                 AssetNameTextBox.IsEnabled = false;

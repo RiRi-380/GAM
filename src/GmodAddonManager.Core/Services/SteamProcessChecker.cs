@@ -16,12 +16,6 @@ namespace GmodAddonManager.Core.Services
             "gameoverlayui"
         };
 
-        private static readonly string[] GmodProcessNames = new[]
-        {
-            "hl2",
-            "gmod"
-        };
-
         /// <summary>
         /// Check if Steam is running by looking for processes
         /// </summary>
@@ -29,7 +23,12 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
-                return IsAnyProcessRunning(SteamProcessNames);
+                return IsAnyProcessRunning(processName =>
+                    SteamProcessNames.Any(name =>
+                        string.Equals(
+                            processName,
+                            name,
+                            StringComparison.OrdinalIgnoreCase)));
             }
             catch
             {
@@ -45,7 +44,7 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
-                return IsAnyProcessRunning(GmodProcessNames);
+                return IsAnyProcessRunning(GmodProcessWatcher.IsRecognizedProcessName);
             }
             catch
             {
@@ -53,7 +52,7 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private static bool IsAnyProcessRunning(string[] targetNames)
+        private static bool IsAnyProcessRunning(Func<string, bool> processNameMatcher)
         {
             var processes = Process.GetProcesses();
             try
@@ -62,8 +61,7 @@ namespace GmodAddonManager.Core.Services
                 {
                     try
                     {
-                        if (targetNames.Any(name =>
-                            process.ProcessName.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0))
+                        if (processNameMatcher(process.ProcessName))
                         {
                             return true;
                         }

@@ -3,13 +3,14 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:GmodAddonManager.UI.ViewModels"
-        xmlns:views="using:GmodAddonManager.UI.Views"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
         x:Class="GmodAddonManager.UI.Views.AssetDetailsDialog"
         Title="{loc:Localize AssetDetails.Title}"
         Width="800"
         Height="600"
+        MinWidth="640"
+        MinHeight="480"
         WindowStartupLocation="CenterOwner">
     
     <DockPanel>
@@ -17,17 +18,20 @@
         <Border DockPanel.Dock="Top" 
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 Padding="20"
-                Height="100">
+                MinHeight="100">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
-                <StackPanel Grid.Column="0">
+                <StackPanel Grid.Column="0" Margin="0,0,16,0">
                     <TextBlock Text="{Binding AssetName}" 
                                FontSize="24" 
-                               FontWeight="Bold"/>
+                               FontWeight="Bold"
+                               MaxLines="1"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding AssetName}"/>
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <TextBlock Text="{Binding AddonCountText}" 
                                    VerticalAlignment="Center"
@@ -39,53 +43,81 @@
                             <ComboBoxItem Content="{loc:Localize AssetDetails.FilterAll}"/>
                             <ComboBoxItem Content="{loc:Localize AssetDetails.FilterNormal}"/>
                             <ComboBoxItem Content="{loc:Localize AssetDetails.FilterCache}"/>
-                            <ComboBoxItem Content="{loc:Localize AssetDetails.FilterLocal}"/>
                         </ComboBox>
                     </StackPanel>
                 </StackPanel>
                 
                 <Button Grid.Column="1"
                         Width="100"
-                        Click="OnClose">{loc:Localize Dialog.Close}</Button>
+                        Height="34"
+                        VerticalAlignment="Center"
+                        Content="{loc:Localize Dialog.Close}"
+                        Click="OnClose"/>
             </Grid>
         </Border>
         
         <!-- アドオンリスト -->
-        <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding Addons}" Margin="10">
-                <ItemsControl.ItemTemplate>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <ItemsRepeater ItemsSource="{Binding Addons}" Margin="10">
+                <ItemsRepeater.Layout>
+                    <StackLayout Orientation="Vertical"/>
+                </ItemsRepeater.Layout>
+                <ItemsRepeater.ItemTemplate>
                     <DataTemplate>
                         <Border Margin="0,4"
                                 Padding="15"
                                 Background="{DynamicResource SystemControlBackgroundListLowBrush}"
-                                CornerRadius="4">
+                                CornerRadius="4"
+                                Opacity="{Binding RowOpacity}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="200"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 
                                 <!-- アドオン情報 -->
                                 <StackPanel Grid.Column="0">
                                     <TextBlock Text="{Binding Title}" 
                                                FontWeight="Bold"
-                                               FontSize="14"/>
+                                               FontSize="14"
+                                               MaxLines="1"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding Title}"/>
                                     <TextBlock Text="{Binding AddonId}" 
                                                FontSize="11"
                                                Opacity="0.7"
                                                Margin="0,2,0,0"/>
                                 </StackPanel>
-                                
-                                <!-- 状態コントロール -->
-                                <views:AddonStateControl Grid.Column="1"
-                                                        State="{Binding State}"
-                                                        HorizontalAlignment="Right"
-                                                        Width="180"/>
+                                <Border Grid.Column="1"
+                                        Margin="12,0,0,0"
+                                        Padding="7,3"
+                                        Background="#C97800"
+                                        CornerRadius="4"
+                                        VerticalAlignment="Center"
+                                        IsVisible="{Binding IsMissing}">
+                                    <TextBlock Text="{loc:Localize Addon.Missing}"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="White"/>
+                                </Border>
+                                <Border Grid.Column="1"
+                                        Margin="12,0,0,0"
+                                        Padding="7,3"
+                                        Background="#6B7280"
+                                        CornerRadius="4"
+                                        VerticalAlignment="Center"
+                                        IsVisible="{Binding IsUnavailable}">
+                                    <TextBlock Text="{Binding AvailabilityText}"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="White"/>
+                                </Border>
                             </Grid>
                         </Border>
                     </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
         </ScrollViewer>
     </DockPanel>
 </Window>

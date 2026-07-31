@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Models;
 using Newtonsoft.Json;
@@ -12,323 +12,278 @@ namespace GmodAddonManager.Core.Services
     internal enum PendingChangeActionType
     {
         Unknown,
-        Enable,
-        Disable,
-        EnableAsset,
-        DisableAsset,
         ApplyStates
     }
 
-    public class PendingChangeManager
+    /// <summary>
+    /// GMod実行中の変更を「最新構成を全再適用する」一つのmarkerへ畳み込む。
+    /// 古い個別操作は再生しない。
+    /// </summary>
+    public sealed class PendingChangeManager
     {
+        private const string ApplyStatesAction = "apply_states";
+        private const string ApplyStatesTarget = "*";
+
         private readonly string pendingPath;
         private readonly string pendingBackupPath;
         private readonly AddonManager addonManager;
         private readonly IErrorHandler? errorHandler;
         private readonly object lockObject = new object();
+        private readonly SemaphoreSlim applyGate = new SemaphoreSlim(1, 1);
         private PendingChanges pendingChanges = new PendingChanges();
+        private Guid markerGeneration = Guid.Empty;
+
+        internal Func<Task>? BeforeRuntimeApplyAsync { get; set; }
 
         public event EventHandler<ChangeAppliedEventArgs>? ChangeApplied;
         public event EventHandler<ChangeFailedEventArgs>? ChangeFailed;
 
-        public PendingChangeManager(AddonManager addonManager, string managerPath, IErrorHandler? errorHandler = null)
+        public PendingChangeManager(
+            AddonManager addonManager,
+            string managerPath,
+            IErrorHandler? errorHandler = null)
         {
-            this.addonManager = addonManager;
-            this.pendingPath = Path.Combine(managerPath, "pending.json");
-            this.pendingBackupPath = Path.Combine(managerPath, "pending.json.bak");
+            this.addonManager = addonManager ?? throw new ArgumentNullException(nameof(addonManager));
+            pendingPath = Path.Combine(managerPath, "pending.json");
+            pendingBackupPath = Path.Combine(managerPath, "pending.json.bak");
             this.errorHandler = errorHandler;
             LoadPendingChanges();
-        }
 
+            addonManager.QueueRuntimeApplyProvider = QueueApplyStates;
+        }
 
         public void QueueChange(AddonChange change)
         {
-            if (change == null)
+            if (change != null)
             {
-                return;
+                QueueApplyStates();
             }
-
-            QueueChanges(new[] { change });
         }
 
         public void QueueChanges(IEnumerable<AddonChange> changes)
         {
-            if (changes == null)
+            if (changes != null && changes.Any(change => change != null))
             {
-                return;
-            }
-
-            var changeList = changes.Where(c => c != null).ToList();
-            if (changeList.Count == 0)
-            {
-                return;
-            }
-
-            var addonIds = new HashSet<string>(changeList.Select(c => c.AddonId));
-
-            lock (lockObject)
-            {
-                // 同じアドオンの変更がある場合は最新のものに置き換え
-                pendingChanges.Changes.RemoveAll(c => addonIds.Contains(c.AddonId));
-                pendingChanges.Changes.AddRange(changeList);
-                SavePendingChanges();
+                QueueApplyStates();
             }
         }
 
         public void AddPendingChange(string action, string assetId)
         {
-            var change = new AddonChange(action + "_asset", assetId);
-            QueueChange(change);
+            _ = action;
+            _ = assetId;
+            QueueApplyStates();
         }
 
         public void QueueAssetToggle(string assetId, bool enable)
         {
-            var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(a => a.Id == assetId);
-            if (asset == null)
-            {
-                return;
-            }
-
-            var addonIds = asset.ContainsAllAddons() 
-                ? addonManager.GetConfiguration().AddonMetadata.Keys.ToList()
-                : asset.Addons;
-
-
-            var changes = addonIds.Select(addonId => new AddonChange(enable ? "enable" : "disable", addonId)).ToList();
-            QueueChanges(changes);
+            _ = assetId;
+            _ = enable;
+            QueueApplyStates();
         }
 
         public void QueueApplyStates()
         {
-            QueueChange(new AddonChange("apply_states", "*"));
+            lock (lockObject)
+            {
+                ReplaceWithApplyMarkerNoLock(DateTime.UtcNow);
+                if (!TrySavePendingChangesNoLock())
+                {
+                    throw new IOException(
+                        "The pending runtime apply marker could not be persisted.");
+                }
+            }
         }
 
         internal static PendingChangeActionType ParseActionType(string? action)
         {
-            return action?.Trim().ToLowerInvariant() switch
-            {
-                "enable" => PendingChangeActionType.Enable,
-                "disable" => PendingChangeActionType.Disable,
-                "enable_asset" => PendingChangeActionType.EnableAsset,
-                "disable_asset" => PendingChangeActionType.DisableAsset,
-                "apply_states" => PendingChangeActionType.ApplyStates,
-                _ => PendingChangeActionType.Unknown
-            };
+            return string.Equals(
+                    action?.Trim(),
+                    ApplyStatesAction,
+                    StringComparison.OrdinalIgnoreCase)
+                ? PendingChangeActionType.ApplyStates
+                : PendingChangeActionType.Unknown;
         }
 
-	        public async Task ApplyPendingChangesAsync()
-	        {
-	            if (!HasPendingChanges())
-	            {
-	                return;
-	            }
-
-            // Steamの同期処理を待つ
-            await Task.Delay(5000);
-
-            const int pollIntervalMs = 3000;
-            const int maxWaitAttempts = 40;
-            int waitAttempts = 0;
-	            bool notifiedAboutSteam = false;
-	
-	            while (true)
-	            {
-	                var safe = SteamProcessChecker.IsSafeToModifyAddons(out string? warning);
-	                if (safe)
-	                {
-	                    if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
-	                    {
-	                        // Steam 起動中は警告のみ（適用は続行する）
-	                        errorHandler?.HandleWarning(warning, "PendingChangeManager.ApplyPendingChangesAsync");
-	                        notifiedAboutSteam = true;
-	                    }
-	                    break;
-	                }
-	
-	                if (!notifiedAboutSteam && !string.IsNullOrEmpty(warning))
-	                {
-	                    // Garry's Mod 起動中は保留にする
-	                    errorHandler?.HandleWarning(warning, "PendingChangeManager.ApplyPendingChangesAsync");
-	
-	                    List<AddonChange> snapshot;
-	                    lock (lockObject)
-	                    {
-	                        snapshot = new List<AddonChange>(pendingChanges.Changes);
-	                    }
-	
-	                    var deferException = new InvalidOperationException(warning);
-	                    foreach (var change in snapshot)
-	                    {
-	                        ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
-	                        {
-	                            Change = change,
-	                            Error = deferException
-	                        });
-	                    }
-	
-	                    notifiedAboutSteam = true;
-	                }
-	
-	                if (++waitAttempts >= maxWaitAttempts)
-	                {
-	                    Debug.WriteLine("PendingChangeManager: Deferring pending changes until Garry's Mod is closed.");
-	                    errorHandler?.HandleWarning(
-	                        "Garry's Mod が起動中のため、保留中のアドオン変更を後で適用します。ゲーム終了後に再試行してください。",
-	                        "PendingChangeManager.ApplyPendingChangesAsync");
-	                    return;
-	                }
-
-                await Task.Delay(pollIntervalMs);
+        public async Task ApplyPendingChangesAsync()
+        {
+            await applyGate.WaitAsync();
+            try
+            {
+                await ApplyPendingChangesCoreAsync();
             }
+            finally
+            {
+                applyGate.Release();
+            }
+        }
 
-            List<AddonChange> changesToApply;
+        private async Task ApplyPendingChangesCoreAsync()
+        {
+            AddonChange? marker;
+            Guid capturedMarkerGeneration;
             lock (lockObject)
             {
-                changesToApply = new List<AddonChange>(pendingChanges.Changes);
-                pendingChanges.Changes.Clear();
+                marker = pendingChanges.Changes
+                    .Where(change => ParseActionType(change.Action) == PendingChangeActionType.ApplyStates)
+                    .OrderByDescending(change => change.Timestamp)
+                    .FirstOrDefault();
+                capturedMarkerGeneration = markerGeneration;
             }
 
-            var successfulChanges = new List<AddonChange>();
-            var failedChanges = new List<(AddonChange change, Exception error)>();
-
-            foreach (var change in changesToApply)
+            if (marker == null)
             {
-                try
+                return;
+            }
+
+            if (addonManager.IsGmodCurrentlyRunning())
+            {
+                return;
+            }
+
+            try
+            {
+                if (BeforeRuntimeApplyAsync != null)
                 {
-                    
-                    var actionType = ParseActionType(change.Action);
-                    switch (actionType)
+                    await BeforeRuntimeApplyAsync();
+                }
+
+                var applied = await addonManager.UpdateAddonStatesAsync();
+                if (!applied)
+                {
+                    var applyError = new InvalidOperationException(
+                        "The latest desired addon state could not be reconciled.");
+                    ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
                     {
-                        case PendingChangeActionType.Enable:
-                            addonManager.EnableAddon(change.AddonId);
-                            break;
-                        case PendingChangeActionType.Disable:
-                            addonManager.DisableAddon(change.AddonId);
-                            break;
-                        case PendingChangeActionType.EnableAsset:
-                            await addonManager.SetAssetEnabledAsync(change.AddonId, enabled: true);
-                            break;
-                        case PendingChangeActionType.DisableAsset:
-                            await addonManager.SetAssetEnabledAsync(change.AddonId, enabled: false);
-                            break;
-                        case PendingChangeActionType.ApplyStates:
-                            break;
-                        default:
-                            throw new InvalidOperationException(
-                                $"Unsupported pending change action: '{change.Action ?? "<null>"}' for addon '{change.AddonId}'.");
-                    }
-
-                    successfulChanges.Add(change);
-                    ChangeApplied?.Invoke(this, new ChangeAppliedEventArgs { Change = change });
-                    
-                }
-                catch (Exception ex)
-                {
-                    failedChanges.Add((change, ex));
-                    ChangeFailed?.Invoke(this, new ChangeFailedEventArgs 
-                    { 
-                        Change = change, 
-                        Error = ex 
+                        Change = marker,
+                        Error = applyError
                     });
-                    
+                    errorHandler?.HandleWarning(
+                        applyError.Message,
+                        "PendingChangeManager.ApplyPendingChangesAsync");
+                    return;
                 }
-            }
 
-            // 失敗した変更を再度キューに戻す（オプション）
-            if (failedChanges.Any())
-            {
+                if (addonManager.IsGmodCurrentlyRunning())
+                {
+                    return;
+                }
+
                 lock (lockObject)
                 {
-                    foreach (var (change, _) in failedChanges)
+                    // A user operation may queue a replacement marker while the
+                    // previous generation is being applied. Only clear the exact
+                    // generation captured above; the replacement represents newer
+                    // desired state and must survive for another full reconcile.
+                    if (markerGeneration == capturedMarkerGeneration)
                     {
-                        pendingChanges.Changes.Add(change);
+                        var previousChanges = pendingChanges.Changes.ToList();
+                        pendingChanges.Changes.RemoveAll(
+                            change => ParseActionType(change.Action) == PendingChangeActionType.ApplyStates);
+                        if (!TrySavePendingChangesNoLock())
+                        {
+                            pendingChanges.Changes = previousChanges;
+                            throw new IOException(
+                                "The applied pending marker could not be durably cleared.");
+                        }
                     }
                 }
-            }
 
-            SavePendingChanges();
-            
-            // アドオンの状態を更新（ジャンクションの作成/削除を実行）
-            await addonManager.UpdateAddonStatesAsync();
-            
-            // 設定を保存
-            await addonManager.SaveConfigurationAsync();
-            
+                ChangeApplied?.Invoke(this, new ChangeAppliedEventArgs { Change = marker });
+            }
+            catch (Exception ex)
+            {
+                ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
+                {
+                    Change = marker,
+                    Error = ex
+                });
+                errorHandler?.HandleError(
+                    ex,
+                    "PendingChangeManager.ApplyPendingChangesAsync",
+                    ErrorSeverity.Warning);
+            }
         }
 
         public bool HasPendingChanges()
         {
             lock (lockObject)
             {
-                return pendingChanges.Changes.Any();
+                return pendingChanges.Changes.Any(
+                    change => ParseActionType(change.Action) == PendingChangeActionType.ApplyStates);
             }
         }
 
         public int GetPendingChangeCount()
         {
-            lock (lockObject)
-            {
-                if (pendingChanges == null)
-                {
-                    // PendingChangeManager.GetPendingChangeCount: pendingChanges is null
-                    return 0;
-                }
-                return pendingChanges.Changes.Count;
-            }
+            return HasPendingChanges() ? 1 : 0;
         }
 
         public List<AddonChange> GetPendingChanges()
         {
             lock (lockObject)
             {
-                return new List<AddonChange>(pendingChanges.Changes);
+                return pendingChanges.Changes
+                    .Where(change => ParseActionType(change.Action) == PendingChangeActionType.ApplyStates)
+                    .Take(1)
+                    .ToList();
+            }
+        }
+
+        public void ClearPendingChanges()
+        {
+            lock (lockObject)
+            {
+                pendingChanges.Changes.Clear();
+                markerGeneration = Guid.NewGuid();
+                TryDeletePendingFile(pendingPath);
+                TryDeletePendingFile(pendingBackupPath);
             }
         }
 
         private void LoadPendingChanges()
         {
-            if (TryReadPendingChanges(pendingPath, out var loaded))
+            lock (lockObject)
             {
-                pendingChanges = loaded;
-                return;
-            }
+                var loadedChanges = new List<AddonChange>();
+                var loadedAny = false;
+                if (TryReadPendingChanges(pendingPath, out var primary))
+                {
+                    loadedAny = true;
+                    loadedChanges.AddRange(primary.Changes);
+                }
 
-            if (TryReadPendingChanges(pendingBackupPath, out var backup))
-            {
-                pendingChanges = backup;
-                errorHandler?.HandleWarning(
-                    "Recovered pending changes from backup storage.",
-                    "PendingChangeManager.LoadPendingChanges");
+                if (TryReadPendingChanges(pendingBackupPath, out var backup))
+                {
+                    loadedAny = true;
+                    loadedChanges.AddRange(backup.Changes);
+                }
 
-                // Best effort: restore canonical pending.json from backup content.
-                SavePendingChanges();
-                return;
-            }
+                pendingChanges = new PendingChanges();
+                if (!loadedAny || loadedChanges.Count == 0)
+                {
+                    return;
+                }
 
-            pendingChanges = new PendingChanges();
-        }
-
-        private void SavePendingChanges()
-        {
-            try
-            {
-                var json = JsonConvert.SerializeObject(pendingChanges, Formatting.Indented);
-                WritePendingChangesFile(pendingPath, json);
-                TryWriteBackup(json);
-            }
-            catch (Exception ex)
-            {
-                errorHandler?.HandleError(
-                    ex,
-                    "PendingChangeManager.SavePendingChanges",
-                    ErrorSeverity.Warning);
-                TryWriteEmergencyBackup();
+                ReplaceWithApplyMarkerNoLock(
+                    loadedChanges.Max(change => change.Timestamp));
+                _ = TrySavePendingChangesNoLock();
             }
         }
 
-        private bool TryReadPendingChanges(string path, out PendingChanges loadedChanges)
+        private void ReplaceWithApplyMarkerNoLock(DateTime timestamp)
         {
-            loadedChanges = new PendingChanges();
+            pendingChanges.Changes.Clear();
+            pendingChanges.Changes.Add(new AddonChange(ApplyStatesAction, ApplyStatesTarget)
+            {
+                Timestamp = timestamp
+            });
+            markerGeneration = Guid.NewGuid();
+        }
+
+        private bool TryReadPendingChanges(string path, out PendingChanges loaded)
+        {
+            loaded = new PendingChanges();
             if (!File.Exists(path))
             {
                 return false;
@@ -342,95 +297,55 @@ namespace GmodAddonManager.Core.Services
                     return true;
                 }
 
-                Newtonsoft.Json.Linq.JObject.Parse(json);
-                loadedChanges = JsonConvert.DeserializeObject<PendingChanges>(json, new JsonSerializerSettings
-                {
-                    Error = (sender, args) => args.ErrorContext.Handled = true
-                }) ?? new PendingChanges();
+                loaded = JsonConvert.DeserializeObject<PendingChanges>(json) ?? new PendingChanges();
+                loaded.Changes ??= new List<AddonChange>();
                 return true;
             }
-            catch (Newtonsoft.Json.JsonException ex)
+            catch (Exception ex)
             {
                 errorHandler?.HandleWarning(
-                    $"Pending changes file is invalid JSON ({Path.GetFileName(path)}): {ex.Message}",
+                    $"Pending changes file could not be read ({Path.GetFileName(path)}): {ex.Message}",
                     "PendingChangeManager.LoadPendingChanges");
                 return false;
+            }
+        }
+
+        private bool TrySavePendingChangesNoLock()
+        {
+            var json = JsonConvert.SerializeObject(pendingChanges, Formatting.Indented);
+            try
+            {
+                WriteAtomic(pendingBackupPath, json);
+                WriteAtomic(pendingPath, json);
+                return true;
             }
             catch (Exception ex)
             {
                 errorHandler?.HandleError(
                     ex,
-                    $"PendingChangeManager.LoadPendingChanges ({Path.GetFileName(path)})",
+                    "PendingChangeManager.SavePendingChanges",
                     ErrorSeverity.Warning);
                 return false;
             }
         }
 
-        private static void WritePendingChangesFile(string targetPath, string content)
+        private static void WriteAtomic(string path, string content)
         {
-            var directory = Path.GetDirectoryName(targetPath);
+            var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            var tempPath = targetPath + ".tmp";
-            File.WriteAllText(tempPath, content);
-
-            if (File.Exists(targetPath))
+            var temporaryPath = path + ".tmp";
+            File.WriteAllText(temporaryPath, content);
+            if (File.Exists(path))
             {
-                File.Replace(tempPath, targetPath, null);
+                File.Replace(temporaryPath, path, null);
             }
             else
             {
-                File.Move(tempPath, targetPath);
-            }
-        }
-
-        private void TryWriteBackup(string json)
-        {
-            try
-            {
-                WritePendingChangesFile(pendingBackupPath, json);
-            }
-            catch (Exception ex)
-            {
-                errorHandler?.HandleWarning(
-                    $"Failed to write pending backup file: {ex.Message}",
-                    "PendingChangeManager.SavePendingChanges");
-            }
-        }
-
-        private void TryWriteEmergencyBackup()
-        {
-            try
-            {
-                var emergencyPath = Path.Combine(
-                    Path.GetTempPath(),
-                    $"GAM-pending-{Process.GetCurrentProcess().Id}.json");
-                var json = JsonConvert.SerializeObject(pendingChanges, Formatting.Indented);
-                File.WriteAllText(emergencyPath, json);
-
-                errorHandler?.HandleWarning(
-                    $"Pending changes were written to emergency path: {emergencyPath}",
-                    "PendingChangeManager.SavePendingChanges");
-            }
-            catch (Exception ex)
-            {
-                errorHandler?.HandleError(
-                    ex,
-                    "PendingChangeManager.SavePendingChanges emergency backup",
-                    ErrorSeverity.Warning);
-            }
-        }
-
-        public void ClearPendingChanges()
-        {
-            lock (lockObject)
-            {
-                pendingChanges.Changes.Clear();
-                TryDeletePendingFile(pendingPath);
-                TryDeletePendingFile(pendingBackupPath);
+                File.Move(temporaryPath, path);
             }
         }
 
@@ -448,18 +363,18 @@ namespace GmodAddonManager.Core.Services
             catch (Exception ex)
             {
                 errorHandler?.HandleWarning(
-                    $"Failed to delete pending changes file ({Path.GetFileName(path)}): {ex.Message}",
+                    $"Pending changes file could not be deleted ({Path.GetFileName(path)}): {ex.Message}",
                     "PendingChangeManager.ClearPendingChanges");
             }
         }
     }
 
-    public class ChangeAppliedEventArgs : EventArgs
+    public sealed class ChangeAppliedEventArgs : EventArgs
     {
         public AddonChange Change { get; set; } = null!;
     }
 
-    public class ChangeFailedEventArgs : EventArgs
+    public sealed class ChangeFailedEventArgs : EventArgs
     {
         public AddonChange Change { get; set; } = null!;
         public Exception Error { get; set; } = null!;

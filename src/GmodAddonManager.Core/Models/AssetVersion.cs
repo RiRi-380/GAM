@@ -41,18 +41,24 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         [JsonProperty("gamContent")]
         public string? GamContent { get; set; }
+
+        public bool ShouldSerializeGamContent() => false;
         
         /// <summary>
         /// アドオンの状態を保存するかのフラグ
         /// </summary>
         [JsonProperty("includeAddonStates")]
         public bool IncludeAddonStates { get; set; }
+
+        public bool ShouldSerializeIncludeAddonStates() => false;
         
         /// <summary>
         /// アドオンごとの状態（IncludeAddonStatesがtrueの場合のみ使用）
         /// </summary>
         [JsonProperty("addonStates")]
         public Dictionary<string, AddonState>? AddonStates { get; set; }
+
+        public bool ShouldSerializeAddonStates() => false;
         
         /// <summary>
         /// バージョンのメモ（オプション）
@@ -65,25 +71,31 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         [JsonProperty("isImportBaseline")]
         public bool IsImportBaseline { get; set; }
+
+        public bool ShouldSerializeIsImportBaseline() => false;
         
         /// <summary>
         /// 新規サブスクライブしたアドオンID（インポート時のみ使用）
         /// </summary>
         [JsonProperty("newlySubscribedAddonIds")]
         public List<string>? NewlySubscribedAddonIds { get; set; }
+
+        public bool ShouldSerializeNewlySubscribedAddonIds() => false;
         
         /// <summary>
         /// インポート種別（URL/GAM形式）
         /// </summary>
         [JsonProperty("importType")]
         public string? ImportType { get; set; }
+
+        public bool ShouldSerializeImportType() => false;
         
         public AssetVersion()
         {
             Version = 0;
             CreatedAt = DateTime.Now;
             AddonIds = new List<string>();
-            IncludeAddonStates = true;
+            IncludeAddonStates = false;
             AddonStates = null;
             Note = null;
             IsImportBaseline = false;

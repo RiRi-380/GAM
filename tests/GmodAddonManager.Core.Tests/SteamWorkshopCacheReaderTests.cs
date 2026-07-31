@@ -1,3 +1,4 @@
+using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 
 namespace GmodAddonManager.Core.Tests;
@@ -5,8 +6,9 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class SteamWorkshopCacheReaderTests
 {
     [Fact]
-    public void ParseSubscribedAddonIds_ReadsOnlyInstalledItems()
+    public void ParseWorkshopSnapshot_SeparatesSubscribedAndInstalledIds()
     {
+        var observedAtUtc = new DateTime(2026, 7, 31, 12, 34, 56, DateTimeKind.Utc);
         var content = string.Join(Environment.NewLine, new[]
         {
             "\"AppWorkshop\"",
@@ -25,21 +27,70 @@ public sealed class SteamWorkshopCacheReaderTests
             "    }",
             "    \"WorkshopItemDetails\"",
             "    {",
+            "        \"222\"",
+            "        {",
+            "            \"title\" \"Installed And Subscribed\"",
+            "            \"subscribedby\" \"76561198000000000\"",
+            "        }",
             "        \"333\"",
             "        {",
-            "            \"title\" \"Details Only\"",
+            "            \"title\" \"Download Pending\"",
+            "            \"subscribedby\" \"76561198000000000\"",
+            "        }",
+            "        \"444\"",
+            "        {",
+            "            \"title\" \"Cached Details Only\"",
             "        }",
             "    }",
             "}"
         });
 
-        var ids = SteamWorkshopCacheReader.ParseSubscribedAddonIds(content);
+        var snapshot = SteamWorkshopCacheReader.ParseWorkshopSnapshot(content, observedAtUtc);
 
-        Assert.Equal(new[] { "111", "222" }, ids);
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Equal(observedAtUtc, snapshot.ObservedAtUtc);
+        Assert.Equal(DateTimeKind.Utc, snapshot.ObservedAtUtc.Kind);
+        Assert.Equal(new[] { "222", "333" }, snapshot.SubscribedIds);
+        Assert.Equal(new[] { "111", "222" }, snapshot.InstalledIds);
     }
 
     [Fact]
-    public void ParseSubscribedAddonIds_SupportsLegacyFlatInstalledItems()
+    public void ParseWorkshopSnapshot_WithoutSubscribedBy_FallsBackToAllDetailChildren()
+    {
+        var content = string.Join(Environment.NewLine, new[]
+        {
+            "\"AppWorkshop\"",
+            "{",
+            "    \"WorkshopItemsInstalled\"",
+            "    {",
+            "        \"111\"",
+            "        {",
+            "            \"size\" \"4096\"",
+            "        }",
+            "    }",
+            "    \"WorkshopItemDetails\"",
+            "    {",
+            "        \"111\"",
+            "        {",
+            "            \"title\" \"First\"",
+            "        }",
+            "        \"222\"",
+            "        {",
+            "            \"title\" \"Download Pending\"",
+            "        }",
+            "    }",
+            "}"
+        });
+
+        var snapshot = SteamWorkshopCacheReader.ParseWorkshopSnapshot(content, DateTime.UtcNow);
+
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Equal(new[] { "111", "222" }, snapshot.SubscribedIds);
+        Assert.Equal(new[] { "111" }, snapshot.InstalledIds);
+    }
+
+    [Fact]
+    public void ParseWorkshopSnapshot_SupportsLegacyFlatInstalledItems()
     {
         var content = string.Join(Environment.NewLine, new[]
         {
@@ -50,24 +101,108 @@ public sealed class SteamWorkshopCacheReaderTests
             "        \"111\" \"1\"",
             "        \"222\" \"1\"",
             "    }",
+            "    \"WorkshopItemDetails\"",
+            "    {",
+            "        \"111\"",
+            "        {",
+            "            \"title\" \"First\"",
+            "        }",
+            "    }",
             "}"
         });
 
-        var ids = SteamWorkshopCacheReader.ParseSubscribedAddonIds(content);
+        var snapshot = SteamWorkshopCacheReader.ParseWorkshopSnapshot(content, DateTime.UtcNow);
 
-        Assert.Equal(new[] { "111", "222" }, ids);
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Equal(new[] { "111" }, snapshot.SubscribedIds);
+        Assert.Equal(new[] { "111", "222" }, snapshot.InstalledIds);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\"AppWorkshop\" { \"WorkshopItemsInstalled\" { } }")]
+    [InlineData("\"AppWorkshop\" { \"WorkshopItemDetails\" { } }")]
+    [InlineData("\"AppWorkshop\" {")]
+    [InlineData("\"AppWorkshop\" { \"WorkshopItemsInstalled\" { garbage } \"WorkshopItemDetails\" { } }")]
+    [InlineData("\"AppWorkshop\" { \"WorkshopItemsInstalled\" { } \"WorkshopItemDetails\" { \"111\" \"not-a-section\" } }")]
+    [InlineData("\"AppWorkshop\" { \"WorkshopItemsInstalled\" { \"not-an-id\" { } } \"WorkshopItemDetails\" { } }")]
+    public void ParseWorkshopSnapshot_MissingOrMalformedContent_IsNotAuthoritative(string content)
+    {
+        var snapshot = SteamWorkshopCacheReader.ParseWorkshopSnapshot(content, DateTime.UtcNow);
+
+        Assert.False(snapshot.IsAuthoritative);
     }
 
     [Fact]
-    public void GetSubscribedAddonIds_CombinesAllCacheFiles()
+    public void ParseWorkshopSnapshot_CommentsAndEmptySectionsRemainAuthoritative()
+    {
+        var content =
+            "\uFEFF// Steam may include comments before the root\n" +
+            "\"AppWorkshop\"\n" +
+            "{\n" +
+            "    \"WorkshopItemsInstalled\" { /* no installed items */ }\n" +
+            "    \"WorkshopItemDetails\" { // no subscriptions\n }\n" +
+            "}\n";
+
+        var snapshot = SteamWorkshopCacheReader.ParseWorkshopSnapshot(
+            content,
+            DateTime.UtcNow);
+
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Empty(snapshot.SubscribedIds);
+        Assert.Empty(snapshot.InstalledIds);
+    }
+
+    [Fact]
+    public void GetWorkshopSnapshot_CombinesAllCacheFiles()
     {
         using var env = new CacheTestEnvironment();
-        var cacheA = env.WriteCacheFile("a.acf", ("111", "First"), ("222", "Second"));
-        var cacheB = env.WriteCacheFile("b.acf", ("222", "Duplicate"), ("333", "Third"));
+        var cacheA = env.WriteSnapshotCache(
+            "a.acf",
+            subscribedIds: new[] { "111", "222" },
+            installedIds: new[] { "111" });
+        var cacheB = env.WriteSnapshotCache(
+            "b.acf",
+            subscribedIds: new[] { "222", "333" },
+            installedIds: new[] { "222", "444" });
 
-        var ids = SteamWorkshopCacheReader.GetSubscribedAddonIds(new[] { cacheA, cacheB });
+        var snapshot = SteamWorkshopCacheReader.GetWorkshopSnapshot(new[] { cacheA, cacheB });
 
-        Assert.Equal(new[] { "111", "222", "333" }, ids);
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Equal(new[] { "111", "222", "333" }, snapshot.SubscribedIds);
+        Assert.Equal(new[] { "111", "222", "444" }, snapshot.InstalledIds);
+        Assert.Equal(DateTimeKind.Utc, snapshot.ObservedAtUtc.Kind);
+    }
+
+    [Fact]
+    public void GetWorkshopSnapshot_MissingManifest_PreservesObservedDataButIsNotAuthoritative()
+    {
+        using var env = new CacheTestEnvironment();
+        var cache = env.WriteSnapshotCache(
+            "present.acf",
+            subscribedIds: new[] { "111" },
+            installedIds: new[] { "222" });
+        var missing = Path.Combine(env.RootPath, "missing.acf");
+
+        var snapshot = SteamWorkshopCacheReader.GetWorkshopSnapshot(new[] { cache, missing });
+
+        Assert.False(snapshot.IsAuthoritative);
+        Assert.Equal(new[] { "111" }, snapshot.SubscribedIds);
+        Assert.Equal(new[] { "222" }, snapshot.InstalledIds);
+    }
+
+    [Fact]
+    public void GetSubscribedAddonIds_CompatibilityReturnsSubscribedRatherThanInstalledIds()
+    {
+        using var env = new CacheTestEnvironment();
+        var cache = env.WriteSnapshotCache(
+            "compat.acf",
+            subscribedIds: new[] { "333" },
+            installedIds: new[] { "111", "222" });
+
+        var ids = SteamWorkshopCacheReader.GetSubscribedAddonIds(new[] { cache });
+
+        Assert.Equal(new[] { "333" }, ids);
     }
 
     [Fact]
@@ -85,6 +220,24 @@ public sealed class SteamWorkshopCacheReaderTests
         Assert.Equal(
             new[] { rootCache, libraryCache }.OrderBy(path => path, StringComparer.OrdinalIgnoreCase),
             paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void DiscoveredSnapshot_IgnoresUnrelatedLibraryWithoutGmodManifest()
+    {
+        using var env = new CacheTestEnvironment();
+        var rootCache = env.WriteSteamCache(env.SteamPath, ("111", "Root"));
+        var unrelatedLibrary = env.CreateLibrary("unrelated-library");
+        env.WriteLibraryFolders(unrelatedLibrary);
+
+        var discoveredPaths =
+            SteamWorkshopCacheReader.GetWorkshopCacheFilePaths(env.SteamPath);
+        var snapshot =
+            SteamWorkshopCacheReader.GetWorkshopSnapshot(discoveredPaths);
+
+        Assert.Equal([rootCache], discoveredPaths);
+        Assert.True(snapshot.IsAuthoritative);
+        Assert.Equal(["111"], snapshot.SubscribedIds);
     }
 
     [Fact]
@@ -130,6 +283,7 @@ public sealed class SteamWorkshopCacheReaderTests
         }
 
         public string SteamPath { get; }
+        public string RootPath => rootPath;
 
         public string CreateLibrary(string name)
         {
@@ -156,6 +310,20 @@ public sealed class SteamWorkshopCacheReaderTests
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, BuildCache(addons));
+            return path;
+        }
+
+        public string WriteSnapshotCache(
+            string fileName,
+            IReadOnlyCollection<string> subscribedIds,
+            IReadOnlyCollection<string> installedIds)
+        {
+            var path = Path.IsPathRooted(fileName)
+                ? fileName
+                : Path.Combine(rootPath, fileName);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, BuildSnapshotCache(subscribedIds, installedIds));
             return path;
         }
 
@@ -217,6 +385,42 @@ public sealed class SteamWorkshopCacheReaderTests
                 builder.Append("        \"").Append(addon.Id).AppendLine("\"");
                 builder.AppendLine("        {");
                 builder.Append("            \"title\" \"").Append(addon.Title).AppendLine("\"");
+                builder.AppendLine("        }");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("}");
+            return builder.ToString();
+        }
+
+        private static string BuildSnapshotCache(
+            IEnumerable<string> subscribedIds,
+            IEnumerable<string> installedIds)
+        {
+            var builder = new System.Text.StringBuilder();
+            builder.AppendLine("\"AppWorkshop\"");
+            builder.AppendLine("{");
+            builder.AppendLine("    \"WorkshopItemsInstalled\"");
+            builder.AppendLine("    {");
+
+            foreach (var addonId in installedIds)
+            {
+                builder.Append("        \"").Append(addonId).AppendLine("\"");
+                builder.AppendLine("        {");
+                builder.AppendLine("            \"size\" \"4096\"");
+                builder.AppendLine("        }");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine("    \"WorkshopItemDetails\"");
+            builder.AppendLine("    {");
+
+            foreach (var addonId in subscribedIds)
+            {
+                builder.Append("        \"").Append(addonId).AppendLine("\"");
+                builder.AppendLine("        {");
+                builder.Append("            \"title\" \"Addon ").Append(addonId).AppendLine("\"");
+                builder.AppendLine("            \"subscribedby\" \"76561198000000000\"");
                 builder.AppendLine("        }");
             }
 

@@ -13,13 +13,17 @@
         MinHeight="600">
     
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="300" MinWidth="250"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
         
         <!-- 左側：バージョン一覧 -->
-        <Grid Grid.Column="0" Background="#1E1E1E">
+        <Grid Grid.RowSpan="2" Grid.Column="0" Background="#1E1E1E">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
@@ -34,7 +38,10 @@
                     Padding="15">
                 <TextBlock FontSize="16"
                            FontWeight="Bold"
-                           Text="{Binding AssetTitle}"/>
+                           Text="{Binding AssetTitle}"
+                           MaxLines="1"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip.Tip="{Binding AssetTitle}"/>
             </Border>
             
             <!-- アクションボタン -->
@@ -54,10 +61,6 @@
                     CornerRadius="4"
                     Padding="10">
                 <StackPanel Spacing="8">
-                    <!-- アドオン状態保存 -->
-                    <CheckBox Content="{loc:Localize VersionManagement.IncludeAddonStates}"
-                              IsChecked="{Binding IncludeAddonStates}"/>
-                    
                     <!-- 並び順 -->
                     <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
                             CornerRadius="4"
@@ -134,10 +137,10 @@
                                         <TextBlock Text="{Binding AddonCountDisplay}"
                                                    FontSize="11"
                                                    Opacity="0.7"/>
-                                        <TextBlock Text="{Binding StateInfoDisplay}"
+                                        <TextBlock Text="{Binding ChangeIndicator}"
                                                    FontSize="11"
-                                                   Opacity="0.7"
-                                                   IsVisible="{Binding HasStateInfo}"/>
+                                                   Foreground="#FFB74D"
+                                                   IsVisible="{Binding HasMembershipChanges}"/>
                                     </StackPanel>
                                     
                                     <!-- 削除ボタン -->
@@ -168,11 +171,6 @@
                         Margin="0,0,0,10"
                         IsVisible="{Binding CanRestore}"/>
 
-                <Button Content="{loc:Localize VersionManagement.RenameVersions}"
-                        Command="{Binding RenameVersionsCommand}"
-                        HorizontalAlignment="Stretch"
-                        Margin="0,0,0,10"/>
-                        
                 <!-- 全履歴クリアボタン（常に表示） -->
                 <Border BorderBrush="#666666"
                         BorderThickness="1"
@@ -191,7 +189,7 @@
         
         <!-- スプリッター -->
         <!-- 右側：アドオン表示エリア -->
-        <Grid Grid.Column="1" Background="#252526">
+        <Grid Grid.Row="0" Grid.Column="1" Background="#252526">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -203,7 +201,10 @@
                     Padding="15">
                 <TextBlock Text="{Binding SelectedVersionTitle}"
                            FontSize="16"
-                           FontWeight="Bold"/>
+                           FontWeight="Bold"
+                           MaxLines="1"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip.Tip="{Binding SelectedVersionTitle}"/>
             </Border>
             
             <!-- アドオン一覧 -->
@@ -235,11 +236,10 @@
                                     Background="#1F1F1F"
                                     CornerRadius="12"
                                     BorderThickness="3"
-                                    BorderBrush="{Binding BorderColor}"
-                                    PointerPressed="OnAddonPointerPressed">
+                                    BorderBrush="{Binding BorderColor}">
                                 <Border.ContextMenu>
                                     <ContextMenu>
-                                        <MenuItem Header="{loc:Localize VersionManagement.ShowAddonDetails}" 
+                                        <MenuItem Header="{loc:Localize VersionManagement.OpenWorkshop}"
                                                   Command="{Binding AddonItemViewModel.OpenWorkshopCommand}"/>
                                     </ContextMenu>
                                 </Border.ContextMenu>
@@ -253,7 +253,6 @@
                                         </Setter>
                                         <Setter Property="BoxShadow" Value="0 4 16 0 #30000000"/>
                                         <Setter Property="ClipToBounds" Value="False"/>
-                                        <Setter Property="Cursor" Value="Hand"/>
                                     </Style>
                                     <Style Selector="Border:pointerover">
                                         <Setter Property="Background" Value="#252525"/>
@@ -340,14 +339,16 @@
             </ScrollViewer>
         </Grid>
         
-        <!-- 閉じるボタン（右下固定） -->
-        <Button Grid.Column="1"
-                Content="{loc:Localize Dialog.Close}"
-                Width="100"
-                Height="35"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Margin="20"
-                Click="OnCloseClick"/>
+        <!-- フッター -->
+        <Border Grid.Row="1"
+                Grid.Column="1"
+                Background="#2D2D30"
+                Padding="15,10">
+            <Button Content="{loc:Localize Dialog.Close}"
+                    Width="100"
+                    Height="35"
+                    HorizontalAlignment="Right"
+                    Click="OnCloseClick"/>
+        </Border>
     </Grid>
 </Window>

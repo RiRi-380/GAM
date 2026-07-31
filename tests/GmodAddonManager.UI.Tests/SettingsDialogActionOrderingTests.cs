@@ -6,8 +6,6 @@ public sealed class SettingsDialogActionOrderingTests
 {
     [Theory]
     [InlineData("OnResetManager", "ResetManagerRequested")]
-    [InlineData("OnRestoreOriginal", "RestoreOriginalRequested")]
-    [InlineData("OnManualMigration", "ManualMigrationRequested")]
     [InlineData("OnPathHealth", "PathHealthRequested")]
     [InlineData("OnPathRecovery", "PathRecoveryRequested")]
     public void SettingsActionsCaptureRequestBeforeClosing(string methodName, string eventName)
@@ -27,6 +25,62 @@ public sealed class SettingsDialogActionOrderingTests
         Assert.True(captureIndex >= 0, $"{methodName} must capture {eventName} before closing.");
         Assert.True(closeIndex > captureIndex, $"{methodName} must close after capturing the event delegate.");
         Assert.True(invokeIndex > closeIndex, $"{methodName} must invoke the captured delegate after closing.");
+    }
+
+    [Fact]
+    public void LegacyProductActionsAreNotExposed()
+    {
+        var sourcePath = FindRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Views",
+            "SettingsDialog.axaml.cs");
+        var source = File.ReadAllText(sourcePath);
+
+        Assert.DoesNotContain("RestoreOriginalRequested", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ManualMigrationRequested", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("EnableDisableManifestImport", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("EnableLocalAddonsExperimental", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RetainMissingReferencesSettingUsesCoreConfigurationAsItsOnlyAuthority()
+    {
+        var sourcePath = FindRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Views",
+            "SettingsDialog.axaml.cs");
+        var source = File.ReadAllText(sourcePath);
+        var saveMethod = ExtractMethod(source, "OnSave");
+
+        Assert.Contains(
+            "RetainMissingAssetReferencesCheckBox.IsChecked",
+            saveMethod,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "currentSettings.RetainMissingAssetReferences",
+            saveMethod,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "addonManager.GetConfiguration().RetainMissingAssetReferences",
+            saveMethod,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await addonManager.SaveConfigurationImmediatelyAsync();",
+            saveMethod,
+            StringComparison.Ordinal);
+
+        var xamlPath = FindRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Views",
+            "SettingsDialog.axaml");
+        var xaml = File.ReadAllText(xamlPath);
+        Assert.Contains(
+            "Name=\"RetainMissingAssetReferencesCheckBox\"",
+            xaml,
+            StringComparison.Ordinal);
     }
 
     private static string ExtractMethod(string source, string methodName)

@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using GmodAddonManager.Core.Models;
 using Microsoft.Win32;
 
 namespace GmodAddonManager.Core.Services
@@ -14,6 +17,8 @@ namespace GmodAddonManager.Core.Services
     {
         private const string GMOD_APP_ID = "4000";
         private const string WORKSHOP_CACHE_FILE = $"appworkshop_{GMOD_APP_ID}.acf";
+        private const int StableReadAttempts = 5;
+        private const int StableReadDelayMs = 50;
 
         public static string? GetSteamPath()
         {
@@ -116,59 +121,148 @@ namespace GmodAddonManager.Core.Services
 
         public static List<string> GetSubscribedAddonIds()
         {
-            return GetSubscribedAddonIds(GetWorkshopCacheFilePaths());
+            return GetWorkshopSnapshot().SubscribedIds.ToList();
         }
 
         internal static List<string> GetSubscribedAddonIds(IEnumerable<string> cacheFilePaths)
         {
-            var addonIds = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            return GetWorkshopSnapshot(cacheFilePaths).SubscribedIds.ToList();
+        }
 
-            foreach (var cacheFilePath in cacheFilePaths.Where(File.Exists))
+        public static SteamWorkshopSnapshot GetWorkshopSnapshot()
+        {
+            var steamPath = GetSteamPath();
+            if (string.IsNullOrWhiteSpace(steamPath))
             {
+                return new SteamWorkshopSnapshot(
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    isAuthoritative: false,
+                    DateTime.UtcNow);
+            }
+
+            var manifestPaths = GetWorkshopCacheFilePaths(steamPath);
+
+            return GetWorkshopSnapshot(manifestPaths);
+        }
+
+        internal static SteamWorkshopSnapshot GetWorkshopSnapshot(IEnumerable<string>? cacheFilePaths)
+        {
+            var observedAtUtc = DateTime.UtcNow;
+            var subscribedIds = new HashSet<string>(StringComparer.Ordinal);
+            var installedIds = new HashSet<string>(StringComparer.Ordinal);
+            var isAuthoritative = true;
+
+            string[] paths;
+            try
+            {
+                paths = cacheFilePaths?
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray() ?? Array.Empty<string>();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to enumerate Workshop cache paths: {ex.Message}");
+                paths = Array.Empty<string>();
+                isAuthoritative = false;
+            }
+
+            if (paths.Length == 0)
+            {
+                isAuthoritative = false;
+            }
+
+            foreach (var cacheFilePath in paths)
+            {
+                if (!File.Exists(cacheFilePath))
+                {
+                    isAuthoritative = false;
+                    continue;
+                }
+
                 try
                 {
-                    var content = File.ReadAllText(cacheFilePath);
-                    foreach (var addonId in ParseSubscribedAddonIds(content))
+                    if (!TryReadStableText(cacheFilePath, out var content))
                     {
-                        if (seen.Add(addonId))
-                        {
-                            addonIds.Add(addonId);
-                        }
+                        isAuthoritative = false;
+                        continue;
                     }
+
+                    var parsed = ParseWorkshopSnapshot(content, observedAtUtc);
+                    subscribedIds.UnionWith(parsed.SubscribedIds);
+                    installedIds.UnionWith(parsed.InstalledIds);
+                    isAuthoritative &= parsed.IsAuthoritative;
                 }
                 catch (Exception ex)
                 {
+                    isAuthoritative = false;
                     System.Diagnostics.Debug.WriteLine($"Failed to read Workshop cache {cacheFilePath}: {ex.Message}");
                 }
             }
 
-            return addonIds;
+            return new SteamWorkshopSnapshot(
+                subscribedIds,
+                installedIds,
+                isAuthoritative,
+                observedAtUtc);
         }
 
         internal static List<string> ParseSubscribedAddonIds(string content)
         {
-            var addonIds = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            return ParseWorkshopSnapshot(content, DateTime.UtcNow).SubscribedIds.ToList();
+        }
 
-            if (TryGetSection(content, "WorkshopItemsInstalled", out var installedSection))
+        internal static SteamWorkshopSnapshot ParseWorkshopSnapshot(
+            string? content,
+            DateTime observedAtUtc)
+        {
+            if (string.IsNullOrWhiteSpace(content) ||
+                !ValveKeyValueDocumentParser.TryParse(content, out var documentEntries))
             {
-                foreach (var item in EnumerateNumericChildSections(installedSection))
-                {
-                    AddAddonId(addonIds, seen, item.Key);
-                }
-
-                if (addonIds.Count == 0)
-                {
-                    var idMatches = Regex.Matches(installedSection, @"""(\d+)""\s*""[^""]*""");
-                    foreach (Match match in idMatches)
-                    {
-                        AddAddonId(addonIds, seen, match.Groups[1].Value);
-                    }
-                }
+                return new SteamWorkshopSnapshot(
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    isAuthoritative: false,
+                    observedAtUtc);
             }
 
-            return addonIds;
+            var appWorkshopEntries = documentEntries
+                .Where(entry =>
+                    string.Equals(
+                        entry.Key,
+                        "AppWorkshop",
+                        StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (appWorkshopEntries.Count != 1 ||
+                appWorkshopEntries[0].Children is not { } appWorkshopChildren ||
+                !TryGetUniqueSection(
+                    appWorkshopChildren,
+                    "WorkshopItemDetails",
+                    out var detailsEntries) ||
+                !TryGetUniqueSection(
+                    appWorkshopChildren,
+                    "WorkshopItemsInstalled",
+                    out var installedEntries) ||
+                !TryParseSubscribedIdsFromDetails(
+                    detailsEntries,
+                    out var subscribedIds) ||
+                !TryParseInstalledIds(
+                    installedEntries,
+                    out var installedIds))
+            {
+                return new SteamWorkshopSnapshot(
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    isAuthoritative: false,
+                    observedAtUtc);
+            }
+
+            return new SteamWorkshopSnapshot(
+                subscribedIds,
+                installedIds,
+                isAuthoritative: true,
+                observedAtUtc);
         }
 
         public static Dictionary<string, WorkshopItemInfo> GetAddonDetails()
@@ -184,7 +278,11 @@ namespace GmodAddonManager.Core.Services
             {
                 try
                 {
-                    var content = File.ReadAllText(cacheFilePath);
+                    if (!TryReadStableText(cacheFilePath, out var content))
+                    {
+                        continue;
+                    }
+
                     foreach (var kvp in ParseAddonDetails(content))
                     {
                         addonInfo[kvp.Key] = kvp.Value;
@@ -227,7 +325,9 @@ namespace GmodAddonManager.Core.Services
                 var timeUpdated = ReadStringField(item.Body, "timeupdated");
                 if (long.TryParse(timeUpdated, out var timestamp))
                 {
-                    info.TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
+                    info.TimeUpdated = DateTimeOffset
+                        .FromUnixTimeSeconds(timestamp)
+                        .UtcDateTime;
                 }
 
                 addonInfo[item.Key] = info;
@@ -258,6 +358,115 @@ namespace GmodAddonManager.Core.Services
             {
                 addonIds.Add(addonId);
             }
+        }
+
+        private static bool TryGetUniqueSection(
+            IReadOnlyList<ValveKeyValueEntry> entries,
+            string sectionName,
+            out IReadOnlyList<ValveKeyValueEntry> sectionEntries)
+        {
+            sectionEntries = Array.Empty<ValveKeyValueEntry>();
+            var matches = entries
+                .Where(entry =>
+                    string.Equals(
+                        entry.Key,
+                        sectionName,
+                        StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count != 1 ||
+                matches[0].Children is not { } matchedChildren)
+            {
+                return false;
+            }
+
+            sectionEntries = matchedChildren;
+            return true;
+        }
+
+        private static bool TryParseSubscribedIdsFromDetails(
+            IReadOnlyList<ValveKeyValueEntry> entries,
+            out IReadOnlyList<string> subscribedIds)
+        {
+            subscribedIds = Array.Empty<string>();
+            var normalizedEntries = new List<(string Id, IReadOnlyList<ValveKeyValueEntry> Fields)>();
+            foreach (var entry in entries)
+            {
+                if (!TryNormalizeWorkshopId(entry.Key, out var addonId) ||
+                    entry.Children == null)
+                {
+                    return false;
+                }
+
+                normalizedEntries.Add((addonId, entry.Children));
+            }
+
+            var explicitlySubscribed = normalizedEntries
+                .Where(entry => HasSubscribedByValue(entry.Fields))
+                .Select(entry => entry.Id)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+
+            // Older Steam manifests may not emit subscribedby. In that case the numeric
+            // WorkshopItemDetails children remain the best available subscription source.
+            subscribedIds = explicitlySubscribed.Length > 0
+                ? explicitlySubscribed
+                : normalizedEntries
+                    .Select(entry => entry.Id)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray();
+            return true;
+        }
+
+        private static bool TryParseInstalledIds(
+            IReadOnlyList<ValveKeyValueEntry> entries,
+            out IReadOnlyList<string> installedIds)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in entries)
+            {
+                if (!TryNormalizeWorkshopId(entry.Key, out var addonId))
+                {
+                    installedIds = Array.Empty<string>();
+                    return false;
+                }
+
+                ids.Add(addonId);
+            }
+
+            installedIds = ids
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+            return true;
+        }
+
+        private static bool TryNormalizeWorkshopId(string value, out string normalized)
+        {
+            normalized = string.Empty;
+            if (!ulong.TryParse(value, out var numeric))
+            {
+                return false;
+            }
+
+            normalized = numeric.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        private static bool HasSubscribedByValue(
+            IReadOnlyList<ValveKeyValueEntry> fields)
+        {
+            var subscribedBy = fields
+                .FirstOrDefault(field =>
+                    string.Equals(
+                        field.Key,
+                        "subscribedby",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    field.Value != null)
+                ?.Value;
+            return !string.IsNullOrWhiteSpace(subscribedBy) &&
+                   !string.Equals(subscribedBy, "0", StringComparison.Ordinal);
         }
 
         private static string NormalizeSteamPath(string path)
@@ -388,6 +597,320 @@ namespace GmodAddonManager.Core.Services
             }
 
             return false;
+        }
+
+        private static bool TryReadStableText(string path, out string content)
+        {
+            content = string.Empty;
+            for (var attempt = 0; attempt < StableReadAttempts; attempt++)
+            {
+                try
+                {
+                    var before = WorkshopManifestFingerprint.Read(path);
+                    if (!before.Exists)
+                    {
+                        return false;
+                    }
+
+                    using var stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(
+                        stream,
+                        Encoding.UTF8,
+                        detectEncodingFromByteOrderMarks: true);
+                    var candidate = reader.ReadToEnd();
+                    var after = WorkshopManifestFingerprint.Read(path);
+                    if (before.Equals(after))
+                    {
+                        content = candidate;
+                        return true;
+                    }
+                }
+                catch (IOException)
+                {
+                    // Steam may be replacing the manifest. Retry a bounded number of times.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Treat an unreadable manifest as non-authoritative.
+                }
+
+                Thread.Sleep(StableReadDelayMs);
+            }
+
+            return false;
+        }
+
+        private sealed class ValveKeyValueEntry
+        {
+            public ValveKeyValueEntry(string key, string value)
+            {
+                Key = key;
+                Value = value;
+            }
+
+            public ValveKeyValueEntry(
+                string key,
+                IReadOnlyList<ValveKeyValueEntry> children)
+            {
+                Key = key;
+                Children = children;
+            }
+
+            public string Key { get; }
+            public string? Value { get; }
+            public IReadOnlyList<ValveKeyValueEntry>? Children { get; }
+        }
+
+        private sealed class ValveKeyValueDocumentParser
+        {
+            private const int MaximumDepth = 64;
+            private readonly string text;
+            private int position;
+
+            private ValveKeyValueDocumentParser(string text)
+            {
+                this.text = text;
+            }
+
+            public static bool TryParse(
+                string text,
+                out IReadOnlyList<ValveKeyValueEntry> entries)
+            {
+                entries = Array.Empty<ValveKeyValueEntry>();
+                var parser = new ValveKeyValueDocumentParser(text);
+                if (!parser.TryReadEntries(
+                        stopAtClosingBrace: false,
+                        depth: 0,
+                        out var parsedEntries))
+                {
+                    return false;
+                }
+
+                entries = parsedEntries;
+                return true;
+            }
+
+            private bool TryReadEntries(
+                bool stopAtClosingBrace,
+                int depth,
+                out IReadOnlyList<ValveKeyValueEntry> entries)
+            {
+                entries = Array.Empty<ValveKeyValueEntry>();
+                if (depth > MaximumDepth)
+                {
+                    return false;
+                }
+
+                var parsedEntries = new List<ValveKeyValueEntry>();
+                while (true)
+                {
+                    if (!TrySkipTrivia())
+                    {
+                        return false;
+                    }
+
+                    if (IsAtEnd)
+                    {
+                        if (stopAtClosingBrace)
+                        {
+                            return false;
+                        }
+
+                        entries = parsedEntries;
+                        return true;
+                    }
+
+                    if (text[position] == '}')
+                    {
+                        if (!stopAtClosingBrace)
+                        {
+                            return false;
+                        }
+
+                        position++;
+                        entries = parsedEntries;
+                        return true;
+                    }
+
+                    if (!TryReadQuotedToken(out var key) ||
+                        !TrySkipTrivia())
+                    {
+                        return false;
+                    }
+
+                    if (TryConsume('{'))
+                    {
+                        if (!TryReadEntries(
+                                stopAtClosingBrace: true,
+                                depth: depth + 1,
+                                out var children))
+                        {
+                            return false;
+                        }
+
+                        parsedEntries.Add(new ValveKeyValueEntry(key, children));
+                        continue;
+                    }
+
+                    if (!TryReadQuotedToken(out var value))
+                    {
+                        return false;
+                    }
+
+                    parsedEntries.Add(new ValveKeyValueEntry(key, value));
+                }
+            }
+
+            private bool IsAtEnd => position >= text.Length;
+
+            private bool TryConsume(char expected)
+            {
+                if (IsAtEnd || text[position] != expected)
+                {
+                    return false;
+                }
+
+                position++;
+                return true;
+            }
+
+            private bool TryReadQuotedToken(out string value)
+            {
+                value = string.Empty;
+                if (!TryConsume('"'))
+                {
+                    return false;
+                }
+
+                var builder = new StringBuilder();
+                while (!IsAtEnd)
+                {
+                    var current = text[position++];
+                    if (current == '"')
+                    {
+                        value = builder.ToString();
+                        return true;
+                    }
+
+                    if (current == '\r' || current == '\n')
+                    {
+                        return false;
+                    }
+
+                    if (current == '\\' && !IsAtEnd)
+                    {
+                        var escaped = text[position++];
+                        if (escaped == '"' || escaped == '\\')
+                        {
+                            builder.Append(escaped);
+                        }
+                        else
+                        {
+                            builder.Append('\\').Append(escaped);
+                        }
+                        continue;
+                    }
+
+                    builder.Append(current);
+                }
+
+                return false;
+            }
+
+            private bool TrySkipTrivia()
+            {
+                while (!IsAtEnd)
+                {
+                    if (char.IsWhiteSpace(text[position]) || text[position] == '\uFEFF')
+                    {
+                        position++;
+                        continue;
+                    }
+
+                    if (position + 1 >= text.Length || text[position] != '/')
+                    {
+                        return true;
+                    }
+
+                    if (text[position + 1] == '/')
+                    {
+                        position += 2;
+                        while (!IsAtEnd && text[position] != '\r' && text[position] != '\n')
+                        {
+                            position++;
+                        }
+                        continue;
+                    }
+
+                    if (text[position + 1] != '*')
+                    {
+                        return true;
+                    }
+
+                    position += 2;
+                    var commentClosed = false;
+                    while (position + 1 < text.Length)
+                    {
+                        if (text[position] == '*' && text[position + 1] == '/')
+                        {
+                            position += 2;
+                            commentClosed = true;
+                            break;
+                        }
+                        position++;
+                    }
+
+                    if (!commentClosed)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        private readonly struct WorkshopManifestFingerprint :
+            IEquatable<WorkshopManifestFingerprint>
+        {
+            private WorkshopManifestFingerprint(
+                bool exists,
+                DateTime? lastWriteUtc,
+                long? fileSize)
+            {
+                Exists = exists;
+                LastWriteUtc = lastWriteUtc;
+                FileSize = fileSize;
+            }
+
+            public bool Exists { get; }
+            private DateTime? LastWriteUtc { get; }
+            private long? FileSize { get; }
+
+            public static WorkshopManifestFingerprint Read(string path)
+            {
+                if (!File.Exists(path))
+                {
+                    return new WorkshopManifestFingerprint(false, null, null);
+                }
+
+                var info = new FileInfo(path);
+                return new WorkshopManifestFingerprint(
+                    true,
+                    info.LastWriteTimeUtc,
+                    info.Length);
+            }
+
+            public bool Equals(WorkshopManifestFingerprint other)
+            {
+                return Exists == other.Exists &&
+                       LastWriteUtc == other.LastWriteUtc &&
+                       FileSize == other.FileSize;
+            }
         }
     }
 

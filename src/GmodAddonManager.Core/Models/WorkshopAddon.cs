@@ -17,6 +17,25 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("lastUpdated")]
         public DateTime LastUpdated { get; set; }
 
+        /// <summary>
+        /// GAMがこのSteam購読を初めて確認した時刻。
+        /// 旧ユーザーの初期baselineはnullのままとし、同率は名前順にする。
+        /// </summary>
+        [JsonProperty("firstSeenSubscribedAtUtc")]
+        public DateTime? FirstSeenSubscribedAtUtc { get; set; }
+
+        /// <summary>
+        /// Steam Workshop側の更新日時。ローカルの走査日時とは分離する。
+        /// </summary>
+        [JsonProperty("workshopUpdatedAtUtc")]
+        public DateTime? WorkshopUpdatedAtUtc { get; set; }
+
+        [JsonProperty("isAvailable")]
+        public bool IsAvailable { get; set; }
+
+        [JsonProperty("isDownloadPending")]
+        public bool IsDownloadPending { get; set; }
+
         [JsonProperty("thumbnailUrl")]
         public string ThumbnailUrl { get; set; }
 
@@ -62,6 +81,10 @@ namespace GmodAddonManager.Core.Models
             Title = string.Empty;
             Size = 0;
             LastUpdated = DateTime.UtcNow;
+            FirstSeenSubscribedAtUtc = null;
+            WorkshopUpdatedAtUtc = null;
+            IsAvailable = true;
+            IsDownloadPending = false;
             ThumbnailUrl = string.Empty;
             Author = string.Empty;
             IsEnabled = true;
