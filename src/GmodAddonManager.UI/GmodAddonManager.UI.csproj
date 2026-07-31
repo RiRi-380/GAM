@@ -6,9 +6,6 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <AssemblyVersion>1.0.23.0</AssemblyVersion>
-    <FileVersion>1.0.23.0</FileVersion>
-    <Version>1.0.23</Version>
   </PropertyGroup>
 
   <ItemGroup>

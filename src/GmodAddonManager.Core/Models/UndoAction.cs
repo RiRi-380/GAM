@@ -16,7 +16,13 @@ namespace GmodAddonManager.Core.Models
         AddonAddedToAsset,
         AddonRemovedFromAsset,
         AddonStateChanged,
-        AssetMerged
+        AssetMerged,
+        AssetEdited,
+        AssetRenamed,
+        AssetImageChanged,
+        AssetFavoriteChanged,
+        AllOff,
+        AssetVersionRestored
     }
 
     /// <summary>
@@ -42,6 +48,15 @@ namespace GmodAddonManager.Core.Models
         public AddonState? AddonState { get; set; }  // AddonAddedToAsset/AddonRemovedFromAsset用
         public List<string>? AffectedAddonIds { get; set; }
         public Dictionary<string, AddonState>? PreviousAddonStates { get; set; }
+        public Dictionary<string, AddonState>? PreviousAssetStates { get; set; }
+        public string? PreviousAssetName { get; set; }
+        public string? PreviousImagePath { get; set; }
+        public byte[]? PreviousImageBytes { get; set; }
+        public bool AssetNameChanged { get; set; }
+        public bool AssetImageChanged { get; set; }
+        public bool? PreviousFavoriteState { get; set; }
+        public List<string>? PreviousMembership { get; set; }
+        public int? PreviousCurrentVersion { get; set; }
         
         // 削除されたアセットの復元用データ
         public Asset? DeletedAsset { get; set; }

@@ -19,27 +19,42 @@ namespace GmodAddonManager.UI.Views;
 public partial class SettingsDialog : Window
 {
     private readonly IDialogService dialogService;
+    private readonly AddonManager? addonManager;
     private AppSettings? currentSettings;
     
     public event EventHandler? ResetManagerRequested;
-    public event EventHandler? RestoreOriginalRequested;
-    public event EventHandler? ManualMigrationRequested;
     public event EventHandler? PathHealthRequested;
     public event EventHandler? PathRecoveryRequested;
+
+    public bool WasSaved { get; private set; }
+
+    public bool RetainMissingAssetReferences { get; private set; }
     
     public SettingsDialog()
+        : this(false)
+    {
+    }
+
+    public SettingsDialog(bool retainMissingAssetReferences)
     {
         InitializeComponent();
         dialogService = new DialogService();
+        RetainMissingAssetReferences = retainMissingAssetReferences;
         
         LoadCurrentSettings();
+    }
+
+    public SettingsDialog(AddonManager addonManager)
+        : this(
+            addonManager?.GetConfiguration().RetainMissingAssetReferences ??
+            throw new ArgumentNullException(nameof(addonManager)))
+    {
+        this.addonManager = addonManager;
     }
     
     private void LoadCurrentSettings()
     {
         currentSettings = AppSettings.Load();
-        
-        
         // ログの場所を表示
         var logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -54,15 +69,10 @@ public partial class SettingsDialog : Window
         // コンソール表示設定を反映
         ShowConsoleCheckBox.IsChecked = currentSettings.ShowConsoleOnStartup;
 
-        // 無効化モード設定を反映
-        SoftDisableRadio.IsChecked = true;
         BackgroundTitleUpdatesCheckBox.IsChecked = currentSettings.EnableBackgroundTitleUpdates;
         BackgroundAddonPreloadCheckBox.IsChecked = currentSettings.EnableBackgroundAddonPreload;
-        LocalAddonsCheckBox.IsChecked = currentSettings.EnableLocalAddonsExperimental;
-        DisableManifestImportCheckBox.IsChecked = currentSettings.EnableDisableManifestImport;
-        DeveloperModeTextBox.Text = currentSettings.DeveloperModePhrase ?? string.Empty;
-
-        ApplySoftModeTexts();
+        RetainMissingAssetReferencesCheckBox.IsChecked = RetainMissingAssetReferences;
+        ApplyResetManagerTexts();
         
     }
     
@@ -84,23 +94,10 @@ public partial class SettingsDialog : Window
 
         try
         {
-            var workingDirectory = Path.GetDirectoryName(processPath);
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = processPath,
-                WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
-                    ? Environment.CurrentDirectory
-                    : workingDirectory,
-                UseShellExecute = false
-            };
-            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
-            {
-                startInfo.ArgumentList.Add(arg);
-            }
-            if (Avalonia.Application.Current is App app)
-            {
-                app.ReleaseApplicationLockForRestart();
-            }
+            var startInfo = RestartHandoff.CreateRestartStartInfo(
+                processPath,
+                Environment.GetCommandLineArgs().Skip(1),
+                Environment.ProcessId);
             var process = Process.Start(startInfo);
             if (process == null)
             {
@@ -128,7 +125,7 @@ public partial class SettingsDialog : Window
         }
         return true;
     }
-    
+
     private async void OnSave(object? sender, RoutedEventArgs e)
     {
         try
@@ -147,13 +144,18 @@ public partial class SettingsDialog : Window
             // 設定を更新
             currentSettings.Language = newLanguage;
 
-            // 無効化モード設定を更新
-            currentSettings.DisableMode = DisableMode.Soft;
             currentSettings.EnableBackgroundTitleUpdates = BackgroundTitleUpdatesCheckBox.IsChecked ?? false;
             currentSettings.EnableBackgroundAddonPreload = BackgroundAddonPreloadCheckBox.IsChecked ?? false;
-            currentSettings.EnableLocalAddonsExperimental = LocalAddonsCheckBox.IsChecked ?? false;
-            currentSettings.EnableDisableManifestImport = DisableManifestImportCheckBox.IsChecked ?? false;
-            currentSettings.DeveloperModePhrase = DeveloperModeTextBox.Text ?? string.Empty;
+            RetainMissingAssetReferences =
+                RetainMissingAssetReferencesCheckBox.IsChecked ?? false;
+            if (addonManager != null &&
+                addonManager.GetConfiguration().RetainMissingAssetReferences !=
+                RetainMissingAssetReferences)
+            {
+                addonManager.GetConfiguration().RetainMissingAssetReferences =
+                    RetainMissingAssetReferences;
+                await addonManager.SaveConfigurationImmediatelyAsync();
+            }
             
             // コンソール表示設定を更新
             var newShowConsole = ShowConsoleCheckBox.IsChecked ?? false;
@@ -186,6 +188,7 @@ public partial class SettingsDialog : Window
                 await dialogService.ShowInfoAsync(L.Get("Success.Title"), consoleMessage);
             }
             
+            WasSaved = true;
             Close();
         }
         catch (Exception ex)
@@ -196,20 +199,14 @@ public partial class SettingsDialog : Window
                 L.Get("Error.SettingsDialogFailed"));
         }
     }
-    private void ApplySoftModeTexts()
+    private void ApplyResetManagerTexts()
     {
-        ResetManagerDescriptionText.Text = L.Get("Settings.ResetManagerDescriptionSoft");
-        RestoreOriginalDescriptionText.Text = L.Get("Settings.RestoreOriginalDescriptionSoft");
-        RestoreOriginalSection.IsVisible = true;
-    }
-
-    private void OnDeveloperModeTextChanged(object? sender, TextChangedEventArgs e)
-    {
-        if (currentSettings == null) return;
-
-        var phrase = DeveloperModeTextBox.Text ?? string.Empty;
-        currentSettings.DeveloperModePhrase = phrase;
-        currentSettings.Save();
+        var japanese = currentSettings?.Language == "ja-JP";
+        ResetManagerTitleText.Text = japanese ? "GAMを初期化" : "Reset GAM";
+        ResetManagerButtonText.Text = japanese ? "GAMを初期化" : "Reset GAM";
+        ResetManagerDescriptionText.Text = japanese
+            ? "Custom Asset・お気に入り・Version・共通除外を初期化します。Steamの購読とWorkshopのアドオン本体は削除しません。"
+            : "Resets Custom Assets, favorites, Versions, and global exclusions. Steam subscriptions and Workshop addon files are not deleted.";
     }
 
     private async void OnOpenLogFolder(object? sender, RoutedEventArgs e)
@@ -247,20 +244,6 @@ public partial class SettingsDialog : Window
         requested?.Invoke(this, EventArgs.Empty);
     }
     
-    private void OnRestoreOriginal(object? sender, RoutedEventArgs e)
-    {
-        var requested = RestoreOriginalRequested;
-        Close();
-        requested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void OnManualMigration(object? sender, RoutedEventArgs e)
-    {
-        var requested = ManualMigrationRequested;
-        Close();
-        requested?.Invoke(this, EventArgs.Empty);
-    }
-
     private void OnPathHealth(object? sender, RoutedEventArgs e)
     {
         var requested = PathHealthRequested;

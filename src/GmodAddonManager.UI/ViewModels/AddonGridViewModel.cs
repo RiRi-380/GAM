@@ -23,6 +23,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Threading;
+using Newtonsoft.Json;
 
 namespace GmodAddonManager.UI.ViewModels;
 
@@ -31,6 +32,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private readonly AddonManager addonManager;
     private readonly PendingChangeManager pendingChangeManager;
     private readonly GmodProcessWatcher processWatcher;
+    private readonly AddonSortService addonSortService = new();
+    private readonly string sortSettingsPath;
+    private readonly ObservableCollection<string> sortModeOptions = new();
     
     private ObservableCollection<AddonItemViewModel> allAddons;
     private ObservableCollection<AddonItemViewModel> filteredAddons;
@@ -41,7 +45,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private bool isLoading;
     private AssetItemViewModel? currentAsset;
     
-    private bool ShowJunctionAsset => addonManager.DisableMode == DisableMode.Hard;
     private bool showOnlyAssetAddons;
     private bool isMultiSelectEnabled;
     private HashSet<string> selectedAddonIds;
@@ -49,10 +52,12 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private bool isSelectionMode;
     private bool hasSelectedAddons;
     private int addonFilterIndex = 0; // 0=All, 1=Enabled, 2=Disabled/Excluded
+    private HashSet<string> currentSubscribedAddonIds = new(StringComparer.Ordinal);
     private DashboardViewModel? dashboardViewModel;
     private bool enableBackgroundTitleUpdates;
     private bool enableBackgroundAddonPreload;
-    private bool enableLocalAddonsExperimental;
+    private int selectedSortModeIndex;
+    private AddonSortDirection sortDirection = AddonSortDirection.Descending;
     private int baseFilteredCount;
     private CancellationTokenSource? backgroundPreloadCts;
     private CancellationTokenSource? metadataSupplementCts;
@@ -75,15 +80,25 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         "logs",
         "scroll_perf.log");
 
-    public AddonGridViewModel(AddonManager addonManager, PendingChangeManager pendingChangeManager, GmodProcessWatcher processWatcher)
+    public AddonGridViewModel(
+        AddonManager addonManager,
+        PendingChangeManager pendingChangeManager,
+        GmodProcessWatcher processWatcher,
+        string? sortSettingsPath = null)
     {
         this.addonManager = addonManager;
         this.pendingChangeManager = pendingChangeManager;
         this.processWatcher = processWatcher;
+        this.sortSettingsPath = sortSettingsPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GmodAddonManager",
+            "addon-sort.json");
 
         allAddons = new ObservableCollection<AddonItemViewModel>();
         filteredAddons = new ObservableCollection<AddonItemViewModel>();
         selectedAddonIds = new HashSet<string>();
+        RefreshSortModeOptions();
+        LoadSortSettings();
         InitializeFilterOptions();
         ReloadSettings();
 
@@ -93,7 +108,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         AddSelectedAddonsCommand = ReactiveCommand.CreateFromTask(ShowAssetSelectionDialogAsync);
         SelectAllCommand = ReactiveCommand.Create(SelectAll);
         RemoveSelectedAddonsCommand = ReactiveCommand.CreateFromTask(RemoveSelectedAddonsAsync);
-        ChangeSelectedAddonStateCommand = ReactiveCommand.CreateFromTask<string>(ChangeSelectedAddonStateAsync);
+        ToggleSortDirectionCommand = ReactiveCommand.Create(ToggleSortDirection);
 
         // フィルタリングの設定
         filterSubscription = this.WhenAnyValue(
@@ -102,9 +117,12 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 x => x.CurrentAsset,
                 x => x.AddonFilterIndex)
             .Throttle(TimeSpan.FromMilliseconds(300))
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => ApplyFilter());
 
         LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
+        processWatcher.GmodStarted += OnGmodRuntimeStateChanged;
+        processWatcher.GmodStopped += OnGmodRuntimeStateChanged;
             
     }
 
@@ -113,7 +131,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         var resolved = settings ?? AppSettings.Load();
         enableBackgroundTitleUpdates = resolved.EnableBackgroundTitleUpdates;
         enableBackgroundAddonPreload = resolved.EnableBackgroundAddonPreload;
-        enableLocalAddonsExperimental = resolved.EnableLocalAddonsExperimental;
     }
 
     private void InitializeFilterOptions()
@@ -186,7 +203,108 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(SelectionActionLabel));
             this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
             this.RaisePropertyChanged(nameof(CurrentAssetDisplayName));
+            RefreshSortModeOptions();
+            this.RaisePropertyChanged(nameof(SelectedSortModeIndex));
+            this.RaisePropertyChanged(nameof(SortDirectionLabel));
+            ApplyFilter();
         }
+    }
+
+    private void OnGmodRuntimeStateChanged(object? sender, ProcessEventArgs e)
+    {
+        Dispatcher.UIThread.Post(ApplyFilter, DispatcherPriority.Background);
+    }
+
+    private AddonSortOptions CurrentSortOptions => new()
+    {
+        Mode = (AddonSortMode)selectedSortModeIndex,
+        Direction = sortDirection
+    };
+
+    private void RefreshSortModeOptions()
+    {
+        var japanese = LocalizationManager.Instance.CurrentLanguage
+            .StartsWith("ja", StringComparison.OrdinalIgnoreCase);
+        var labels = japanese
+            ? new[] { "最近購読", "名前", "容量", "Workshop更新" }
+            : new[] { "Recently subscribed", "Name", "Size", "Workshop updated" };
+
+        sortModeOptions.Clear();
+        foreach (var label in labels)
+        {
+            sortModeOptions.Add(label);
+        }
+    }
+
+    private void ToggleSortDirection()
+    {
+        sortDirection = sortDirection == AddonSortDirection.Ascending
+            ? AddonSortDirection.Descending
+            : AddonSortDirection.Ascending;
+        this.RaisePropertyChanged(nameof(SortDirectionLabel));
+        SaveSortSettings();
+        ApplyFilter();
+    }
+
+    private void LoadSortSettings()
+    {
+        try
+        {
+            if (!File.Exists(sortSettingsPath))
+            {
+                return;
+            }
+
+            var persisted = JsonConvert.DeserializeObject<PersistedAddonSortSettings>(
+                File.ReadAllText(sortSettingsPath));
+            if (persisted == null ||
+                !Enum.IsDefined(persisted.Mode) ||
+                !Enum.IsDefined(persisted.Direction))
+            {
+                return;
+            }
+
+            selectedSortModeIndex = (int)persisted.Mode;
+            sortDirection = persisted.Direction;
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("AddonGridViewModel.LoadSortSettings", ex);
+        }
+    }
+
+    private void SaveSortSettings()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(sortSettingsPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var temporaryPath = sortSettingsPath + ".tmp";
+            var json = JsonConvert.SerializeObject(
+                new PersistedAddonSortSettings
+                {
+                    Mode = (AddonSortMode)selectedSortModeIndex,
+                    Direction = sortDirection
+                },
+                Formatting.Indented);
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, sortSettingsPath, true);
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("AddonGridViewModel.SaveSortSettings", ex);
+        }
+    }
+
+    private sealed class PersistedAddonSortSettings
+    {
+        public AddonSortMode Mode { get; set; } = AddonSortMode.RecentlySubscribed;
+
+        public AddonSortDirection Direction { get; set; } = AddonSortDirection.Descending;
     }
 
     private void CancelBackgroundPreload()
@@ -697,109 +815,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         public string? Type { get; set; }
     }
 
-    private Dictionary<string, AddonState> BuildAddonStateMarkers(Configuration config)
-    {
-        var markers = new Dictionary<string, AddonState>(StringComparer.Ordinal);
-        var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
-
-        foreach (var asset in config.Assets)
-        {
-            if (!asset.Enabled)
-            {
-                continue;
-            }
-
-            if (asset.ContainsAllAddons())
-            {
-                foreach (var addonId in allAddonIds)
-                {
-                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
-                }
-            }
-            else
-            {
-                foreach (var addonId in asset.Addons)
-                {
-                    if (addonId == "*")
-                    {
-                        continue;
-                    }
-
-                    AddStateMarker(markers, addonId, asset.GetAddonState(addonId));
-                }
-            }
-        }
-
-        return markers;
-    }
-
-    private Dictionary<string, IReadOnlyList<string>> BuildInactiveAssetMembershipMarkers(
-        Configuration config,
-        string? currentAssetId)
-    {
-        var markers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var allAddonIds = config.AddonMetadata.Keys.Where(id => id != "*").ToList();
-
-        foreach (var asset in config.Assets)
-        {
-            if (string.Equals(asset.Id, currentAssetId, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var assetName = string.IsNullOrWhiteSpace(asset.Name)
-                ? asset.Id
-                : asset.Name.Trim();
-            var addonIds = asset.ContainsAllAddons()
-                ? allAddonIds
-                : asset.Addons.Where(id => id != "*");
-
-            foreach (var addonId in addonIds)
-            {
-                if (asset.Enabled && !IsOffState(asset.GetAddonState(addonId)))
-                {
-                    continue;
-                }
-
-                if (!markers.TryGetValue(addonId, out var assetNames))
-                {
-                    assetNames = new List<string>();
-                    markers[addonId] = assetNames;
-                }
-
-                assetNames.Add(assetName);
-            }
-        }
-
-        return markers.ToDictionary(
-            kvp => kvp.Key,
-            kvp => (IReadOnlyList<string>)kvp.Value,
-            StringComparer.Ordinal);
-    }
-
-    private static bool IsOffState(AddonState state)
-    {
-        return state == AddonState.Disabled || state == AddonState.Excluded;
-    }
-
-    private static void AddStateMarker(
-        Dictionary<string, AddonState> markers,
-        string addonId,
-        AddonState state)
-    {
-        if (state != AddonState.Excluded && state != AddonState.Disabled)
-        {
-            return;
-        }
-
-        if (markers.TryGetValue(addonId, out var existing) && existing == AddonState.Excluded)
-        {
-            return;
-        }
-
-        markers[addonId] = state;
-    }
-
     public ObservableCollection<AddonItemViewModel> AllAddons
     {
         get => allAddons;
@@ -818,6 +833,38 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<FilterOptionViewModel> AddonTypeFilters => addonTypeFilters;
     public ObservableCollection<FilterOptionViewModel> AddonTagFilters => addonTagFilters;
+    public ObservableCollection<string> SortModeOptions => sortModeOptions;
+
+    public int SelectedSortModeIndex
+    {
+        get => selectedSortModeIndex;
+        set
+        {
+            if (value < (int)AddonSortMode.RecentlySubscribed ||
+                value > (int)AddonSortMode.WorkshopUpdated ||
+                selectedSortModeIndex == value)
+            {
+                return;
+            }
+
+            selectedSortModeIndex = value;
+            this.RaisePropertyChanged(nameof(SelectedSortModeIndex));
+            SaveSortSettings();
+            ApplyFilter();
+        }
+    }
+
+    public string SortDirectionLabel
+    {
+        get
+        {
+            var japanese = LocalizationManager.Instance.CurrentLanguage
+                .StartsWith("ja", StringComparison.OrdinalIgnoreCase);
+            return sortDirection == AddonSortDirection.Ascending
+                ? japanese ? "昇順 ↑" : "Ascending ↑"
+                : japanese ? "降順 ↓" : "Descending ↓";
+        }
+    }
 
     public string FilterText
     {
@@ -910,6 +957,20 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         get
         {
+            if (CurrentAsset?.IsSubscribeAsset == true && ShowOnlyAssetAddons)
+            {
+                var availableCount = AllAddons.Count(addon =>
+                    addon.IsAvailable &&
+                    currentSubscribedAddonIds.Contains(addon.AddonId));
+                return FormatSubscriptionCountDisplay(
+                    FilteredAddonsCount,
+                    availableCount,
+                    currentSubscribedAddonIds.Count,
+                    LocalizationManager.Instance.CurrentLanguage.StartsWith(
+                        "ja",
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
             if (CurrentAsset == null)
             {
                 return $"({FilteredAddonsCount})";
@@ -956,9 +1017,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     
     public int SelectedAddonsCount => selectedAddonIds.Count;
     
-    public string SelectionButtonText => ShowJunctionAsset && currentAsset?.Id == "junction-system-asset"
-        ? L.Get("Action.Restore")
-        : L.Get("Action.Transfer");
+    public string SelectionButtonText => L.Get("Action.Transfer");
 
     public string SelectionActionLabel => L.Format("AddonGrid.ActionFormat", SelectedAddonsCount, SelectionButtonText);
 
@@ -966,9 +1025,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     
     public bool CanRemoveFromAsset => HasSelectedAddons && 
                                       currentAsset != null && 
-                                      !currentAsset.IsSystem &&
-                                      currentAsset.Id != "junction-system-asset" &&
-                                      currentAsset.Id != "subscribe-system-asset";
+                                      !currentAsset.IsSystem;
     
     public int AddonFilterIndex
     {
@@ -989,7 +1046,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> AddSelectedAddonsCommand { get; }
     public ReactiveCommand<Unit, Unit> SelectAllCommand { get; }
     public ReactiveCommand<Unit, Unit> RemoveSelectedAddonsCommand { get; }
-    public ReactiveCommand<string, Unit> ChangeSelectedAddonStateCommand { get; }
+    public ReactiveCommand<Unit, Unit> ToggleSortDirectionCommand { get; }
 
     public async Task LoadAddonsAsync()
     {
@@ -1011,90 +1068,79 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             // Calling ScanWorkshopFolderAsync from AddonGridViewModel
 #endif
             var addonList = await addonManager.ScanWorkshopFolderAsync();
+            addonList = addonList
+                .Where(addon => !addon.IsLocal && !addon.IsDownloadPending)
+                .ToList();
 #if DEBUG
             // ScanWorkshopFolderAsync returned {addonList.Count} addons
 #endif
             
-            // ローカルアドオンIDのセットを作成
-            var localAddonIds = new HashSet<string>(addonList.Select(a => a.Id));
-            
-            // アセットに含まれているが、ローカルに存在しないアドオンも追加
             var config = addonManager.GetConfiguration();
-            var allAssetAddonIds = new HashSet<string>();
-            
-            // すべてのアセットからアドオンIDを収集
-            foreach (var asset in config.Assets)
-            {
-                // *を除外してアドオンIDを収集
-                foreach (var addonId in asset.Addons.Where(id => id != "*"))
-                {
-                    allAssetAddonIds.Add(addonId);
-                }
-            }
-            
-            // アセットに登録されているが、ローカルに存在しないアドオンを追加
-            foreach (var addonId in allAssetAddonIds)
-            {
-                if (!localAddonIds.Contains(addonId))
-                {
-                    if (!enableLocalAddonsExperimental && addonManager.IsLocalAddonId(addonId))
-                    {
-                        continue;
-                    }
+            currentSubscribedAddonIds = new HashSet<string>(
+                addonManager.GetResolvedAddonStates().Keys,
+                StringComparer.Ordinal);
+            var loadedAddonIds = new HashSet<string>(
+                addonList.Select(addon => addon.Id),
+                StringComparer.Ordinal);
 
-                    // メタデータから情報を取得
-                    WorkshopAddon addonToAdd;
-                    if (config.AddonMetadata.TryGetValue(addonId, out var metadata))
-                    {
-                        if (!enableLocalAddonsExperimental && metadata.IsLocal)
-                        {
-                            continue;
-                        }
+            // Only confirmed-unsubscribed references retained by custom assets get a
+            // synthetic unavailable card. Subscribed-but-pending IDs stay aggregate-only.
+            var customAssetAddonIds = config.Assets
+                .Where(asset => !asset.IsSystem)
+                .SelectMany(asset => asset.Addons)
+                .Where(addonId => addonId != "*")
+                .Distinct(StringComparer.Ordinal);
 
-                        addonToAdd = new WorkshopAddon(metadata.Id, metadata.FolderPath)
-                        {
-                            Title = metadata.Title,
-                            Size = metadata.Size,
-                            LastUpdated = metadata.LastUpdated,
-                            ThumbnailUrl = metadata.ThumbnailUrl,
-                            Author = metadata.Author,
-                            IsEnabled = metadata.IsEnabled,
-                            Description = metadata.Description,
-                            Type = metadata.Type,
-                            Tags = metadata.Tags,
-                            IsGmaFile = metadata.IsGmaFile,
-                            NeedsTitleUpdate = metadata.NeedsTitleUpdate,
-                            IsFavorite = metadata.IsFavorite,
-                            IsLocal = metadata.IsLocal,
-                            LocalMountPath = metadata.LocalMountPath,
-                            LocalManagedPath = metadata.LocalManagedPath
-                        };
-                    }
-                    else
-                    {
-                        // メタデータがない場合は基本情報のみで作成
-                        addonToAdd = new WorkshopAddon(addonId, "")
-                        {
-                            Title = AddonTitleHelper.BuildPlaceholderTitle(addonId),
-                            NeedsTitleUpdate = true
-                        };
-                    }
-                    addonList.Add(addonToAdd);
+            foreach (var addonId in customAssetAddonIds)
+            {
+                if (loadedAddonIds.Contains(addonId) ||
+                    addonManager.IsLocalAddonId(addonId) ||
+                    !config.AddonMetadata.TryGetValue(addonId, out var metadata) ||
+                    !ShouldAddRetainedMissingAddon(
+                        config.RetainMissingAssetReferences,
+                        config.SubscriptionBaselineInitialized,
+                        metadata,
+                        currentSubscribedAddonIds.Contains(addonId)))
+                {
+                    continue;
                 }
+
+                addonList.Add(new WorkshopAddon(metadata.Id, metadata.FolderPath)
+                {
+                    Title = metadata.Title,
+                    Size = metadata.Size,
+                    LastUpdated = metadata.LastUpdated,
+                    ThumbnailUrl = metadata.ThumbnailUrl,
+                    Author = metadata.Author,
+                    IsEnabled = metadata.IsEnabled,
+                    Description = metadata.Description,
+                    Type = metadata.Type,
+                    Tags = metadata.Tags,
+                    IsGmaFile = metadata.IsGmaFile,
+                    NeedsTitleUpdate = metadata.NeedsTitleUpdate,
+                    IsFavorite = metadata.IsFavorite,
+                    IsLocal = metadata.IsLocal,
+                    LocalMountPath = metadata.LocalMountPath,
+                    LocalManagedPath = metadata.LocalManagedPath,
+                    FirstSeenSubscribedAtUtc = metadata.FirstSeenSubscribedAtUtc,
+                    WorkshopUpdatedAtUtc = metadata.WorkshopUpdatedAtUtc,
+                    IsAvailable = false,
+                    IsDownloadPending = false
+                });
             }
             
             // 既存のViewModelのマッピングを作成（再利用のため）
             var existingViewModels = AllAddons.ToDictionary(vm => vm.AddonId, vm => vm);
             var reusedAddonIds = new HashSet<string>(StringComparer.Ordinal);
             
-            foreach (var addon in addonList.OrderBy(a => a.Title ?? a.Id))
+            foreach (var addon in addonSortService.Sort(addonList, CurrentSortOptions))
             {
                 // 既存のViewModelがあれば再利用、なければ新規作成
                 if (existingViewModels.TryGetValue(addon.Id, out var existingVm))
                 {
                     reusedAddonIds.Add(addon.Id);
                     // 既存のViewModelを更新（タイトル等が変更されている可能性がある）
-                    existingVm.UpdateTitle(addon.Title);
+                    existingVm.UpdateFromWorkshopAddon(addon);
                     newAllAddons.Add(existingVm);
                 }
                 else
@@ -1155,8 +1201,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             CancelBackgroundPreload();
 
             var query = AllAddons.AsEnumerable();
-            var config = addonManager.GetConfiguration();
-            RefreshAddonStateMarkers(config);
+            RefreshRuntimeStates();
 
             foreach (var addon in AllAddons)
             {
@@ -1177,28 +1222,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 }
                 else
                 {
-                    var assetAddonIds = CurrentAsset.GetAddonIds();
-                
-                // デバッグログ（ジャンクションアセットの問題調査用）
-                if (CurrentAsset.Id == "junction-system-asset" && assetAddonIds.Count > 0)
-                {
-                    // logger.LogDebug($"Junction asset has {assetAddonIds.Count} addons"); // Removed logging
-                }
-                
-                if (CurrentAsset.Id == "subscribe-system-asset" || assetAddonIds.Contains("*"))
-                {
-                    // 全アドオンを表示するが、ジャンクションアセットのアドオンは除外
-                    var junctionAsset = addonManager.GetConfiguration().Assets.FirstOrDefault(a => a.Id == "junction-system-asset");
-                    if (junctionAsset != null && junctionAsset.Addons.Count > 0)
-                    {
-                        var junctionAddonIds = new HashSet<string>(junctionAsset.Addons);
-                        query = query.Where(a => !junctionAddonIds.Contains(a.AddonId));
-                    }
-                }
-                    else
-                    {
-                        query = query.Where(a => assetAddonIds.Contains(a.AddonId));
-                    }
+                    IReadOnlyCollection<string> assetAddonIds =
+                        CurrentAsset.Id == "subscribe-system-asset"
+                            ? Array.Empty<string>()
+                            : CurrentAsset.GetAddonIds();
+                    query = query.Where(addon => MatchesAssetMembership(
+                        CurrentAsset.Id,
+                        assetAddonIds,
+                        addon.AddonId,
+                        currentSubscribedAddonIds));
                 }
             }
 
@@ -1229,6 +1261,14 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             {
                 results = baseResults.Where(a => a.MatchesFilter(FilterText)).ToList();
             }
+
+            var viewModelsById = results.ToDictionary(
+                addon => addon.AddonId,
+                StringComparer.Ordinal);
+            results = addonSortService
+                .Sort(results.Select(addon => addon.SortSource), CurrentSortOptions)
+                .Select(addon => viewModelsById[addon.Id])
+                .ToList();
             
             // 新しいコレクションを作成してから一度に置き換える
             var newFilteredAddons = new ObservableCollection<AddonItemViewModel>();
@@ -1302,8 +1342,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         return filterIndex switch
         {
-            1 => !addon.IsEffectivelyOff,
-            2 => addon.IsEffectivelyOff,
+            1 => addon.ActualEnabled == true,
+            2 => addon.ActualEnabled == false,
             _ => true
         };
     }
@@ -1566,9 +1606,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         CurrentAsset = asset;
         ShowOnlyAssetAddons = asset != null;
-        // アセットが設定されたらフィルターを再適用
-        ApplyFilter();
-        
+
         // デバッグ用ログ（起動時の問題調査）
         if (asset == null)
         {
@@ -1999,321 +2037,86 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             }
 
             var dialogService = new DialogService();
-            if (!ShowJunctionAsset && currentAsset?.Id == "junction-system-asset")
-            {
-                await dialogService.ShowErrorAsync(L.Get("Warning.Title"), L.Get("Warning.AssetUnavailableInMode"));
-                return;
-            }
-            
-            // AssetSelectionDialogを作成
             var assetListVm = ViewModelLocator.AssetListViewModel;
-            
             if (assetListVm == null)
             {
-                // logger.LogError("AssetListViewModel not found"); // Removed logging
                 return;
             }
-            
-            // 全アセットリストを作成（サブスクライブとジャンクションを含む）
-            var allAssets = new List<AssetItemViewModel>();
-            allAssets.AddRange(assetListVm.Assets);
-            if (ShowJunctionAsset)
-            {
-                allAssets.AddRange(assetListVm.JunctionAsset);
-            }
-            
-            // アセットをソート（サブスクライブとジャンクションを最上位に）
-            var sortedAssets = new List<AssetItemViewModel>();
-            
-            // サブスクライブを最初に
-            var subscribeAsset = allAssets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
-            if (subscribeAsset != null) sortedAssets.Add(subscribeAsset);
-            
-            // ジャンクションを2番目に
-            var junctionAsset = allAssets.FirstOrDefault(a => a.Id == "junction-system-asset");
-            if (ShowJunctionAsset && junctionAsset != null) sortedAssets.Add(junctionAsset);
-            
-            // その他のアセット
-            sortedAssets.AddRange(allAssets.Where(a => a != subscribeAsset && a != junctionAsset));
-            
-            if (!sortedAssets.Any())
-            {
-                await dialogService.ShowWarningAsync(L.Get("Warning.Title"), L.Get("Warning.NoAvailableAssets"));
-                return;
-            }
-            
-            // 現在のアセットがジャンクションかどうかで異なるダイアログを表示
-            if (currentAsset?.Id == "junction-system-asset")
-            {
-                // ジャンクションアセットの場合は「戻す」ダイアログを表示
-                var junctionDialog = new JunctionAssetSelectionDialog(sortedAssets, 
-                    selectedAddons.Count == 1 ? addonManager.GetAddonSourceAssets(selectedAddons.First().AddonId) : new List<string>());
-                var mainWindow = GetMainWindow();
-                
-                if (mainWindow != null)
+
+            var targetAssets = assetListVm.Assets
+                .Where(asset => !asset.IsSystem)
+                .OrderBy(asset => asset.Name, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+
+            var newlyCreatedAssetIds = new HashSet<string>(StringComparer.Ordinal);
+            var dialog = new AssetSelectionDialog(
+                targetAssets,
+                async name =>
                 {
-                    var result = await junctionDialog.ShowDialog<AssetSelectionResult?>(mainWindow);
-                    
-                    if (result != null)
+                    var created = await CreateAssetFromSelectionAsync(name);
+                    if (created != null)
                     {
-                        if (result.RestoreToOriginal)
-                        {
-                            // 元の場所に戻す
-                            using var progressDialog = ProgressDialogService.Show(
-                                mainWindow,
-                                L.Get("Busy.AddingAddonsToAsset"),
-                                L.Format("Busy.Detail.AddonCount", selectedAddons.Count));
-                            progressDialog?.UpdateProgress(0, selectedAddons.Count);
-
-                            var current = 0;
-                            foreach (var addon in selectedAddons)
-                            {
-                                addonManager.RestoreAddonFromJunction(addon.AddonId);
-                                current++;
-                                progressDialog?.UpdateProgress(current, selectedAddons.Count);
-                            }
-                            
-                            // 状態を更新（ジャンクションの作成/削除を実行）
-                            progressDialog?.UpdateStatus(L.Get("Busy.UpdatingAddonStates"));
-                            var progress = progressDialog?.CreateProgress();
-                            await addonManager.UpdateAddonStatesAsync(progress);
-                            
-                            await addonManager.SaveConfigurationAsync();
-
-                            progressDialog?.Close();
-                            await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-                                L.Format("Success.RestoredToOriginal", selectedAddons.Count));
-                            
-                            // 選択モードを解除
-                            IsSelectionMode = false;
-                            
-                            // リロード処理
-                            await ReloadAddons();
-                        }
-                        else if (result.SelectedAsset != null)
-                        {
-                            // 選択したアセットに移動
-                            using var progressDialog = ProgressDialogService.Show(
-                                mainWindow,
-                                L.Get("Busy.AddingAddonsToAsset"),
-                                L.Format("Busy.Detail.AssetNameWithCount", result.SelectedAsset.Name, selectedAddons.Count));
-                            progressDialog?.UpdateProgress(0, selectedAddons.Count);
-
-                            var current = 0;
-                            foreach (var addon in selectedAddons)
-                            {
-                                var state = currentAsset.GetAddonState(addon.AddonId);
-
-                                // ジャンクションアセットから削除
-                                addonManager.RemoveAddonFromAsset(currentAsset.Id, addon.AddonId);
-                                
-                                // 対象アセットに追加（個別状態も保持する）
-                                addonManager.AddAddonToAsset(result.SelectedAsset.Id, addon.AddonId, state);
-                                current++;
-                                progressDialog?.UpdateProgress(current, selectedAddons.Count);
-                            }
-                            
-                            // 状態を更新（ジャンクションの作成/削除を実行）
-                            progressDialog?.UpdateStatus(L.Get("Busy.UpdatingAddonStates"));
-                            var progress = progressDialog?.CreateProgress();
-                            await addonManager.UpdateAddonStatesAsync(progress);
-                            
-                            await addonManager.SaveConfigurationAsync();
-
-                            progressDialog?.Close();
-                            await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-                                L.Format("Success.RestoredToAsset", selectedAddons.Count, result.SelectedAsset.Name));
-                            
-                            // 選択モードを解除
-                            IsSelectionMode = false;
-                            
-                            // リロード処理
-                            await ReloadAddons();
-                        }
+                        newlyCreatedAssetIds.Add(created.Id);
                     }
-                }
+                    return created;
+                });
+            var mainWindow = GetMainWindow();
+            if (mainWindow == null)
+            {
+                return;
+            }
+
+            var selectedAsset = await dialog.ShowDialog<AssetItemViewModel?>(mainWindow);
+            if (selectedAsset == null)
+            {
+                return;
+            }
+
+            var existingIds = new HashSet<string>(
+                selectedAsset.GetAddonIds(),
+                StringComparer.Ordinal);
+            var newAddons = selectedAddons
+                .Where(addon => !existingIds.Contains(addon.AddonId))
+                .ToList();
+            if (newAddons.Count == 0)
+            {
+                var duplicateMessage = selectedAddons.Count == 1
+                    ? L.Get("AddonGrid.DuplicateSingle")
+                    : L.Format("AddonGrid.DuplicateMultiple", selectedAddons.Count);
+                await dialogService.ShowInfoAsync(L.Get("Info.Title"), duplicateMessage);
+                return;
+            }
+
+            using var progressDialog = ProgressDialogService.Show(
+                mainWindow,
+                L.Get("Busy.AddingAddonsToAsset"),
+                L.Format("Busy.Detail.AssetNameWithCount", selectedAsset.Name, newAddons.Count));
+            var newAddonIds = newAddons.Select(addon => addon.AddonId).ToList();
+            if (newlyCreatedAssetIds.Contains(selectedAsset.Id))
+            {
+                addonManager.AddAddonsToNewAssetBatch(
+                    selectedAsset.Id,
+                    newAddonIds,
+                    progress: progressDialog?.CreateProgress());
             }
             else
             {
-                // 通常のアセットの場合は従来のダイアログを表示
-                var dialog = new AssetSelectionDialog(sortedAssets, CreateAssetFromSelectionAsync);
-                var mainWindow = GetMainWindow();
-                
-                if (mainWindow != null)
-                {
-                    var selectedAsset = await dialog.ShowDialog<AssetItemViewModel?>(mainWindow);
-
-                    if (selectedAsset == null)
-                    {
-                        return;
-                    }
-
-                    if (!ShowJunctionAsset && selectedAsset.Id == "junction-system-asset")
-                    {
-                        await dialogService.ShowErrorAsync(L.Get("Warning.Title"), L.Get("Warning.AssetUnavailableInMode"));
-                        return;
-                    }
-
-                    // ジャンクション送りの場合は確認
-                    if (selectedAsset.Id == "junction-system-asset")
-                    {
-                        var confirmMessage = selectedAddons.Count == 1
-                            ? L.Get("Confirm.SendToJunctionSingle")
-                            : L.Format("Confirm.SendToJunctionMultiple", selectedAddons.Count);
-                        
-                        var confirmed = await dialogService.ShowConfirmAsync(L.Get("Confirm.Title"), confirmMessage);
-                        if (!confirmed)
-                        {
-                            return;
-                        }
-                    }
-                    
-                    // 重複チェック
-                    var targetAssetAddonIds = selectedAsset.GetAddonIds();
-                    var duplicateAddons = selectedAddons.Where(a => targetAssetAddonIds.Contains(a.AddonId)).ToList();
-                    var newAddons = selectedAddons.Except(duplicateAddons).ToList();
-                    
-                    // 全て重複している場合
-                    if (duplicateAddons.Count == selectedAddons.Count)
-                    {
-                        var message = selectedAddons.Count == 1
-                            ? L.Get("AddonGrid.DuplicateSingle")
-                            : L.Format("AddonGrid.DuplicateMultiple", selectedAddons.Count);
-                        await dialogService.ShowInfoAsync(L.Get("Info.Title"), message);
-                        return;
-                    }
-                    
-                    // 一部重複している場合
-                    if (duplicateAddons.Count > 0)
-                    {
-                        var message = L.Format("AddonGrid.DuplicatePartial", selectedAddons.Count, duplicateAddons.Count);
-                        
-                        // 新規アドオンのみ追加
-                        var addedCount = 0;
-                        var isJunctionTransfer = selectedAsset.Id == "junction-system-asset";
-                        
-                        using var progressDialog = ProgressDialogService.Show(
-                            mainWindow,
-                            L.Get("Busy.AddingAddonsToAsset"),
-                            L.Format("Busy.Detail.AssetNameWithCount", selectedAsset.Name, newAddons.Count));
-                        progressDialog?.UpdateProgress(0, newAddons.Count);
-
-                        var current = 0;
-                        foreach (var addon in newAddons)
-                        {
-                            try
-                            {
-                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
-
-                                // ジャンクション送りの場合、元のアセットから削除
-                                if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
-                                {
-                                    CurrentAsset.RemoveAddon(addon.AddonId);
-                                }
-                                
-                                selectedAsset.AddAddon(addon.AddonId, state);
-                                current++;
-                                progressDialog?.UpdateProgress(current, newAddons.Count);
-                                addedCount++;
-                            }
-                            catch (Exception ex)
-                            {
-                                // logger.LogError($"Failed to add addon {addon.AddonId} to asset {selectedAsset.Name}", ex); // Removed logging
-                            }
-                        }
-                        
-                        if (addedCount > 0)
-                        {
-                            // 設定を保存
-                            await addonManager.SaveConfigurationAsync();
-                            
-                            // ジャンクションアセットを更新
-                            if (isJunctionTransfer)
-                            {
-                                await addonManager.UpdateJunctionAssetAsync();
-                            }
-                            
-                            selectedAsset.RefreshFromModel(addonManager.GetConfiguration().Assets.First(a => a.Id == selectedAsset.Id));
-
-                            progressDialog?.Close();
-                            await ShowTransferSuccessDialogAsync(L.Get("Info.Title"), message, selectedAsset);
-                            
-                            // 選択モードを解除
-                            IsSelectionMode = false;
-                            
-                            // リロード処理
-                            await ReloadAddons();
-                        }
-                    }
-                    else
-                    {
-                        // 重複なしの場合（従来の処理）
-                        var addedCount = 0;
-                        var isJunctionTransfer = selectedAsset.Id == "junction-system-asset";
-                        
-                        using var progressDialog = ProgressDialogService.Show(
-                            mainWindow,
-                            L.Get("Busy.AddingAddonsToAsset"),
-                            L.Format("Busy.Detail.AssetNameWithCount", selectedAsset.Name, selectedAddons.Count));
-                        progressDialog?.UpdateProgress(0, selectedAddons.Count);
-
-                        var current = 0;
-                        foreach (var addon in selectedAddons)
-                        {
-                            try
-                            {
-                                var state = CurrentAsset?.GetAddonState(addon.AddonId) ?? AddonState.Enabled;
-
-                                // ジャンクション送りの場合、元のアセットから削除
-                                if (isJunctionTransfer && CurrentAsset != null && !CurrentAsset.IsSystem)
-                                {
-                                    CurrentAsset.RemoveAddon(addon.AddonId);
-                                }
-                                
-                                selectedAsset.AddAddon(addon.AddonId, state);
-                                current++;
-                                progressDialog?.UpdateProgress(current, selectedAddons.Count);
-                                addedCount++;
-                            }
-                            catch (Exception ex)
-                            {
-                                // logger.LogError($"Failed to add addon {addon.AddonId} to asset {selectedAsset.Name}", ex); // Removed logging
-                            }
-                        }
-                        
-                        if (addedCount > 0)
-                        {
-                            // 設定を保存
-                            await addonManager.SaveConfigurationAsync();
-                            
-                            // ジャンクションアセットを更新
-                            if (isJunctionTransfer)
-                            {
-                                await addonManager.UpdateJunctionAssetAsync();
-                            }
-                            
-                            selectedAsset.RefreshFromModel(addonManager.GetConfiguration().Assets.First(a => a.Id == selectedAsset.Id));
-                            
-                            var message = isJunctionTransfer
-                                ? (addedCount == 1 
-                                    ? L.Get("Success.SentToJunctionSingle") 
-                                    : L.Format("Success.SentToJunctionMultiple", addedCount))
-                                : (addedCount == 1
-                                    ? L.Format("Success.AddedToAssetSingle", selectedAsset.Name)
-                                    : L.Format("Success.AddedToAssetMultiple", addedCount, selectedAsset.Name));
-
-                            progressDialog?.Close();
-                            await ShowTransferSuccessDialogAsync(L.Get("Success.Title"), message, selectedAsset);
-                            
-                            // 選択モードを解除
-                            IsSelectionMode = false;
-                            
-                            // リロード処理
-                            await ReloadAddons();
-                        }
-                    }
-                }
+                addonManager.AddAddonsToAssetBatch(
+                    selectedAsset.Id,
+                    newAddonIds,
+                    progress: progressDialog?.CreateProgress());
             }
+
+            selectedAsset.RefreshFromModel(
+                addonManager.GetConfiguration().Assets.First(asset => asset.Id == selectedAsset.Id));
+
+            progressDialog?.Close();
+            var successMessage = newAddons.Count == 1
+                ? L.Format("Success.AddedToAssetSingle", selectedAsset.Name)
+                : L.Format("Success.AddedToAssetMultiple", newAddons.Count, selectedAsset.Name);
+            await ShowTransferSuccessDialogAsync(L.Get("Success.Title"), successMessage, selectedAsset);
+            IsSelectionMode = false;
+            await ReloadAddons(rescanWorkshop: false);
         }
         catch (Exception ex)
         {
@@ -2336,23 +2139,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             return null;
         }
 
-        var config = addonManager.GetConfiguration();
-        var existingIds = new HashSet<string>(config.Assets.Select(a => a.Id));
+        var newAsset = await addonManager.CreateAssetAsync(trimmedName);
 
-        addonManager.CreateAsset(trimmedName);
-        await addonManager.SaveConfigurationImmediatelyAsync();
-
-        var newAsset = config.Assets.FirstOrDefault(a => !existingIds.Contains(a.Id));
-        if (newAsset == null)
-        {
-            return null;
-        }
-
-        var settings = AppSettings.Load();
-        var showExclusiveApply = DeveloperModeCommands.ShouldShowExclusiveApply(
+        return new AssetItemViewModel(
+            newAsset,
             addonManager,
-            settings.DeveloperModePhrase);
-        return new AssetItemViewModel(newAsset, addonManager, pendingChangeManager, processWatcher, showExclusiveApply);
+            pendingChangeManager,
+            processWatcher);
     }
 
     private async Task ShowTransferSuccessDialogAsync(string? title, string successMessage, AssetItemViewModel selectedAsset)
@@ -2473,8 +2266,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         AssetItemViewModel? FindAsset()
         {
-            return assetListVm.Assets.FirstOrDefault(a => a.Id == assetId)
-                   ?? assetListVm.JunctionAsset.FirstOrDefault(a => a.Id == assetId);
+            return assetListVm.Assets.FirstOrDefault(a => a.Id == assetId);
         }
 
         void SelectCore()
@@ -2606,8 +2398,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
                 addonManager.RemoveAddonsFromAssetBatch(currentAsset.Id, addonIds, progress);
                 
-                await addonManager.SaveConfigurationAsync();
-
                 progressDialog?.Close();
                 await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
                     selectedAddons.Count == 1 
@@ -2627,121 +2417,81 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.RemoveAddonFailed"));
         }
     }
-    
-        private async Task ChangeSelectedAddonStateAsync(string action)
+    private void RefreshRuntimeStates()
+    {
+        var resolvedStates = addonManager.GetResolvedAddonStates();
+        var actualStates = addonManager.CaptureState().States;
+        var hasQueuedRuntimeApply = pendingChangeManager.HasPendingChanges();
+
+        foreach (var addon in AllAddons)
         {
-            try
+            if (!resolvedStates.TryGetValue(addon.AddonId, out var resolved))
             {
-                if (string.IsNullOrWhiteSpace(action))
-                    return;
-                
-                var selectedAddons = GetSelectedAddons();
-                if (selectedAddons.Count == 0)
-                    return;
-                
-                var selectedAddonIds = selectedAddons.Select(addon => addon.AddonId).ToList();
-                
-            // アセットが選択されていない場合は状態変更不可
-            if (currentAsset == null)
-                return;
-                
-                AddonState newState;
-                // Check against localized values
-                if (action == L.Get("AddonGrid.Enable"))
-                {
-                    newState = AddonState.Enabled;
-                }
-                else if (action == L.Get("AddonGrid.Disable"))
-                {
-                    newState = AddonState.Disabled;
-                    
-                    // Check if Steam is running before disabling addons
-                    if (SteamProcessChecker.IsSteamRunning())
-                    {
-                        var dialog = new DialogService();
-                        var result = await dialog.ShowConfirmAsync(
-                            L.Get("Warning.SteamRunningTitle") ?? "Steam Running",
-                            L.Get("Warning.SteamRunningDisable") ?? 
-                            "Steam is currently running. Disabled addons may be re-downloaded when you start Garry's Mod.\n\n" +
-                            "For best results:\n" +
-                            "1. Close Garry's Mod\n" +
-                            "2. Close Steam completely\n" +
-                            "3. Disable addons in GAM\n" +
-                            "4. Restart Steam\n\n" +
-                            "Continue anyway?"
-                        );
-                        
-                        if (!result)
-                            return;
-                    }
-                }
-                else if (action == L.Get("AddonGrid.Exclude"))
-                {
-                    newState = AddonState.Excluded;
-                }
-                else
-                {
-                    return;
-                }
-        
-                // GMod稼働中は即時適用せず、状態だけ保存して後で反映する
-                if (processWatcher.IsGmodRunning)
-                {
-                    addonManager.SetAddonStatesBatch(currentAsset.Id, selectedAddonIds, newState);
-                    await addonManager.SaveConfigurationAsync();
-        
-                    // 後でUpdateAddonStatesAsyncを走らせるためのトリガー
-                    pendingChangeManager.QueueChange(new AddonChange("apply_states", "*"));
-        
-                    var dialog = new DialogService();
-                    await dialog.ShowInfoAsync(
-                        L.Get("Info.Title"),
-                        L.Get("Info.PendingAfterGmodExit")
-                    );
-                    return;
-                }
-                
-                var mainWindow = GetMainWindow();
-                using var progressDialog = ProgressDialogService.Show(
-                    mainWindow,
-                    L.Get("Busy.UpdatingAddonStates"),
-                    L.Format("Busy.Detail.AddonCount", selectedAddons.Count));
-                var progress = progressDialog?.CreateProgress();
-        
-                addonManager.SetAddonStatesBatch(currentAsset.Id, selectedAddonIds, newState, progress);
-                
-                // 状態を更新
-                progressDialog?.UpdateStatus(L.Get("Busy.UpdatingAddonStates"));
-                await addonManager.UpdateAddonStatesAsync(progressDialog?.CreateProgress());
-                await addonManager.SaveConfigurationAsync();
-                
-                var dialogService = new DialogService();
-                progressDialog?.Close();
-                await dialogService.ShowInfoAsync(L.Get("Success.Title"),
-                    L.Format("Success.StateChanged", selectedAddons.Count, action));
-                    
-                // 選択モードを解除
-                IsSelectionMode = false;
-                
-                // リロード
-                await ReloadAddons();
+                resolved = new ResolvedAddonState(
+                    addon.AddonId,
+                    isSubscribed: false,
+                    desiredEnabled: false,
+                    enabledBySubscribe: false,
+                    AddonStateResolutionReason.NotSubscribed,
+                    Array.Empty<ResolvedAddonStateSource>(),
+                    Array.Empty<ResolvedAddonStateSource>());
             }
-            catch (Exception ex)
-            {
-                var dialogService = new DialogService();
-                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.StateChangeFailed"));
+
+            var actualEnabled = false;
+            var hasActualState =
+                resolved.IsRuntimeTarget &&
+                actualStates.TryGetValue(addon.AddonId, out actualEnabled);
+            addon.RefreshRuntimeState(
+                resolved,
+                hasActualState ? actualEnabled : null,
+                hasQueuedRuntimeApply);
         }
     }
 
-    private void RefreshAddonStateMarkers(Configuration config)
+    private static bool ShouldAddRetainedMissingAddon(
+        bool retainMissingReferences,
+        bool subscriptionBaselineInitialized,
+        WorkshopAddon metadata,
+        bool isSubscribed)
     {
-        var addonStateMarkers = BuildAddonStateMarkers(config);
-        var inactiveAssetMembershipMarkers = BuildInactiveAssetMembershipMarkers(config, CurrentAsset?.Id);
-        foreach (var addon in AllAddons)
+        return retainMissingReferences &&
+               subscriptionBaselineInitialized &&
+               !isSubscribed &&
+               !metadata.IsLocal &&
+               !metadata.IsAvailable &&
+               !metadata.IsDownloadPending;
+    }
+
+    private static string FormatSubscriptionCountDisplay(
+        int visibleCount,
+        int availableCount,
+        int subscribedCount,
+        bool japanese)
+    {
+        if (visibleCount == availableCount)
         {
-            addon.SetAddonStateMarkers(addonStateMarkers);
-            addon.SetInactiveAssetMembershipMarkers(inactiveAssetMembershipMarkers);
+            return japanese
+                ? $"(利用可能 {availableCount} / 購読中 {subscribedCount})"
+                : $"(Available {availableCount} / Subscribed {subscribedCount})";
         }
+
+        return japanese
+            ? $"(表示 {visibleCount} / 利用可能 {availableCount} / 購読中 {subscribedCount})"
+            : $"(Showing {visibleCount} / Available {availableCount} / Subscribed {subscribedCount})";
+    }
+
+    private static bool MatchesAssetMembership(
+        string assetId,
+        IReadOnlyCollection<string> assetAddonIds,
+        string addonId,
+        IReadOnlySet<string> subscribedAddonIds)
+    {
+        if (assetId == "subscribe-system-asset")
+        {
+            return subscribedAddonIds.Contains(addonId);
+        }
+
+        return assetAddonIds.Contains("*") || assetAddonIds.Contains(addonId);
     }
 
     public void Dispose()
@@ -2755,6 +2505,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         filterSubscription.Dispose();
         LocalizationManager.Instance.PropertyChanged -= OnLocalizationChanged;
+        processWatcher.GmodStarted -= OnGmodRuntimeStateChanged;
+        processWatcher.GmodStopped -= OnGmodRuntimeStateChanged;
 
         if (currentAsset != null)
         {

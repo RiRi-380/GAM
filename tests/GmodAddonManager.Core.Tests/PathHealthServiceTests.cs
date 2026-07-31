@@ -24,6 +24,34 @@ public sealed class PathHealthServiceTests
     }
 
     [Fact]
+    public void UpdatePathState_DoesNotPromotePartialSnapshotToLastKnownGood()
+    {
+        using var env = new TestEnvironment();
+        var config = new Configuration();
+        var healthy = CreateSnapshot(env.OldGmodPath, env.OldWorkshopRoot);
+        PathHealthService.UpdatePathState(
+            config,
+            healthy,
+            env.OldManagerPath,
+            env.OldAddonsPath);
+
+        var partial = CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot);
+        partial.ActiveWorkshopRoot = null;
+        partial.WorkshopRoots = Array.Empty<WorkshopRootCandidate>();
+        PathHealthService.UpdatePathState(
+            config,
+            partial,
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Same(partial, config.PathState.LastDetectedSnapshot);
+        Assert.Same(healthy, config.PathState.LastKnownGoodSnapshot);
+        Assert.Equal(
+            env.OldWorkshopRoot,
+            config.PathState.LastKnownGoodSnapshot!.ActiveWorkshopRoot!.RootPath);
+    }
+
+    [Fact]
     public void BuildReport_FindsStaleWorkshopMetadataRepairCandidate()
     {
         using var env = new TestEnvironment();
@@ -70,10 +98,11 @@ public sealed class PathHealthServiceTests
     }
 
     [Fact]
-    public void CleanupStaleEmptyWorkshopFolders_DeletesOnlyInvalidOldFolders()
+    public void BuildReport_DoesNotOfferSteamManagedFoldersForCleanup()
     {
         using var env = new TestEnvironment();
-        Directory.CreateDirectory(Path.Combine(env.OldWorkshopRoot, "100"));
+        var emptyWorkshopFolder = Path.Combine(env.OldWorkshopRoot, "100");
+        Directory.CreateDirectory(emptyWorkshopFolder);
         WritePayload(Path.Combine(env.OldWorkshopRoot, "200"));
         var config = new Configuration();
         PathHealthService.UpdatePathState(config, CreateSnapshot(env.OldGmodPath, env.OldWorkshopRoot), env.OldManagerPath, env.OldAddonsPath);
@@ -84,14 +113,26 @@ public sealed class PathHealthServiceTests
             env.CurrentManagerPath,
             env.CurrentAddonsPath);
 
-        var candidate = Assert.Single(report.CleanupCandidates);
-        Assert.Equal("100", candidate.AddonId);
-
-        var result = PathHealthService.CleanupStaleEmptyWorkshopFolders(report.CleanupCandidates);
-
-        Assert.Equal(1, result.DeletedCount);
-        Assert.False(Directory.Exists(Path.Combine(env.OldWorkshopRoot, "100")));
+        Assert.DoesNotContain(
+            report.Issues,
+            issue => issue.Contains("delete", StringComparison.OrdinalIgnoreCase) ||
+                     issue.Contains("cleanup", StringComparison.OrdinalIgnoreCase));
+        Assert.True(Directory.Exists(emptyWorkshopFolder));
         Assert.True(Directory.Exists(Path.Combine(env.OldWorkshopRoot, "200")));
+    }
+
+    [Fact]
+    public void PublicPathHealthContract_DoesNotExposeWorkshopCleanup()
+    {
+        Assert.DoesNotContain(
+            typeof(PathHealthReport).GetProperties(),
+            property => property.Name.Contains("Cleanup", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            typeof(PathHealthService).GetMethods(),
+            method => method.Name.Contains("Cleanup", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            typeof(AddonManager).GetMethods(),
+            method => method.Name.Contains("CleanupStaleEmptyWorkshop", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

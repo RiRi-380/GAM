@@ -4,6 +4,7 @@ using System.Reactive;
 using ReactiveUI;
 using System.Reflection;
 using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI;
 using GmodAddonManager.UI.Services;
@@ -61,12 +62,16 @@ namespace GmodAddonManager.UI.ViewModels
             
             try
             {
-                if (Application.Current is App app)
-                {
-                    app.ReleaseApplicationLockForRestart();
-                }
+                await updateService.DownloadAndInstallUpdateAsync(
+                    updateInfo.DownloadUrl,
+                    updateInfo.DownloadDigest);
 
-                await updateService.DownloadAndInstallUpdateAsync(updateInfo.DownloadUrl);
+                DialogResult = true;
+                RequestClose(true);
+                if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    desktop.Shutdown();
+                }
             }
             catch (TimeoutException)
             {

@@ -43,9 +43,9 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
-            if (!Directory.Exists(fullPath))
+            if (!IsDirectoryUsable(fullPath))
             {
-                error = "The selected folder does not exist.";
+                error = "The selected folder does not exist or cannot be read.";
                 return false;
             }
 
@@ -98,15 +98,15 @@ namespace GmodAddonManager.Core.Services
             }
 
             if (string.IsNullOrWhiteSpace(normalizedGmod) ||
-                !Directory.Exists(Path.Combine(normalizedGmod, "garrysmod")))
+                !IsDirectoryUsable(Path.Combine(normalizedGmod, "garrysmod")))
             {
                 error = "The configured Garry's Mod folder is missing or invalid.";
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(normalizedWorkshop) || !Directory.Exists(normalizedWorkshop))
+            if (string.IsNullOrWhiteSpace(normalizedWorkshop) || !IsDirectoryUsable(normalizedWorkshop))
             {
-                error = "The configured Workshop content folder is missing or invalid.";
+                error = "The configured Workshop content folder is missing, invalid, or unreadable.";
                 return false;
             }
 
@@ -117,13 +117,13 @@ namespace GmodAddonManager.Core.Services
         private static bool TryResolveGmodInstallFolder(string folder, out PathOverrideResolution resolution)
         {
             resolution = new PathOverrideResolution();
-            if (!Directory.Exists(Path.Combine(folder, "garrysmod")))
+            if (!IsDirectoryUsable(Path.Combine(folder, "garrysmod")))
             {
                 return false;
             }
 
             var workshopRoot = TryInferWorkshopRootFromGmodInstall(folder);
-            if (string.IsNullOrWhiteSpace(workshopRoot) || !Directory.Exists(workshopRoot))
+            if (string.IsNullOrWhiteSpace(workshopRoot) || !IsDirectoryUsable(workshopRoot))
             {
                 return false;
             }
@@ -147,7 +147,8 @@ namespace GmodAddonManager.Core.Services
                 : "GarrysMod";
             var gmodInstall = Path.Combine(folder, "steamapps", "common", installDir);
             var workshopRoot = Path.Combine(folder, "steamapps", "workshop", "content", GmodAppId);
-            if (!Directory.Exists(Path.Combine(gmodInstall, "garrysmod")) || !Directory.Exists(workshopRoot))
+            if (!IsDirectoryUsable(Path.Combine(gmodInstall, "garrysmod")) ||
+                !IsDirectoryUsable(workshopRoot))
             {
                 return false;
             }
@@ -166,7 +167,8 @@ namespace GmodAddonManager.Core.Services
 
             var gmodInstall = TryInferGmodInstallFromWorkshopRoot(folder);
             if (string.IsNullOrWhiteSpace(gmodInstall) ||
-                !Directory.Exists(Path.Combine(gmodInstall, "garrysmod")))
+                !IsDirectoryUsable(Path.Combine(gmodInstall, "garrysmod")) ||
+                !IsDirectoryUsable(folder))
             {
                 return false;
             }
@@ -213,9 +215,9 @@ namespace GmodAddonManager.Core.Services
                 InstallDir = Path.GetFileName(gmodInstallPath),
                 InstallPath = gmodInstallPath,
                 AppIdMatched = true,
-                DirectoryExists = Directory.Exists(gmodInstallPath),
-                GarrysmodDirectoryExists = Directory.Exists(Path.Combine(gmodInstallPath, "garrysmod")),
-                Confidence = Directory.Exists(Path.Combine(gmodInstallPath, "garrysmod"))
+                DirectoryExists = IsDirectoryUsable(gmodInstallPath),
+                GarrysmodDirectoryExists = IsDirectoryUsable(Path.Combine(gmodInstallPath, "garrysmod")),
+                Confidence = IsDirectoryUsable(Path.Combine(gmodInstallPath, "garrysmod"))
                     ? PathCandidateConfidence.High
                     : PathCandidateConfidence.Rejected
             };
@@ -232,7 +234,7 @@ namespace GmodAddonManager.Core.Services
                         HasSteamApps = Directory.Exists(Path.Combine(library, "steamapps")),
                         HasGmodAppManifest = File.Exists(Path.Combine(library, "steamapps", AppManifestFileName)),
                         HasWorkshopManifest = File.Exists(Path.Combine(library, "steamapps", "workshop", "appworkshop_4000.acf")),
-                        HasWorkshopContentRoot = Directory.Exists(workshopRootPath)
+                        HasWorkshopContentRoot = IsDirectoryUsable(workshopRootPath)
                     }
                 };
 
@@ -254,7 +256,8 @@ namespace GmodAddonManager.Core.Services
         {
             var validPayloadCount = 0;
             var invalidPayloadCount = 0;
-            if (Directory.Exists(workshopRootPath))
+            var rootIsUsable = IsDirectoryUsable(workshopRootPath);
+            if (rootIsUsable)
             {
                 foreach (var directory in SafeEnumerateDirectories(workshopRootPath))
                 {
@@ -285,13 +288,35 @@ namespace GmodAddonManager.Core.Services
                 RootPath = workshopRootPath,
                 AppWorkshopManifestPath = manifestPath,
                 HasAppWorkshopManifest = !string.IsNullOrWhiteSpace(manifestPath) && File.Exists(manifestPath),
-                ContentRootExists = Directory.Exists(workshopRootPath),
+                ContentRootExists = rootIsUsable,
                 ValidPayloadCount = validPayloadCount,
                 EmptyOrInvalidFolderCount = invalidPayloadCount,
-                Confidence = Directory.Exists(workshopRootPath)
+                Confidence = rootIsUsable
                     ? validPayloadCount > 0 ? PathCandidateConfidence.High : PathCandidateConfidence.Low
-                    : PathCandidateConfidence.Rejected
+                    : PathCandidateConfidence.Rejected,
+                RejectReasons = rootIsUsable
+                    ? Array.Empty<string>()
+                    : new[] { "Workshop content root is missing or unreadable." }
             };
+        }
+
+        public static bool IsDirectoryUsable(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var enumerator = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+                _ = enumerator.MoveNext();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static string? TryInferWorkshopRootFromGmodInstall(string gmodInstallPath)

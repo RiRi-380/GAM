@@ -9,12 +9,14 @@ namespace GmodAddonManager.Core.Services
         protected readonly string _logDirectory;
         private readonly LogRotationService _logRotationService;
         
-        public DefaultErrorHandler()
+        public DefaultErrorHandler(string? logDirectory = null)
         {
-            _logDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GmodAddonManager", "logs"
-            );
+            _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GmodAddonManager",
+                    "logs")
+                : Path.GetFullPath(logDirectory);
             Directory.CreateDirectory(_logDirectory);
             _logRotationService = new LogRotationService(_logDirectory);
         }

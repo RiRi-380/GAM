@@ -16,15 +16,12 @@ namespace GmodAddonManager.UI.Views;
 
 public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
 {
-    public static AssetDetailsDialog? CurrentDialog { get; private set; }
-    
     private AssetItemViewModel? assetViewModel;
     private AddonManager? addonManager;
+    private IReadOnlySet<string> availableAddonIds = new HashSet<string>(StringComparer.Ordinal);
     
-    public AssetItemViewModel? Asset => assetViewModel;
-    
-    public ObservableCollection<AddonStateItem> Addons { get; } = new();
-    private ObservableCollection<AddonStateItem> AllAddons { get; } = new();
+    public ObservableCollection<AssetAddonMembershipItem> Addons { get; } = new();
+    private ObservableCollection<AssetAddonMembershipItem> AllAddons { get; } = new();
     
     private string assetName = "";
     public string AssetName
@@ -55,12 +52,10 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
     
     private bool showNormalAddons = true;
     private bool showCacheAddons = true;
-    private bool showLocalAddons = true;
     
     private int normalAddonCount = 0;
     private int cacheAddonCount = 0;
-    private int localAddonCount = 0;
-    private int totalAddonCount => normalAddonCount + cacheAddonCount + localAddonCount;
+    private int totalAddonCount => normalAddonCount + cacheAddonCount;
     
     public string AddonCountText
     {
@@ -71,7 +66,6 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
                 0 => L.Format("AssetDetails.AddonCountFormat", totalAddonCount),  // 全て表示
                 1 => L.Format("AssetDetails.AddonCountFormat", normalAddonCount),  // 通常のみ
                 2 => L.Format("AssetDetails.AddonCountFormat", cacheAddonCount),   // キャッシュのみ
-                3 => L.Format("AssetDetails.AddonCountFormat", localAddonCount),   // ローカルのみ
                 _ => L.Format("AssetDetails.AddonCountFormat", totalAddonCount)
             };
         }
@@ -84,22 +78,14 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
             case 0: // 全て表示
                 showNormalAddons = true;
                 showCacheAddons = true;
-                showLocalAddons = true;
                 break;
             case 1: // 通常のみ
                 showNormalAddons = true;
                 showCacheAddons = false;
-                showLocalAddons = false;
                 break;
             case 2: // キャッシュのみ
                 showNormalAddons = false;
                 showCacheAddons = true;
-                showLocalAddons = false;
-                break;
-            case 3: // ローカルのみ
-                showNormalAddons = false;
-                showCacheAddons = false;
-                showLocalAddons = true;
                 break;
         }
         FilterAddons();
@@ -109,17 +95,23 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
     {
         InitializeComponent();
         DataContext = this;
-        CurrentDialog = this;
         Closed += OnClosed;
         LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
     }
     
-    public void SetAsset(AssetItemViewModel asset, AddonManager manager)
+    public void SetAsset(
+        AssetItemViewModel asset,
+        AddonManager manager,
+        IReadOnlySet<string>? availableAddonIds = null)
     {
         assetViewModel = asset;
         addonManager = manager;
         AssetName = asset.Name;
-        
+
+        this.availableAddonIds = availableAddonIds ?? manager.GetAllAddons()
+            .Where(entry => entry.Value.IsAvailable && !entry.Value.IsLocal)
+            .Select(entry => entry.Key)
+            .ToHashSet(StringComparer.Ordinal);
         LoadAddons();
         
     }
@@ -136,43 +128,25 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
         AllAddons.Clear();
         normalAddonCount = 0;
         cacheAddonCount = 0;
-        localAddonCount = 0;
         
         var addonIds = assetViewModel.GetAddonIds();
-        var addonStates = assetViewModel.AddonStates;
         var allAddons = addonManager.GetAllAddons();
-        
-        foreach (var addonId in addonIds)
+
+        foreach (var item in BuildMembershipItems(
+                     addonIds,
+                     allAddons,
+                     availableAddonIds,
+                     assetViewModel.IsSubscribeAsset))
         {
-            if (allAddons.TryGetValue(addonId, out var addon))
+            AllAddons.Add(item);
+
+            if (item.IsGmaFile)
             {
-                var item = new AddonStateItem
-                {
-                    AddonId = addonId,
-                    Title = addon.Title,
-                    IsGmaFile = addon.IsGmaFile,
-                    IsLocal = addon.IsLocal,
-                    State = addonStates.ContainsKey(addonId) ? addonStates[addonId] : AddonState.Enabled
-                };
-                
-                // 状態変更時の処理
-                item.StateChanged += OnAddonStateChanged;
-                
-                AllAddons.Add(item);
-                
-                // カウントを更新
-                if (addon.IsLocal)
-                {
-                    localAddonCount++;
-                }
-                else if (addon.IsGmaFile)
-                {
-                    cacheAddonCount++;
-                }
-                else
-                {
-                    normalAddonCount++;
-                }
+                cacheAddonCount++;
+            }
+            else
+            {
+                normalAddonCount++;
             }
         }
         
@@ -181,42 +155,63 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
         // 初期フィルタリング
         FilterAddons();
     }
-    
-    private void FilterAddons()
+
+    private static List<AssetAddonMembershipItem> BuildMembershipItems(
+        IReadOnlyCollection<string> addonIds,
+        IReadOnlyDictionary<string, WorkshopAddon> addonMetadata,
+        IReadOnlySet<string> availableAddonIds,
+        bool isSubscribeAsset)
     {
-        Addons.Clear();
-        
-        foreach (var item in AllAddons)
+        var results = new List<AssetAddonMembershipItem>(addonIds.Count);
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var addonId in addonIds)
         {
-            if (item.IsLocal)
+            if (string.IsNullOrWhiteSpace(addonId) ||
+                addonId == "*" ||
+                !seenIds.Add(addonId))
             {
-                if (showLocalAddons)
-                {
-                    Addons.Add(item);
-                }
                 continue;
             }
 
+            addonMetadata.TryGetValue(addonId, out var metadata);
+            if (metadata?.IsLocal == true || (!isSubscribeAsset && metadata == null))
+            {
+                continue;
+            }
+
+            var isUnavailable = isSubscribeAsset && !availableAddonIds.Contains(addonId);
+            results.Add(new AssetAddonMembershipItem
+            {
+                AddonId = addonId,
+                Title = isSubscribeAsset && string.IsNullOrWhiteSpace(metadata?.Title)
+                    ? AddonTitleHelper.BuildPlaceholderTitle(addonId)
+                    : metadata?.Title ?? string.Empty,
+                IsGmaFile = metadata?.IsGmaFile == true,
+                IsMissing =
+                    !isSubscribeAsset &&
+                    metadata != null &&
+                    !metadata.IsAvailable &&
+                    !metadata.IsDownloadPending,
+                IsUnavailable = isUnavailable,
+                AvailabilityText = isUnavailable
+                    ? L.Get("Addon.Unavailable")
+                    : string.Empty
+            });
+        }
+
+        return results;
+    }
+
+    private void FilterAddons()
+    {
+        Addons.Clear();
+
+        foreach (var item in AllAddons)
+        {
             if ((showNormalAddons && !item.IsGmaFile) || (showCacheAddons && item.IsGmaFile))
             {
                 Addons.Add(item);
-            }
-        }
-    }
-    
-    private async void OnAddonStateChanged(object? sender, EventArgs e)
-    {
-        if (sender is AddonStateItem item && assetViewModel != null && addonManager != null)
-        {
-            try
-            {
-                // 状態を保存
-                assetViewModel.SetAddonState(item.AddonId, item.State);
-                await addonManager.SaveConfigurationAsync();
-            }
-            catch (Exception ex)
-            {
-                SafeFileLogger.TryLogException("AssetDetailsDialog.OnAddonStateChanged", ex);
             }
         }
     }
@@ -234,14 +229,13 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
             {
                 AssetName = assetViewModel.Name;
             }
-            OnPropertyChanged(nameof(AddonCountText));
+            LoadAddons();
         }
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         LocalizationManager.Instance.PropertyChanged -= OnLocalizationChanged;
-        CurrentDialog = null;
     }
     
     public new event PropertyChangedEventHandler? PropertyChanged;
@@ -252,35 +246,13 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
     }
 }
 
-public class AddonStateItem : INotifyPropertyChanged
+public sealed class AssetAddonMembershipItem
 {
-    private AddonState state;
-    
     public string AddonId { get; set; } = "";
     public string Title { get; set; } = "";
     public bool IsGmaFile { get; set; } = false;
-    public bool IsLocal { get; set; } = false;
-    
-    public AddonState State
-    {
-        get => state;
-        set
-        {
-            if (state != value)
-            {
-                state = value;
-                OnPropertyChanged();
-                StateChanged?.Invoke(this, EventArgs.Empty);
-            }
-        }
-    }
-    
-    public event EventHandler? StateChanged;
-    
-    public event PropertyChangedEventHandler? PropertyChanged;
-    
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
+    public bool IsMissing { get; set; }
+    public bool IsUnavailable { get; set; }
+    public string AvailabilityText { get; set; } = string.Empty;
+    public double RowOpacity => IsUnavailable ? 0.55 : 1.0;
 }

@@ -364,6 +364,7 @@ namespace GmodAddonManager.Core.Services
             var manifest = Path.Combine(library.Path, "steamapps", "workshop", GMOD_WORKSHOP_MANIFEST);
             var reasons = new List<string>();
             var contentRootExists = Directory.Exists(root);
+            var contentRootReadable = false;
             var validPayloadCount = 0;
             var invalidFolderCount = 0;
 
@@ -390,6 +391,8 @@ namespace GmodAddonManager.Core.Services
                             invalidFolderCount++;
                         }
                     }
+
+                    contentRootReadable = true;
                 }
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
@@ -403,21 +406,21 @@ namespace GmodAddonManager.Core.Services
 
             var hasManifest = File.Exists(manifest);
             var confidence = PathCandidateConfidence.Rejected;
-            if (contentRootExists && hasManifest && validPayloadCount > 0)
+            if (contentRootReadable && hasManifest && validPayloadCount > 0)
             {
                 confidence = PathCandidateConfidence.High;
             }
-            else if (contentRootExists && validPayloadCount > 0)
+            else if (contentRootReadable && validPayloadCount > 0)
             {
                 confidence = PathCandidateConfidence.Medium;
                 reasons.Add("appworkshop_4000.acf is missing.");
             }
-            else if (contentRootExists && hasManifest)
+            else if (contentRootReadable && hasManifest)
             {
                 confidence = PathCandidateConfidence.Low;
                 reasons.Add("workshop root exists but has no valid payload.");
             }
-            else if (contentRootExists)
+            else if (contentRootReadable)
             {
                 confidence = PathCandidateConfidence.Low;
                 reasons.Add("workshop root exists without appworkshop manifest or valid payload.");
@@ -429,7 +432,7 @@ namespace GmodAddonManager.Core.Services
                 RootPath = root,
                 AppWorkshopManifestPath = manifest,
                 HasAppWorkshopManifest = hasManifest,
-                ContentRootExists = contentRootExists,
+                ContentRootExists = contentRootReadable,
                 ValidPayloadCount = validPayloadCount,
                 EmptyOrInvalidFolderCount = invalidFolderCount,
                 Confidence = confidence,

@@ -8,7 +8,9 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.29" />
+    <!-- Pin the native bundle above the versions affected by GHSA-2m69-gcr7-jv3q. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
     <PackageReference Include="System.Management" Version="5.0.0" />
     <PackageReference Include="SkiaSharp" Version="2.88.8" />

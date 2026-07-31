@@ -42,7 +42,7 @@ namespace GmodAddonManager.Core.Services
                         string.Equals(enabled, "false", StringComparison.OrdinalIgnoreCase));
         }
 
-        public static ExperimentEventLogger CreateDefault()
+        public static ExperimentEventLogger CreateDefault(string? appDataPath = null)
         {
             var overridePath = Environment.GetEnvironmentVariable("GAM_EXPERIMENT_LOG_PATH");
             if (!string.IsNullOrWhiteSpace(overridePath))
@@ -50,8 +50,12 @@ namespace GmodAddonManager.Core.Services
                 return new ExperimentEventLogger(ResolveLogFilePath(overridePath));
             }
 
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var logDir = Path.Combine(appData, "GmodAddonManager", "logs");
+            var resolvedAppDataPath = string.IsNullOrWhiteSpace(appDataPath)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GmodAddonManager")
+                : Path.GetFullPath(appDataPath);
+            var logDir = Path.Combine(resolvedAppDataPath, "logs");
             var logPath = Path.Combine(logDir, "experiment_events.jsonl");
             return new ExperimentEventLogger(logPath);
         }

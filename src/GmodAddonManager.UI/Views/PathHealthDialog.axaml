@@ -52,7 +52,7 @@
                 <Border Background="#242424" BorderBrush="#444444" BorderThickness="1" CornerRadius="6" Padding="16">
                     <StackPanel Spacing="12">
                         <TextBlock Text="{loc:Localize PathHealth.SafeRepairs}" FontSize="16" FontWeight="SemiBold"/>
-                        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="12">
+                        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="12">
                             <StackPanel Grid.Row="0" Grid.Column="0" Spacing="3">
                                 <TextBlock Text="{loc:Localize PathHealth.MetadataRepair}" FontWeight="SemiBold"/>
                                 <TextBlock Text="{Binding MetadataRepairSummary}" TextWrapping="Wrap" Opacity="0.76"/>
@@ -66,16 +66,10 @@
                             <Button Grid.Row="1" Grid.Column="1" MinWidth="120" Content="{loc:Localize PathHealth.Apply}" IsEnabled="{Binding CanMigrateAddonNoMount}" Click="OnMigrateAddonNoMount"/>
 
                             <StackPanel Grid.Row="2" Grid.Column="0" Spacing="3">
-                                <TextBlock Text="{loc:Localize PathHealth.EmptyFolderCleanup}" FontWeight="SemiBold"/>
-                                <TextBlock Text="{Binding CleanupSummary}" TextWrapping="Wrap" Opacity="0.76"/>
-                            </StackPanel>
-                            <Button Grid.Row="2" Grid.Column="1" MinWidth="120" Content="{loc:Localize PathHealth.Delete}" IsEnabled="{Binding CanCleanupEmptyFolders}" Click="OnCleanupEmptyFolders"/>
-
-                            <StackPanel Grid.Row="3" Grid.Column="0" Spacing="3">
                                 <TextBlock Text="{loc:Localize PathHealth.ManagedMigration}" FontWeight="SemiBold"/>
                                 <TextBlock Text="{Binding ManagedMigrationSummary}" TextWrapping="Wrap" Opacity="0.76"/>
                             </StackPanel>
-                            <Button Grid.Row="3" Grid.Column="1" MinWidth="120" Content="{loc:Localize PathHealth.Move}" IsEnabled="{Binding CanMigrateManagedData}" Click="OnMigrateManagedData"/>
+                            <Button Grid.Row="2" Grid.Column="1" MinWidth="120" Content="{loc:Localize PathHealth.Move}" IsEnabled="{Binding CanMigrateManagedData}" Click="OnMigrateManagedData"/>
                         </Grid>
                     </StackPanel>
                 </Border>

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Security.Cryptography;
 
 namespace GmodAddonManager.Core.Services
 {
@@ -71,7 +72,6 @@ namespace GmodAddonManager.Core.Services
         private const string EnvUpdateApiUrl = "GAM_UPDATE_API_URL";
         private const string EnvUpdateIncludePrerelease = "GAM_UPDATE_INCLUDE_PRERELEASE";
         private const string EnvGithubToken = "GAM_GITHUB_TOKEN";
-        private const string EnvGithubTokenFallback = "GITHUB_TOKEN";
         private static readonly TimeSpan UpdateDownloadTimeout = TimeSpan.FromMinutes(5);
 
         private static readonly HttpClient httpClient = new HttpClient();
@@ -99,7 +99,15 @@ namespace GmodAddonManager.Core.Services
             }
 
             var resolvedSource = ResolveUpdateSource();
-            var endpoints = BuildApiEndpoints(resolvedSource);
+            ApiEndpoints endpoints;
+            try
+            {
+                endpoints = BuildApiEndpoints(resolvedSource);
+            }
+            catch (ArgumentException ex)
+            {
+                return UpdateCheckResult.Error(ex.Message);
+            }
             var token = ResolveGithubToken();
 
             var releaseResult = await FetchLatestReleaseAsync(endpoints, token, resolvedSource.IncludePrerelease);
@@ -133,11 +141,23 @@ namespace GmodAddonManager.Core.Services
                 return UpdateCheckResult.Error("No installer asset found in the latest release.");
             }
 
+            if (!TryNormalizeSha256Digest(installerAsset.Digest, out _))
+            {
+                return UpdateCheckResult.Error("The installer asset is missing a valid SHA-256 digest.");
+            }
+
+            if (!Uri.TryCreate(installerAsset.BrowserDownloadUrl, UriKind.Absolute, out var installerUri) ||
+                !string.Equals(installerUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return UpdateCheckResult.Error("The installer asset download URL must use HTTPS.");
+            }
+
             return UpdateCheckResult.UpdateAvailable(new UpdateInfo
             {
                 Version = release.TagName,
                 ReleaseNotes = release.Body ?? string.Empty,
                 DownloadUrl = installerAsset.BrowserDownloadUrl,
+                DownloadDigest = installerAsset.Digest,
                 PublishedAt = release.PublishedAt
             });
         }
@@ -164,7 +184,6 @@ namespace GmodAddonManager.Core.Services
         private string? ResolveGithubToken()
         {
             return Environment.GetEnvironmentVariable(EnvGithubToken)
-                ?? Environment.GetEnvironmentVariable(EnvGithubTokenFallback)
                 ?? configuredToken;
         }
 
@@ -197,6 +216,12 @@ namespace GmodAddonManager.Core.Services
             if (!string.IsNullOrWhiteSpace(source.ApiUrl))
             {
                 var trimmed = source.ApiUrl.Trim().TrimEnd('/');
+                if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var apiUri) ||
+                    !string.Equals(apiUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException("The update API URL must be an absolute HTTPS URL.", nameof(source));
+                }
+
                 var latestUrl = trimmed.EndsWith("/latest", StringComparison.OrdinalIgnoreCase)
                     ? trimmed
                     : $"{trimmed}/latest";
@@ -309,6 +334,9 @@ namespace GmodAddonManager.Core.Services
             var candidates = assets
                 .Where(a => !string.IsNullOrWhiteSpace(a.Name))
                 .Where(a => a.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                .Where(a =>
+                    a.Name.Contains("setup", StringComparison.OrdinalIgnoreCase) ||
+                    a.Name.Contains("installer", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (candidates.Count == 0)
@@ -481,11 +509,25 @@ namespace GmodAddonManager.Core.Services
             return !string.IsNullOrWhiteSpace(fileName);
         }
 
-        public async Task DownloadAndInstallUpdateAsync(string downloadUrl, CancellationToken cancellationToken = default)
+        public async Task DownloadAndInstallUpdateAsync(
+            string downloadUrl,
+            string expectedDigest,
+            CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(downloadUrl))
             {
                 throw new ArgumentException("Update download URL is required.", nameof(downloadUrl));
+            }
+
+            if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var downloadUri) ||
+                !string.Equals(downloadUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Update download URL must use HTTPS.", nameof(downloadUrl));
+            }
+
+            if (!TryNormalizeSha256Digest(expectedDigest, out _))
+            {
+                throw new InvalidDataException("A valid SHA-256 release-asset digest is required.");
             }
 
             var tempPath = Path.Combine(Path.GetTempPath(), $"GAM-Update-Setup-{Guid.NewGuid():N}.exe");
@@ -502,6 +544,12 @@ namespace GmodAddonManager.Core.Services
                     timeoutCts.Token).ConfigureAwait(false))
                 {
                     response.EnsureSuccessStatusCode();
+                    if (response.RequestMessage?.RequestUri is not Uri finalUri ||
+                        !string.Equals(finalUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException("The update download redirected to a non-HTTPS URL.");
+                    }
+
                     using var fs = new FileStream(
                         tempPath,
                         FileMode.CreateNew,
@@ -512,6 +560,8 @@ namespace GmodAddonManager.Core.Services
                     using var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                     await CopyStreamAsync(contentStream, fs, timeoutCts.Token).ConfigureAwait(false);
                 }
+
+                VerifyDownloadedFileDigest(tempPath, expectedDigest);
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -527,18 +577,64 @@ namespace GmodAddonManager.Core.Services
             var launcherPath = Path.Combine(
                 Path.GetTempPath(),
                 $"GAM-Update-Launcher-{Guid.NewGuid():N}.ps1");
-            await File.WriteAllTextAsync(
-                launcherPath,
-                BuildInstallerLauncherScript(Process.GetCurrentProcess().Id, tempPath, installerArguments),
-                Encoding.UTF8).ConfigureAwait(false);
-
-            var launcherProcess = Process.Start(CreateInstallerLauncherStartInfo(launcherPath));
-            if (launcherProcess == null)
+            try
             {
-                throw new InvalidOperationException("Failed to start the update installer launcher.");
+                await File.WriteAllTextAsync(
+                    launcherPath,
+                    BuildInstallerLauncherScript(Process.GetCurrentProcess().Id, tempPath, installerArguments),
+                    Encoding.UTF8).ConfigureAwait(false);
+
+                var launcherProcess = Process.Start(CreateInstallerLauncherStartInfo(launcherPath));
+                if (launcherProcess == null)
+                {
+                    throw new InvalidOperationException("Failed to start the update installer launcher.");
+                }
+            }
+            catch
+            {
+                TryDeleteFile(launcherPath);
+                TryDeleteFile(tempPath);
+                throw;
+            }
+        }
+
+        internal static void VerifyDownloadedFileDigest(string filePath, string expectedDigest)
+        {
+            if (!TryNormalizeSha256Digest(expectedDigest, out var expectedHex))
+            {
+                throw new InvalidDataException("A valid SHA-256 release-asset digest is required.");
             }
 
-            Environment.Exit(0);
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var sha256 = SHA256.Create();
+            var actualHex = BitConverter.ToString(sha256.ComputeHash(stream))
+                .Replace("-", string.Empty, StringComparison.Ordinal)
+                .ToLowerInvariant();
+
+            if (!string.Equals(actualHex, expectedHex, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("The downloaded update does not match the GitHub release digest.");
+            }
+        }
+
+        internal static bool TryNormalizeSha256Digest(string? digest, out string normalizedHex)
+        {
+            normalizedHex = string.Empty;
+            const string prefix = "sha256:";
+            if (string.IsNullOrWhiteSpace(digest) ||
+                !digest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var hex = digest.Substring(prefix.Length).Trim();
+            if (hex.Length != 64 || hex.Any(c => !Uri.IsHexDigit(c)))
+            {
+                return false;
+            }
+
+            normalizedHex = hex.ToLowerInvariant();
+            return true;
         }
 
         private static void TryDeleteFile(string path)
@@ -670,6 +766,7 @@ namespace GmodAddonManager.Core.Services
         public string Version { get; set; } = string.Empty;
         public string ReleaseNotes { get; set; } = string.Empty;
         public string DownloadUrl { get; set; } = string.Empty;
+        public string DownloadDigest { get; set; } = string.Empty;
         public DateTime PublishedAt { get; set; }
     }
 
@@ -701,5 +798,8 @@ namespace GmodAddonManager.Core.Services
 
         [JsonProperty("browser_download_url")]
         public string BrowserDownloadUrl { get; set; } = string.Empty;
+
+        [JsonProperty("digest")]
+        public string Digest { get; set; } = string.Empty;
     }
 }

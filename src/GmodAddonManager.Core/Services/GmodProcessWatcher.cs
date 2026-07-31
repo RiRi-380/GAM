@@ -1,34 +1,64 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Management;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace GmodAddonManager.Core.Services
 {
     public class GmodProcessWatcher : IDisposable
     {
-        private const string GMOD_PROCESS_NAME = "hl2";
+        private static readonly string[] GmodProcessNames = { "hl2", "gmod" };
+        private const string GmodWmiFilter =
+            "ProcessName = 'hl2.exe' OR ProcessName = 'gmod.exe'";
+
+        private readonly object lockObject = new object();
+        private readonly Func<IReadOnlyCollection<int>> runningProcessIdProvider;
+        private readonly HashSet<int> runningProcessIds = new HashSet<int>();
         private ManagementEventWatcher? startWatcher;
         private ManagementEventWatcher? stopWatcher;
         private Timer? pollingTimer;
         private bool isGmodRunning;
-        private readonly object lockObject = new object();
 
         public event EventHandler<ProcessEventArgs>? GmodStarted;
         public event EventHandler<ProcessEventArgs>? GmodStopped;
 
-        public bool IsGmodRunning 
-        { 
-            get 
-            { 
-                lock (lockObject) 
-                { 
-                    return isGmodRunning; 
-                } 
-            } 
+        public GmodProcessWatcher()
+            : this(GetRunningGmodProcessIds)
+        {
+        }
+
+        internal GmodProcessWatcher(Func<IReadOnlyCollection<int>> runningProcessIdProvider)
+        {
+            this.runningProcessIdProvider = runningProcessIdProvider ??
+                throw new ArgumentNullException(nameof(runningProcessIdProvider));
+        }
+
+        public bool IsGmodRunning
+        {
+            get
+            {
+                lock (lockObject)
+                {
+                    return isGmodRunning;
+                }
+            }
+        }
+
+        internal static bool IsRecognizedProcessName(string? processName)
+        {
+            if (string.IsNullOrWhiteSpace(processName))
+            {
+                return false;
+            }
+
+            var fileName = Path.GetFileName(processName.Trim());
+            var nameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+            return GmodProcessNames.Any(name =>
+                string.Equals(name, nameWithoutExtension, StringComparison.OrdinalIgnoreCase));
         }
 
         public bool IsNoAddonsActive()
@@ -40,17 +70,244 @@ namespace GmodAddonManager.Core.Services
                     return false;
                 }
 
-                var processes = Process.GetProcessesByName(GMOD_PROCESS_NAME);
+                foreach (var processName in GmodProcessNames)
+                {
+                    var processes = Process.GetProcessesByName(processName);
+                    try
+                    {
+                        foreach (var process in processes)
+                        {
+                            var commandLine = GetProcessCommandLine(process.Id);
+                            if (!string.IsNullOrWhiteSpace(commandLine) &&
+                                commandLine.IndexOf("-noaddons", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        foreach (var process in processes)
+                        {
+                            process.Dispose();
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // This helper is best-effort and does not drive runtime-state writes.
+            }
+
+            return false;
+        }
+
+        public void StartWatching()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                StartPolling();
+                RefreshProcessState();
+                return;
+            }
+
+            try
+            {
+                var startQuery = new WqlEventQuery(
+                    $"SELECT * FROM Win32_ProcessStartTrace WHERE {GmodWmiFilter}");
+                startWatcher = new ManagementEventWatcher(startQuery);
+                startWatcher.EventArrived += OnProcessStarted;
+                startWatcher.Start();
+
+                var stopQuery = new WqlEventQuery(
+                    $"SELECT * FROM Win32_ProcessStopTrace WHERE {GmodWmiFilter}");
+                stopWatcher = new ManagementEventWatcher(stopQuery);
+                stopWatcher.EventArrived += OnProcessStopped;
+                stopWatcher.Start();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[GmodProcessWatcher] WMI setup failed; using polling: {ex.Message}");
+                DisposeWmiWatchers();
+                StartPolling();
+            }
+
+            RefreshProcessState();
+        }
+
+        private void StartPolling()
+        {
+            pollingTimer?.Dispose();
+            pollingTimer = new Timer(
+                _ => RefreshProcessState(),
+                null,
+                TimeSpan.FromSeconds(5),
+                TimeSpan.FromSeconds(5));
+        }
+
+        private void OnProcessStarted(object sender, EventArrivedEventArgs e)
+        {
+            if (TryGetEventProcessId(e, out var processId))
+            {
+                ObserveProcessStarted(processId);
+            }
+            else
+            {
+                RefreshProcessState();
+            }
+        }
+
+        private void OnProcessStopped(object sender, EventArrivedEventArgs e)
+        {
+            if (TryGetEventProcessId(e, out var processId))
+            {
+                ObserveProcessStopped(processId);
+            }
+            else
+            {
+                RefreshProcessState();
+            }
+        }
+
+        internal void ObserveProcessStarted(int processId)
+        {
+            if (processId <= 0)
+            {
+                return;
+            }
+
+            var raiseStarted = false;
+            lock (lockObject)
+            {
+                var wasRunning = runningProcessIds.Count > 0;
+                runningProcessIds.Add(processId);
+                isGmodRunning = runningProcessIds.Count > 0;
+                raiseStarted = !wasRunning && isGmodRunning;
+            }
+
+            if (raiseStarted)
+            {
+                RaiseGmodStarted(processId);
+            }
+        }
+
+        internal void ObserveProcessStopped(int processId)
+        {
+            if (processId <= 0)
+            {
+                return;
+            }
+
+            var raiseStopped = false;
+            lock (lockObject)
+            {
+                var wasRunning = runningProcessIds.Count > 0;
+                runningProcessIds.Remove(processId);
+                isGmodRunning = runningProcessIds.Count > 0;
+                raiseStopped = wasRunning && !isGmodRunning;
+            }
+
+            if (raiseStopped)
+            {
+                RaiseGmodStopped(processId);
+            }
+        }
+
+        internal void RefreshProcessState()
+        {
+            var raiseStarted = false;
+            var raiseStopped = false;
+            var startedProcessId = -1;
+
+            try
+            {
+                lock (lockObject)
+                {
+                    // Keep enumeration and state replacement serialized with WMI events.
+                    // If enumeration fails, the catch deliberately preserves the last
+                    // known state instead of declaring GMod stopped and applying changes.
+                    var snapshot = (runningProcessIdProvider() ?? Array.Empty<int>())
+                        .Where(processId => processId > 0)
+                        .Distinct()
+                        .OrderBy(processId => processId)
+                        .ToArray();
+                    var wasRunning = runningProcessIds.Count > 0;
+
+                    runningProcessIds.Clear();
+                    foreach (var processId in snapshot)
+                    {
+                        runningProcessIds.Add(processId);
+                    }
+
+                    isGmodRunning = runningProcessIds.Count > 0;
+                    raiseStarted = !wasRunning && isGmodRunning;
+                    raiseStopped = wasRunning && !isGmodRunning;
+                    if (raiseStarted)
+                    {
+                        startedProcessId = snapshot[0];
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    $"[GmodProcessWatcher] Process-state refresh failed; preserving previous state: {ex.Message}");
+                return;
+            }
+
+            if (raiseStarted)
+            {
+                RaiseGmodStarted(startedProcessId);
+            }
+            else if (raiseStopped)
+            {
+                RaiseGmodStopped(-1);
+            }
+        }
+
+        private void RaiseGmodStarted(int processId)
+        {
+            GmodStarted?.Invoke(this, new ProcessEventArgs
+            {
+                ProcessId = processId,
+                Timestamp = DateTime.Now
+            });
+        }
+
+        private void RaiseGmodStopped(int processId)
+        {
+            GmodStopped?.Invoke(this, new ProcessEventArgs
+            {
+                ProcessId = processId,
+                Timestamp = DateTime.Now
+            });
+        }
+
+        private static bool TryGetEventProcessId(EventArrivedEventArgs e, out int processId)
+        {
+            processId = -1;
+            try
+            {
+                processId = Convert.ToInt32(e.NewEvent["ProcessID"]);
+                return processId > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static IReadOnlyCollection<int> GetRunningGmodProcessIds()
+        {
+            var processIds = new HashSet<int>();
+            foreach (var processName in GmodProcessNames)
+            {
+                var processes = Process.GetProcessesByName(processName);
                 foreach (var process in processes)
                 {
                     try
                     {
-                        var commandLine = GetProcessCommandLine(process.Id);
-                        if (!string.IsNullOrWhiteSpace(commandLine) &&
-                            commandLine.IndexOf("-noaddons", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            return true;
-                        }
+                        processIds.Add(process.Id);
                     }
                     finally
                     {
@@ -58,156 +315,8 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
             }
-            catch
-            {
-                // Best-effort; ignore failures
-            }
 
-            return false;
-        }
-
-        public GmodProcessWatcher()
-        {
-        }
-
-
-        public void StartWatching()
-        {
-            try
-            {
-                // GmodProcessWatcher.StartWatching called
-                
-                // Check if running in WSL
-                if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux))
-                {
-                    // Running on Linux/WSL, skipping WMI
-                    StartPolling();
-                    return;
-                }
-                
-                // WMI繧､繝吶Φ繝医え繧ｩ繝・メ繝｣繝ｼ縺ｮ險ｭ螳・
-                var startQuery = new WqlEventQuery(
-                    "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'hl2.exe'");
-                startWatcher = new ManagementEventWatcher(startQuery);
-                startWatcher.EventArrived += OnProcessStarted;
-                startWatcher.Start();
-
-                var stopQuery = new WqlEventQuery(
-                    "SELECT * FROM Win32_ProcessStopTrace WHERE ProcessName = 'hl2.exe'");
-                stopWatcher = new ManagementEventWatcher(stopQuery);
-                stopWatcher.EventArrived += OnProcessStopped;
-                stopWatcher.Start();
-
-                // Started WMI-based process monitoring for Gmod
-            }
-            catch (Exception)
-            {
-                // WMI縺御ｽｿ縺医↑縺・ｴ蜷医・繝昴・繝ｪ繝ｳ繧ｰ縺ｫ繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ
-                StartPolling();
-            }
-
-            // 蛻晏屓繝√ぉ繝・け
-            CheckGmodProcess();
-        }
-
-        private void StartPolling()
-        {
-            // 5遘偵＃縺ｨ縺ｫ繝励Ο繧ｻ繧ｹ繧偵メ繧ｧ繝・け
-            pollingTimer = new Timer(
-                _ => CheckGmodProcess(), 
-                null, 
-                TimeSpan.Zero, 
-                TimeSpan.FromSeconds(5));
-            
-        }
-
-        private void OnProcessStarted(object sender, EventArrivedEventArgs e)
-        {
-            lock (lockObject)
-            {
-                if (!isGmodRunning)
-                {
-                    isGmodRunning = true;
-                    var processId = Convert.ToInt32(e.NewEvent["ProcessID"]);
-                    
-                    GmodStarted?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processId,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
-        }
-
-        private void OnProcessStopped(object sender, EventArrivedEventArgs e)
-        {
-            lock (lockObject)
-            {
-                if (isGmodRunning)
-                {
-                    isGmodRunning = false;
-                    var processId = Convert.ToInt32(e.NewEvent["ProcessID"]);
-                    
-                    GmodStopped?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processId,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
-        }
-
-        private void CheckGmodProcess()
-        {
-            try
-            {
-                // CheckGmodProcess called
-                var processes = Process.GetProcessesByName(GMOD_PROCESS_NAME);
-                // Found processes
-                var wasRunning = isGmodRunning;
-
-            lock (lockObject)
-            {
-                isGmodRunning = processes.Any();
-
-                if (!wasRunning && isGmodRunning)
-                {
-                    // Gmod縺瑚ｵｷ蜍輔＠縺・
-                    
-                    GmodStarted?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = processes[0].Id,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-                else if (wasRunning && !isGmodRunning)
-                {
-                    // Gmod縺檎ｵゆｺ・＠縺・
-                    
-                    GmodStopped?.Invoke(this, new ProcessEventArgs 
-                    { 
-                        ProcessId = -1,
-                        Timestamp = DateTime.Now 
-                    });
-                }
-            }
-
-            // 繝励Ο繧ｻ繧ｹ繝上Φ繝峨Ν繧定ｧ｣謾ｾ
-            foreach (var process in processes)
-            {
-                process.Dispose();
-            }
-            }
-            catch (Exception)
-            {
-                // CheckGmodProcess error
-                // In WSL, process monitoring might not work correctly
-                // Default to not running
-                lock (lockObject)
-                {
-                    isGmodRunning = false;
-                }
-            }
+            return processIds.ToArray();
         }
 
         private static string? GetProcessCommandLine(int processId)
@@ -223,27 +332,49 @@ namespace GmodAddonManager.Core.Services
             }
             catch
             {
-                // Ignore command line lookup errors
+                // Ignore command line lookup errors.
             }
 
             return null;
         }
 
-        public void StopWatching()
+        private void DisposeWmiWatchers()
         {
-            
+            DisposeWatcher(ref startWatcher, OnProcessStarted);
+            DisposeWatcher(ref stopWatcher, OnProcessStopped);
+        }
+
+        private static void DisposeWatcher(
+            ref ManagementEventWatcher? watcher,
+            EventArrivedEventHandler handler)
+        {
+            var current = watcher;
+            watcher = null;
+            if (current == null)
+            {
+                return;
+            }
+
             try
             {
-                startWatcher?.Stop();
-                startWatcher?.Dispose();
-                stopWatcher?.Stop();
-                stopWatcher?.Dispose();
-                pollingTimer?.Dispose();
+                current.EventArrived -= handler;
+                current.Stop();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[GmodProcessWatcher] StopWatching cleanup failed: {ex.Message}");
+                Debug.WriteLine($"[GmodProcessWatcher] WMI watcher stop failed: {ex.Message}");
             }
+            finally
+            {
+                current.Dispose();
+            }
+        }
+
+        public void StopWatching()
+        {
+            DisposeWmiWatchers();
+            var timer = Interlocked.Exchange(ref pollingTimer, null);
+            timer?.Dispose();
         }
 
         public void Dispose()

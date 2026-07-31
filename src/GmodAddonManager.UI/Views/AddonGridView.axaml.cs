@@ -19,16 +19,12 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 {
     private Point? _dragStartPoint;
     private bool _isDragging;
-    private double _lastScrollOffset;
     private int _lastStartIndex = -1;
     private int _lastEndIndex = -1;
-    private bool _scrollExceptionLogged;
     private bool _viewportExceptionLogged;
 
-    private IDisposable? _scrollOffsetSubscription;
     private CancellationTokenSource? _scrollIdleCts;
     private ItemsRepeater? _itemsRepeater;
-    private ComboBox? _stateChangeComboBox;
 
     public AddonGridView()
     {
@@ -48,18 +44,6 @@ public sealed partial class AddonGridView : UserControl, IDisposable
             return;
         }
 
-        _scrollOffsetSubscription?.Dispose();
-        _scrollOffsetSubscription = null;
-
-        var scrollViewer = this.FindControl<ScrollViewer>("AddonScrollViewer");
-        if (scrollViewer != null)
-        {
-            _scrollOffsetSubscription = scrollViewer
-                .GetObservable(ScrollViewer.OffsetProperty)
-                .Throttle(TimeSpan.FromMilliseconds(50))
-                .Subscribe(_ => OnScrollChanged());
-        }
-
         if (_itemsRepeater != null)
         {
             _itemsRepeater.EffectiveViewportChanged -= OnEffectiveViewportChanged;
@@ -72,37 +56,6 @@ public sealed partial class AddonGridView : UserControl, IDisposable
             _itemsRepeater.EffectiveViewportChanged += OnEffectiveViewportChanged;
         }
 
-        if (_stateChangeComboBox != null)
-        {
-            _stateChangeComboBox.SelectionChanged -= OnStateChangeComboBoxSelectionChanged;
-            _stateChangeComboBox = null;
-        }
-
-        _stateChangeComboBox = this.FindControl<ComboBox>("StateChangeComboBox");
-        if (_stateChangeComboBox != null)
-        {
-            _stateChangeComboBox.SelectionChanged += OnStateChangeComboBoxSelectionChanged;
-        }
-    }
-
-    private async void OnStateChangeComboBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        try
-        {
-            if (sender is ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
-            {
-                var action = item.Content?.ToString();
-                if (!string.IsNullOrWhiteSpace(action) && DataContext is AddonGridViewModel vm)
-                {
-                    await vm.ChangeSelectedAddonStateCommand.Execute(action);
-                    comboBox.SelectedIndex = -1;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            SafeFileLogger.TryLogException("AddonGridView.OnStateChangeComboBoxSelectionChanged", ex);
-        }
     }
 
     private void OnAddonPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -217,37 +170,6 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("AddonGridView.OnAddonDoubleTapped", ex);
-        }
-    }
-
-    private void OnScrollChanged()
-    {
-        try
-        {
-            if (DataContext is not AddonGridViewModel)
-            {
-                return;
-            }
-
-            var scrollViewer = this.FindControl<ScrollViewer>("AddonScrollViewer");
-            if (scrollViewer == null)
-            {
-                return;
-            }
-
-            var currentOffset = scrollViewer.Offset.Y;
-            if (Math.Abs(currentOffset - _lastScrollOffset) > 10)
-            {
-                _lastScrollOffset = currentOffset;
-            }
-        }
-        catch (Exception ex)
-        {
-            if (!_scrollExceptionLogged)
-            {
-                _scrollExceptionLogged = true;
-                SafeFileLogger.TryLogException("AddonGridView.OnScrollChanged", ex);
-            }
         }
     }
 
@@ -375,19 +297,10 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
     public void Dispose()
     {
-        _scrollOffsetSubscription?.Dispose();
-        _scrollOffsetSubscription = null;
-
         if (_itemsRepeater != null)
         {
             _itemsRepeater.EffectiveViewportChanged -= OnEffectiveViewportChanged;
             _itemsRepeater = null;
-        }
-
-        if (_stateChangeComboBox != null)
-        {
-            _stateChangeComboBox.SelectionChanged -= OnStateChangeComboBoxSelectionChanged;
-            _stateChangeComboBox = null;
         }
 
         _scrollIdleCts?.Cancel();

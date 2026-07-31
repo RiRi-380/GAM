@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using Newtonsoft.Json;
@@ -69,6 +70,7 @@ public sealed class StartupPathRecoveryTests
 
         Assert.True(decision.ShouldPrompt);
         Assert.True(decision.HasDetectedCandidate);
+        Assert.Equal(StartupPathRecoveryReason.RecordedPathMissing, decision.Reason);
         Assert.Equal(currentEnv.GmodInstallPath, decision.DetectedGmodInstallPath);
         Assert.Equal(currentEnv.WorkshopRootPath, decision.DetectedWorkshopRootPath);
     }
@@ -89,6 +91,7 @@ public sealed class StartupPathRecoveryTests
 
         Assert.True(decision.ShouldPrompt);
         Assert.True(decision.HasDetectedCandidate);
+        Assert.Equal(StartupPathRecoveryReason.RecordedPathChanged, decision.Reason);
         Assert.Equal(oldEnv.GmodInstallPath, decision.PreviousGmodInstallPath);
         Assert.Equal(oldEnv.WorkshopRootPath, decision.PreviousWorkshopRootPath);
         Assert.Equal(currentEnv.GmodInstallPath, decision.DetectedGmodInstallPath);
@@ -96,7 +99,7 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
-    public void StartupPathRecoveryEvaluator_PromptsForLegacyConfigWithStaleMetadataPath()
+    public void StartupPathRecoveryEvaluator_DoesNotTreatLegacyMetadataAsARecordedInstallPath()
     {
         using var oldEnv = new TestSteamLayout();
         using var currentEnv = new TestSteamLayout();
@@ -106,10 +109,10 @@ public sealed class StartupPathRecoveryTests
 
         var decision = StartupPathRecoveryEvaluator.Evaluate(config, currentEnv.CreateSnapshot());
 
-        Assert.True(decision.ShouldPrompt);
+        Assert.False(decision.ShouldPrompt);
         Assert.True(decision.HasDetectedCandidate);
         Assert.Null(decision.PreviousGmodInstallPath);
-        Assert.Equal(oldEnv.WorkshopRootPath, decision.PreviousWorkshopRootPath);
+        Assert.Null(decision.PreviousWorkshopRootPath);
         Assert.Equal(currentEnv.GmodInstallPath, decision.DetectedGmodInstallPath);
         Assert.Equal(currentEnv.WorkshopRootPath, decision.DetectedWorkshopRootPath);
     }
@@ -127,20 +130,23 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
-    public void StartupPathRecoveryEvaluator_PromptsForUnconfirmedExistingConfig()
+    public void StartupPathRecoveryEvaluator_DoesNotPromptForLegacyInventoryWithoutRecordedPaths()
     {
         using var env = new TestSteamLayout();
-        var config = new Configuration();
-        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(env.WorkshopRootPath, "123"));
+        var config = new Configuration { SchemaVersion = 1 };
+        for (var i = 1; i <= 1021; i++)
+        {
+            var addonId = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            config.AddonMetadata[addonId] = new WorkshopAddon(
+                addonId,
+                Path.Combine(env.WorkshopRootPath, addonId));
+        }
 
-        var decision = StartupPathRecoveryEvaluator.Evaluate(
-            config,
-            env.CreateSnapshot(),
-            promptForUnconfirmedExistingConfig: true);
+        var decision = StartupPathRecoveryEvaluator.Evaluate(config, env.CreateSnapshot());
 
-        Assert.True(decision.ShouldPrompt);
+        Assert.False(decision.ShouldPrompt);
         Assert.True(decision.HasDetectedCandidate);
-        Assert.Equal("Confirm the Garry's Mod and Workshop paths GAM should use.", decision.Reason);
+        Assert.Equal(StartupPathRecoveryReason.None, decision.Reason);
         Assert.Equal(env.GmodInstallPath, decision.DetectedGmodInstallPath);
         Assert.Equal(env.WorkshopRootPath, decision.DetectedWorkshopRootPath);
     }
@@ -155,7 +161,6 @@ public sealed class StartupPathRecoveryTests
         var decision = StartupPathRecoveryEvaluator.Evaluate(
             config,
             env.CreateSnapshot(),
-            promptForUnconfirmedExistingConfig: true,
             confirmedGmodInstallPath: env.GmodInstallPath,
             confirmedWorkshopRootPath: env.WorkshopRootPath);
 
@@ -173,12 +178,117 @@ public sealed class StartupPathRecoveryTests
         var decision = StartupPathRecoveryEvaluator.Evaluate(
             config,
             currentEnv.CreateSnapshot(),
-            promptForUnconfirmedExistingConfig: true,
             confirmedGmodInstallPath: oldEnv.GmodInstallPath,
             confirmedWorkshopRootPath: oldEnv.WorkshopRootPath);
 
         Assert.True(decision.ShouldPrompt);
         Assert.True(decision.HasDetectedCandidate);
+        Assert.Equal(StartupPathRecoveryReason.RecordedPathChanged, decision.Reason);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_PromptsWhenExistingInventoryHasUnreadableWorkshopCandidate()
+    {
+        using var env = new TestSteamLayout();
+        var config = new Configuration { SchemaVersion = 1 };
+        config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(env.WorkshopRootPath, "123"));
+        var snapshot = env.CreateSnapshot();
+        snapshot.ActiveWorkshopRoot = new WorkshopRootCandidate
+        {
+            RootPath = Path.Combine(env.LibraryPath, "missing-workshop-root"),
+            Confidence = PathCandidateConfidence.Low
+        };
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(config, snapshot);
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.False(decision.HasDetectedCandidate);
+        Assert.Equal(StartupPathRecoveryReason.WorkshopPathUnavailable, decision.Reason);
+        Assert.Null(decision.DetectedWorkshopRootPath);
+    }
+
+    [Fact]
+    public void StartupPathRecoveryEvaluator_IdentifiesWorkshopWhenOnlyConfiguredWorkshopIsUnreadable()
+    {
+        using var env = new TestSteamLayout();
+        var config = new Configuration { SchemaVersion = 1 };
+        config.AddonMetadata["123"] = new WorkshopAddon(
+            "123",
+            Path.Combine(env.WorkshopRootPath, "123"));
+        var missingWorkshopRoot = Path.Combine(env.LibraryPath, "missing-workshop-root");
+        var snapshot = env.CreateSnapshot();
+        snapshot.ActiveWorkshopRoot = new WorkshopRootCandidate
+        {
+            RootPath = missingWorkshopRoot,
+            Confidence = PathCandidateConfidence.Rejected
+        };
+
+        var decision = StartupPathRecoveryEvaluator.Evaluate(
+            config,
+            snapshot,
+            configuredGmodInstallPath: env.GmodInstallPath,
+            configuredWorkshopRootPath: missingWorkshopRoot);
+
+        Assert.True(decision.ShouldPrompt);
+        Assert.Equal(StartupPathRecoveryReason.WorkshopPathUnavailable, decision.Reason);
+        Assert.Equal(env.GmodInstallPath, decision.DetectedGmodInstallPath);
+        Assert.Null(decision.DetectedWorkshopRootPath);
+    }
+
+    [Fact]
+    public void PathOverrideResolver_RejectsDanglingWorkshopJunction()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "gam-dangling-junction-test-" + Guid.NewGuid().ToString("N"));
+        var junction = Path.Combine(root, "4000");
+        var missingTarget = Path.Combine(root, "missing-target");
+        var gmodInstall = Path.Combine(root, "GarrysMod");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(gmodInstall, "garrysmod"));
+        try
+        {
+            var startInfo = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add("mklink");
+            startInfo.ArgumentList.Add("/J");
+            startInfo.ArgumentList.Add(junction);
+            startInfo.ArgumentList.Add(missingTarget);
+
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            process.WaitForExit();
+            Assert.True(
+                process.ExitCode == 0,
+                $"Could not create test junction: {process.StandardError.ReadToEnd()}");
+            Assert.True(Directory.Exists(junction));
+            Assert.False(PathOverrideResolver.IsDirectoryUsable(junction));
+            Assert.False(
+                PathOverrideResolver.TryCreateSnapshot(gmodInstall, junction, out _, out var error));
+            Assert.Contains("unreadable", error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(junction))
+            {
+                Directory.Delete(junction);
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -208,8 +318,9 @@ public sealed class StartupPathRecoveryTests
         try
         {
             var config = new Configuration();
-            var asset = new Asset("Recovered Asset") { Enabled = true };
-            asset.AddAddon("123", AddonState.Excluded);
+            var asset = new Asset("Recovered Asset");
+            asset.AddAddon("123");
+            asset.SetWholeState(AddonState.Excluded);
             config.Assets.Add(asset);
             config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(oldEnv.WorkshopRootPath, "123"));
             PathHealthService.UpdatePathState(
@@ -229,6 +340,7 @@ public sealed class StartupPathRecoveryTests
                 CustomWorkshopPath = currentEnv.WorkshopRootPath,
                 DisableMode = DisableMode.Soft,
                 DisableCacheScan = true,
+                CustomWorkshopCacheFilePaths = [currentEnv.WorkshopManifestPath],
                 ScanCacheTtl = TimeSpan.Zero
             });
             manager.StateMatchTimeout = TimeSpan.Zero;
@@ -262,8 +374,9 @@ public sealed class StartupPathRecoveryTests
         try
         {
             var config = new Configuration();
-            var asset = new Asset("Legacy Asset") { Enabled = true };
-            asset.AddAddon("123", AddonState.Excluded);
+            var asset = new Asset("Legacy Asset");
+            asset.AddAddon("123");
+            asset.SetWholeState(AddonState.Excluded);
             config.Assets.Add(asset);
             config.AddonMetadata["123"] = new WorkshopAddon("123", Path.Combine(oldEnv.WorkshopRootPath, "123"));
             File.WriteAllText(
@@ -278,6 +391,7 @@ public sealed class StartupPathRecoveryTests
                 CustomWorkshopPath = currentEnv.WorkshopRootPath,
                 DisableMode = DisableMode.Soft,
                 DisableCacheScan = true,
+                CustomWorkshopCacheFilePaths = [currentEnv.WorkshopManifestPath],
                 ScanCacheTtl = TimeSpan.Zero
             });
             manager.StateMatchTimeout = TimeSpan.Zero;
@@ -322,13 +436,16 @@ public sealed class StartupPathRecoveryTests
             Directory.CreateDirectory(WorkshopRootPath);
             Directory.CreateDirectory(Path.Combine(LibraryPath, "steamapps", "workshop"));
             File.WriteAllText(Path.Combine(LibraryPath, "steamapps", "appmanifest_4000.acf"), BuildAppManifest());
-            File.WriteAllText(Path.Combine(LibraryPath, "steamapps", "workshop", "appworkshop_4000.acf"), "\"AppWorkshop\"{}");
+            WorkshopManifestPath = WorkshopManifestTestData.Write(
+                Path.Combine(LibraryPath, "steamapps", "workshop"),
+                "123");
             WritePayload(Path.Combine(WorkshopRootPath, "123"));
         }
 
         public string LibraryPath { get; }
         public string GmodInstallPath { get; }
         public string WorkshopRootPath { get; }
+        public string WorkshopManifestPath { get; }
 
         public PathSnapshot CreateSnapshot()
         {

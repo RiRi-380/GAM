@@ -32,10 +32,12 @@ namespace GmodAddonManager.Core.Services
             // スタックサイズ制限
             while (undoStack.Count > MaxUndoStackSize)
             {
-                var removed = undoStack.ToArray()[undoStack.Count - 1];
-                var newStack = new Stack<UndoAction>(undoStack.Take(undoStack.Count - 1).Reverse());
+                var retainedActions = undoStack
+                    .Take(MaxUndoStackSize)
+                    .Reverse()
+                    .ToList();
                 undoStack.Clear();
-                foreach (var item in newStack)
+                foreach (var item in retainedActions)
                 {
                     undoStack.Push(item);
                 }
@@ -149,6 +151,41 @@ namespace GmodAddonManager.Core.Services
         public void Clear()
         {
             undoStack.Clear();
+        }
+
+        public bool RemoveAction(UndoAction? action)
+        {
+            if (action == null)
+            {
+                return false;
+            }
+
+            var newestFirst = undoStack.ToList();
+            var index = newestFirst.FindIndex(item =>
+                ReferenceEquals(item, action) ||
+                string.Equals(item.Id, action.Id, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                return false;
+            }
+
+            newestFirst.RemoveAt(index);
+            RestoreHistory(newestFirst);
+            return true;
+        }
+
+        public void RestoreHistory(IEnumerable<UndoAction>? newestFirst)
+        {
+            undoStack.Clear();
+            if (newestFirst == null)
+            {
+                return;
+            }
+
+            foreach (var action in newestFirst.Reverse())
+            {
+                undoStack.Push(action);
+            }
         }
     }
 }

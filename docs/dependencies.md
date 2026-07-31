@@ -1,9 +1,10 @@
 ﻿# Dependencies
 
 ## Core (netstandard2.1)
-- Microsoft.Data.Sqlite (8.0.0): SQLite provider used for the Workshop metadata cache (workshop.db).
-- Newtonsoft.Json (13.0.3): JSON serialization/deserialization for metadata, settings, and cache payloads.
-- Polly (8.2.0): Transient-fault handling (retry/backoff) for network and IO operations.
+- Microsoft.Data.Sqlite (8.0.29): SQLite provider used for the Workshop metadata cache (workshop.db).
+- SQLitePCLRaw.bundle_e_sqlite3 (2.1.12): Native SQLite bundle pinned above the versions affected by GHSA-2m69-gcr7-jv3q.
+- Newtonsoft.Json (13.0.4): JSON serialization/deserialization for metadata, settings, and cache payloads.
+- Polly (8.6.5): Transient-fault handling (retry/backoff) for network and IO operations.
 - SkiaSharp (2.88.8): Image decode/resize/crop for Workshop thumbnails and previews.
 - Microsoft.Win32.Registry (5.0.0): Registry access for Steam path detection on Windows.
 - System.Management (5.0.0): WMI queries for system/process/drive discovery.
@@ -31,10 +32,10 @@
 - Patch/minor updates: apply in small batches, prioritizing `Newtonsoft.Json`, `System.Reactive`, and Avalonia ecosystem packages.
 - Major updates and framework migration: execute in dedicated hardening branch with UI smoke/regression passes.
 
-## Outdated snapshot
-- Snapshot date: 2026-05-06
+## Dependency audit snapshot
+- Snapshot date: 2026-07-31
 - Command:
-  - `dotnet list src/GmodAddonManager.UI/GmodAddonManager.UI.csproj package --outdated --include-transitive`
+  - `dotnet list GmodAddonManager.sln package --include-transitive --vulnerable`
 - Status:
   - No known vulnerable packages.
-  - Multiple outdated packages remain (mainly Avalonia stack and transitive runtime dependencies).
+  - `Microsoft.Data.Sqlite` stays on the supported 8.0 patch line for `netstandard2.1` compatibility; native SQLite is pinned explicitly so NuGet cannot resolve the older vulnerable transitive version.

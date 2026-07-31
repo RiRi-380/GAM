@@ -2,8 +2,6 @@ using GmodAddonManager.Core.Services;
 using GmodAddonManager.Core.Models;
 using ReactiveUI;
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -39,7 +37,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private int busyProgressCurrent = 0;
     private int busyProgressTotal = 0;
     private bool isBusyProgressIndeterminate = true;
-    private bool isDisableManifestImportEnabled;
     private bool startupUpdateCheckStarted;
     private readonly CompositeDisposable subscriptions = new();
 
@@ -66,18 +63,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         // 繧ｳ繝槭Φ繝峨・蛻晄悄蛹・
         RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAddonsAsync(showProgress: true));
         UndoCommand = ReactiveCommand.CreateFromTask(UndoLastActionAsync);
-        MigrateAddonsCommand = ReactiveCommand.CreateFromTask(MigrateAddonsAsync);
-        ResetAllStatesCommand = ReactiveCommand.CreateFromTask(ResetAllStatesAsync);
+        AllOffCommand = ReactiveCommand.CreateFromTask(AllOffAsync);
         OpenSettingsCommand = ReactiveCommand.CreateFromTask(OpenSettingsAsync);
-        ImportDisableManifestCommand = ReactiveCommand.CreateFromTask(ImportDisableManifestAsync);
         ResetManagerCommand = ReactiveCommand.CreateFromTask(ResetManagerAsync);
-        RestoreOriginalCommand = ReactiveCommand.CreateFromTask(RestoreOriginalAsync);
-        IsDisableManifestImportEnabled = AppSettings.Load().EnableDisableManifestImport;
 
         // 讀懃ｴ｢讖溯・縺ｮ螳溯｣・
         this.WhenAnyValue(x => x.SearchText)
-            .Throttle(TimeSpan.FromMilliseconds(300))
             .DistinctUntilChanged()
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(text => 
             {
                 AddonGridViewModel.FilterText = text;
@@ -163,7 +156,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             var currentVersion = GetCurrentVersion();
             var updateService = CreateUpdateService(currentVersion);
             
-            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: true);
+            var updateResult = await updateService.CheckForUpdateAsync(forceCheck: false);
             if (updateResult.Status == UpdateCheckStatus.UpdateAvailable && updateResult.UpdateInfo != null)
             {
                 // 繧｢繝・・繝・・繝医ム繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
@@ -296,12 +289,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     public ReactiveCommand<Unit, Unit> UndoCommand { get; }
-    public ReactiveCommand<Unit, Unit> MigrateAddonsCommand { get; }
-    public ReactiveCommand<Unit, Unit> ResetAllStatesCommand { get; }
+    public ReactiveCommand<Unit, Unit> AllOffCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
-    public ReactiveCommand<Unit, Unit> ImportDisableManifestCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetManagerCommand { get; }
-    public ReactiveCommand<Unit, Unit> RestoreOriginalCommand { get; }
     
     public bool CanUndo
     {
@@ -315,12 +305,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         private set => SetAndRaise(ref addonStatistics, value);
     }
 
-    public bool IsDisableManifestImportEnabled
-    {
-        get => isDisableManifestImportEnabled;
-        private set => SetAndRaise(ref isDisableManifestImportEnabled, value);
-    }
-
     public async Task InitializeAsync()
     {
         try
@@ -328,33 +312,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 #if DEBUG
             // MainWindowViewModel.InitializeAsync started
 #endif
-            
-            // Check if this is first run (no config exists)
-            var config = addonManager.GetConfiguration();
-            bool isFirstRun = config.AddonMetadata.Count == 0;
-            
-            if (isFirstRun)
-            {
-                // Show initial loading window
-                await ShowInitialLoadingWindow();
-            }
-            else
-            {
-                // Normal initialization
-#if DEBUG
-                // Calling ScanWorkshopFolderAsync from MainWindowViewModel
-#endif
-                await addonManager.ScanWorkshopFolderAsync();
-                
-                // Check for new addons after normal initialization
-                await CheckForNewAddons();
-            }
-            
+
+            // AddonManager is initialized once by App. The grid load owns the single
+            // startup workshop scan and updates the configuration before assets render.
+            await AddonGridViewModel.LoadAddonsAsync();
+
             // ViewModel繧貞・譛溷喧
             AssetListViewModel.LoadAssets();
-            
-            // 繧｢繝峨が繝ｳ繧偵Ο繝ｼ繝会ｼ医い繧ｻ繝・ヨ驕ｸ謚槫燕縺ｫ繝・・繧ｿ繧呈ｺ門ｙ・・
-            await AddonGridViewModel.LoadAddonsAsync();
             
             // 繝・ヵ繧ｩ繝ｫ繝医い繧ｻ繝・ヨ繧帝∈謚橸ｼ・ubscribe Asset繧帝∈謚橸ｼ・
             var subscribeAsset = AssetListViewModel.Assets.FirstOrDefault(a => a.Id == "subscribe-system-asset");
@@ -377,8 +341,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け繧帝幕蟋・
         
-            // 襍ｷ蜍墓凾縺ｫ繧ｳ繝ｬ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蟄伜惠遒ｺ隱・
-            _ = CheckCollectionExistenceAsync();
         }
         catch (Exception ex)
         {
@@ -386,31 +348,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Format("Error.InitializationFailed", ex.Message));
         }
     }
-    
-    private async Task ShowInitialLoadingWindow()
+
+    public void RefreshActualStateFromRuntime()
     {
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        if (!isInitialized)
         {
-            if (desktop.MainWindow == null)
-            {
-                return;
-            }
-            var loadingWindow = new InitialLoadingWindow(addonManager);
-            await loadingWindow.ShowDialog(desktop.MainWindow);
+            return;
         }
-    }
-    
-    private async Task CheckForNewAddons()
-    {
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
-        {
-            if (desktop.MainWindow == null)
-            {
-                return;
-            }
-            var checkWindow = new NewAddonCheckWindow(addonManager);
-            await checkWindow.ShowDialog(desktop.MainWindow);
-        }
+
+        // ApplyFilter refreshes each card from CaptureState(). This is deliberately
+        // read-only: focus recovery must accept GMod-side changes without reconciling.
+        AddonGridViewModel.ApplyFilter();
     }
 
     public async Task RefreshAddonsAsync(bool rescanWorkshop = true, bool showProgress = false)
@@ -431,12 +379,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 progressDialog?.SetIndeterminate();
             }
 
-            if (rescanWorkshop)
-            {
-                // 繧ｳ繝ｬ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ蟄伜惠遒ｺ隱・
-                await CheckCollectionExistenceAsync();
-            }
-            
             // UI縺ｨ繧｢繝峨が繝ｳ縺ｮ迥ｶ諷九ｒ蜀崎ｪｭ縺ｿ霎ｼ縺ｿ
             AssetListViewModel.LoadAssets();
             
@@ -444,8 +386,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             var appliedSelection = false;
             if (!string.IsNullOrEmpty(currentAssetId))
             {
-                var asset = AssetListViewModel.Assets.FirstOrDefault(a => a.Id == currentAssetId) 
-                          ?? AssetListViewModel.JunctionAsset.FirstOrDefault(a => a.Id == currentAssetId);
+                var asset = AssetListViewModel.Assets.FirstOrDefault(a => a.Id == currentAssetId);
                 if (asset != null)
                 {
                     AssetListViewModel.SelectedAsset = asset;
@@ -462,6 +403,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             if (rescanWorkshop)
             {
+                addonManager.InvalidateWorkshopScanCache();
                 await AddonGridViewModel.LoadAddonsAsync();
             }
             else if (!appliedSelection)
@@ -484,91 +426,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
     
-    private async Task CheckCollectionExistenceAsync()
-    {
-        try
-        {
-            var workshopService = addonManager.GetSteamWorkshopService();
-            if (workshopService == null)
-            {
-                return;
-            }
-                
-            var config = addonManager.GetConfiguration();
-            bool hasChanges = false;
-            
-            foreach (var asset in config.Assets)
-            {
-                if (!string.IsNullOrEmpty(asset.WorkshopCollectionId))
-                {
-                    var lookupResult = await workshopService.GetCollectionDetailsWithStatusAsync(asset.WorkshopCollectionId);
-                    if (lookupResult.Status == WorkshopCollectionLookupStatus.NotFound)
-                    {
-                        // 繧ｳ繝ｬ繧ｯ繧ｷ繝ｧ繝ｳ縺悟ｭ伜惠縺励↑縺・ｴ蜷医・蜈ｬ髢狗憾諷九ｒ隗｣髯､
-                        asset.WorkshopCollectionId = null;
-                        asset.AutoUpdateCollection = false;
-                        hasChanges = true;
-                    }
-                }
-            }
-            
-            if (hasChanges)
-            {
-                await addonManager.SaveConfigurationAsync();
-                
-                // UI縺ｮ譖ｴ譁ｰ繧偵Γ繧､繝ｳ繧ｹ繝ｬ繝・ラ縺ｧ螳溯｡・
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    AssetListViewModel.LoadAssets();
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            // Collection existence check failed: {ex.Message}
-        }
-    }
-    
     private void UpdateAddonStatistics()
     {
         try
         {
             var config = addonManager.GetConfiguration();
-            int totalAddons = config.AddonMetadata.Count;
-            int enabledAddons = 0;
-            int disabledAddons = 0;
-            
-            // 蜷・い繧ｻ繝・ヨ縺ｮ繧｢繝峨が繝ｳ迥ｶ諷九ｒ髮・ｨ・
-            foreach (var asset in config.Assets)
-            {
-                if (addonManager.DisableMode == DisableMode.Hard && asset.Id == "junction-system-asset")
-                {
-                    disabledAddons += asset.Addons.Count;
-                }
-                else if (asset.Enabled)
-                {
-                    // 譛牙柑縺ｪ繧｢繧ｻ繝・ヨ蜀・・繧｢繝峨が繝ｳ縺ｧ縲・xcluded縺ｧ縺ｪ縺・ｂ縺ｮ繧偵き繧ｦ繝ｳ繝・
-                    foreach (var addonId in asset.Addons)
-                    {
-                        var state = asset.AddonStates.ContainsKey(addonId) 
-                            ? asset.AddonStates[addonId] 
-                            : asset.DefaultAddonState;
-                        
-                        if (state != AddonState.Excluded)
-                        {
-                            enabledAddons++;
-                        }
-                    }
-                }
-            }
-            
-            // 驥崎､・ｒ髯､蜴ｻ・郁､・焚繧｢繧ｻ繝・ヨ縺ｫ蜷ｫ縺ｾ繧後ｋ繧｢繝峨が繝ｳ繧定・・・・
-            enabledAddons = Math.Min(enabledAddons, totalAddons - disabledAddons);
-
             var finalStates = addonManager.GetFinalAddonStates();
-            totalAddons = finalStates.Count;
-            enabledAddons = finalStates.Count(kvp => kvp.Value);
-            disabledAddons = finalStates.Count(kvp => !kvp.Value);
+            var totalAddons = finalStates.Count;
+            var enabledAddons = finalStates.Count(kvp => kvp.Value);
+            var disabledAddons = finalStates.Count(kvp => !kvp.Value);
             
             // 繝輔ぃ繧､繝ｫ繧ｵ繧､繧ｺ繧定ｨ育ｮ・
             long totalSize = 0;
@@ -580,7 +446,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             // 繧ｵ繧､繧ｺ繧剃ｺｺ髢薙′隱ｭ縺ｿ繧・☆縺・ｽ｢蠑上↓螟画鋤
             string sizeText = FormatFileSize(totalSize);
             
-            AddonStatistics = $"{L.Get("Status.TotalAddons")}: {totalAddons} | {L.Get("Status.Enabled")}: {enabledAddons} | {L.Get("Status.Disabled")}: {disabledAddons} | {L.Get("Status.TotalSize")}: {sizeText}";
+            var statistics =
+                $"{L.Get("Status.TotalAddons")}: {totalAddons} | " +
+                $"{L.Get("Status.Enabled")}: {enabledAddons} | " +
+                $"{L.Get("Status.Disabled")}: {disabledAddons} | " +
+                $"{L.Get("Status.TotalSize")}: {sizeText}";
+            AddonStatistics = addonManager.PendingDownloadCount > 0
+                ? $"{L.Format("Status.SteamDownloadPending", addonManager.PendingDownloadCount)} | {statistics}"
+                : statistics;
         }
         catch (Exception ex)
         {
@@ -857,267 +730,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             _ => state.ToString()
         };
     }
-    
-    private async Task MigrateAddonsAsync()
+
+    private async Task AllOffAsync()
     {
         try
         {
-            var dialogService = new DialogService();
-            
-            // 荳谺｡遒ｺ隱・
-            var confirmed = await dialogService.ShowConfirmAsync(L.Get("Warning.Title"), 
-                L.Get("Warning.ManualMigration"));
-            
-            if (!confirmed)
-            {
-                return;
-            }
-            
-            // 莠梧ｬ｡遒ｺ隱・
-            var confirmed2 = await dialogService.ShowConfirmAsync(L.Get("Confirm.FinalConfirmation"), 
-                L.Get("Confirm.ManualMigrationFinal"));
-            
-            if (!confirmed2)
-            {
-                return;
-            }
-            
-            // logger.LogInformation("Starting manual migration process"); // Removed logging
-            
-            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
                 : null;
             using var progressDialog = ProgressDialogService.Show(
                 mainWindow,
-                L.Get("Busy.MigratingAddons"));
+                L.Get("MainWindow.AllOff"),
+                L.Get("Busy.UpdatingAddonStates"));
             progressDialog?.SetIndeterminate();
 
-            // 遘ｻ陦悟・逅・ｒ螳溯｡・
-            await addonManager.MigrateExistingAddonsAsync();
-            
-            // 繧｢繝峨が繝ｳ諠・ｱ繧貞・隱ｭ縺ｿ霎ｼ縺ｿ
-            progressDialog?.UpdateStatus(L.Get("Busy.RefreshingAddons"));
-            progressDialog?.UpdateDetail(L.Get("Busy.ScanningWorkshop"));
-            await RefreshAddonsAsync(showProgress: false);
-            
-            progressDialog?.Close();
-            await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-                L.Get("Success.MigrationComplete"));
-                
-            // logger.LogInformation("Manual migration process completed"); // Removed logging
+            await addonManager.SetAllOffAsync();
+            AssetListViewModel.LoadAssets();
+            await AddonGridViewModel.LoadAddonsAsync();
+            UpdateUndoState();
         }
         catch (Exception ex)
         {
-            // logger.LogError("Failed to run manual migration", ex); // Removed logging
-            var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), 
-                L.Get("Error.MigrationFailed"));
-        }
-    }
-    
-    private async Task ResetAllStatesAsync()
-    {
-        try
-        {
-            var dialogService = new DialogService();
-            
-            // 驕ｸ謚槭ム繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
-            var choiceDialog = new ResetChoiceDialog();
-            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
-                ? desktop.MainWindow
-                : null;
-                
-            if (mainWindow == null)
-            {
-                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
-                return;
-            }
-            
-            await choiceDialog.ShowDialog(mainWindow);
-            
-            if (choiceDialog.Result == ResetChoiceDialog.ResetChoice.Cancel)
-            {
-                return;
-            }
-            
-            // 驕ｸ謚槭↓蠢懊§縺ｦ蜃ｦ逅・ｒ蛻・ｲ・
-            if (choiceDialog.Result == ResetChoiceDialog.ResetChoice.ResetAll)
-            {
-                await ResetAllAddonsStatesAsync();
-            }
-            else if (choiceDialog.Result == ResetChoiceDialog.ResetChoice.ResetCurrentOnly)
-            {
-                await ResetCurrentAssetStatesAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), 
-                L.Get("Error.ResetFailed"));
-        }
-    }
-    
-    private async Task ResetAllAddonsStatesAsync()
-    {
-        var dialogService = new DialogService();
-        
-        // 荳谺｡遒ｺ隱・
-        var confirmed = await dialogService.ShowConfirmAsync(L.Get("Warning.Title"), 
-            addonManager.DisableMode == DisableMode.Hard
-                ? L.Get("Warning.ResetAllStates")
-                : L.Get("Warning.ResetAllStatesSoft"));
-        
-        if (!confirmed)
-        {
-            return;
-        }
-        
-        // 莠梧ｬ｡遒ｺ隱・
-        var confirmed2 = await dialogService.ShowConfirmAsync(L.Get("Confirm.FinalConfirmation"), 
-            L.Get("Confirm.ResetAllStatesFinal"));
-        
-        if (!confirmed2)
-        {
-            return;
-        }
-        
-        // 繝ｪ繧ｻ繝・ヨ蜃ｦ逅・ｒ螳溯｡・
-        var config = addonManager.GetConfiguration();
-        int resetCount = 0;
-        
-        // 蜈ｨ繧｢繧ｻ繝・ヨ縺ｮ迥ｶ諷九ｒ繝ｪ繧ｻ繝・ヨ
-        foreach (var asset in config.Assets)
-        {
-            resetCount += asset.AddonStates.Count;
-            asset.AddonStates.Clear();
-            asset.DefaultAddonState = AddonState.Enabled;
-
-            if (asset.Id != "junction-system-asset")
-            {
-                asset.Enabled = true;
-            }
-        }
-
-        // 迥ｶ諷九ｒ譖ｴ譁ｰ・医ず繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ縺ｮ菴懈・/蜑企勁繧貞ｮ溯｡鯉ｼ・
-        var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
-            ? desktop.MainWindow
-            : null;
-        using var progressDialog = ProgressDialogService.Show(
-            mainWindow,
-            L.Get("Busy.UpdatingAddonStates"),
-            L.Format("Busy.Detail.AddonCount", resetCount));
-        await addonManager.UpdateAddonStatesAsync(progressDialog?.CreateProgress());
-        
-        // 險ｭ螳壹ｒ菫晏ｭ・
-        await addonManager.SaveConfigurationAsync();
-        
-        // 繝ｪ繝ｭ繝ｼ繝・
-        await RefreshAddonsAsync(showProgress: false);
-        
-        progressDialog?.Close();
-        await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-            L.Format("Success.ResetStatesComplete", resetCount));
-    }
-    
-    private async Task ResetCurrentAssetStatesAsync()
-    {
-        var dialogService = new DialogService();
-        var currentAsset = AssetListViewModel.SelectedAsset;
-        
-        if (currentAsset == null)
-        {
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.NoAssetSelected"));
-            return;
-        }
-        
-        // 繧ｸ繝｣繝ｳ繧ｯ繧ｷ繝ｧ繝ｳ繧｢繧ｻ繝・ヨ縺ｮ蝣ｴ蜷医・讖溯・繧貞宛髯・
-        if (currentAsset.Id == "junction-system-asset")
-        {
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.JunctionAssetNotSupported"));
-            return;
-        }
-        
-        // 遒ｺ隱・
-        var confirmed = await dialogService.ShowConfirmAsync(L.Get("Warning.Title"), 
-            L.Format("Confirm.ResetAssetStates", currentAsset.Name));
-        
-        if (!confirmed)
-        {
-            return;
-        }
-        
-        // 螳滄圀縺ｮAsset繧ｪ繝悶ず繧ｧ繧ｯ繝医ｒ蜿門ｾ・
-        var config = addonManager.GetConfiguration();
-        var asset = config.Assets.FirstOrDefault(a => a.Id == currentAsset.Id);
-        
-        if (asset == null)
-        {
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.AssetNotFound"));
-            return;
-        }
-        
-        // 迴ｾ蝨ｨ縺ｮ繧｢繧ｻ繝・ヨ縺ｮ迥ｶ諷九・縺ｿ繝ｪ繧ｻ繝・ヨ
-        var statesToReset = asset.AddonStates.ToList();
-        int resetCount = statesToReset.Count;
-        
-        foreach (var kvp in statesToReset)
-        {
-            asset.AddonStates.Remove(kvp.Key);
-        }
-        
-        // 迥ｶ諷九ｒ譖ｴ譁ｰ
-        var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
-            ? desktop.MainWindow
-            : null;
-        using var progressDialog = ProgressDialogService.Show(
-            mainWindow,
-            L.Get("Busy.UpdatingAddonStates"),
-            L.Format("Busy.Detail.AddonCount", resetCount));
-        await addonManager.UpdateAddonStatesAsync(progressDialog?.CreateProgress());
-        
-        // 險ｭ螳壹ｒ菫晏ｭ・
-        await addonManager.SaveConfigurationAsync();
-        
-        // 繝ｪ繝ｭ繝ｼ繝・
-        await RefreshAddonsAsync(showProgress: false);
-        
-        progressDialog?.Close();
-        await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-            L.Format("Success.ResetAssetStates", currentAsset.Name, resetCount));
-    }
-    
-    private async Task ImportDisableManifestAsync()
-    {
-        try
-        {
-            var mainWindow = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
-                ? desktop.MainWindow
-                : null;
-
-            if (mainWindow == null)
-            {
-                var dialogService = new DialogService();
-                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.MainWindowNotFound"));
-                return;
-            }
-
-            var viewModel = new DisableManifestImportViewModel(
-                new DisableManifestImportService(addonManager));
-            var dialog = new DisableManifestImportDialog(viewModel);
-            var imported = await dialog.ShowDialog<bool?>(mainWindow);
-            if (imported == true)
-            {
-                await RefreshAddonsAsync(rescanWorkshop: false, showProgress: false);
-            }
-        }
-        catch (Exception ex)
-        {
-            SafeFileLogger.TryLogException("MainWindowViewModel.ImportDisableManifestAsync", ex);
+            SafeFileLogger.TryLogException("MainWindowViewModel.AllOffAsync", ex);
             var dialogService = new DialogService();
             await dialogService.ShowErrorAsync(
                 L.Get("Error.Title"),
-                L.Format("DisableManifest.ImportFailed", ex.Message));
+                L.Get("Error.ResetFailed"));
         }
     }
 
@@ -1125,21 +764,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var dialog = new SettingsDialog();
+            var dialog = new SettingsDialog(addonManager);
             EventHandler resetRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(ResetManagerAsync, "ResetManagerRequested");
-            EventHandler restoreRequestedHandler = (_, _) =>
-                _ = RunSettingsActionSafeAsync(RestoreOriginalAsync, "RestoreOriginalRequested");
-            EventHandler manualMigrationRequestedHandler = (_, _) =>
-                _ = RunSettingsActionSafeAsync(MigrateAddonsAsync, "ManualMigrationRequested");
             EventHandler pathHealthRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(OpenPathHealthAsync, "PathHealthRequested");
             EventHandler pathRecoveryRequestedHandler = (_, _) =>
                 _ = RunSettingsActionSafeAsync(RunManualPathRecoveryAsync, "PathRecoveryRequested");
 
             dialog.ResetManagerRequested += resetRequestedHandler;
-            dialog.RestoreOriginalRequested += restoreRequestedHandler;
-            dialog.ManualMigrationRequested += manualMigrationRequestedHandler;
             dialog.PathHealthRequested += pathHealthRequestedHandler;
             dialog.PathRecoveryRequested += pathRecoveryRequestedHandler;
             
@@ -1161,39 +794,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             finally
             {
                 dialog.ResetManagerRequested -= resetRequestedHandler;
-                dialog.RestoreOriginalRequested -= restoreRequestedHandler;
-                dialog.ManualMigrationRequested -= manualMigrationRequestedHandler;
                 dialog.PathHealthRequested -= pathHealthRequestedHandler;
                 dialog.PathRecoveryRequested -= pathRecoveryRequestedHandler;
             }
 
+            if (dialog.WasSaved)
+            {
+                await RefreshAddonsAsync(showProgress: false);
+            }
+
             // 險ｭ螳壼､画峩繧貞渚譏
             var updatedSettings = AppSettings.Load();
-            IsDisableManifestImportEnabled = updatedSettings.EnableDisableManifestImport;
-            var localSettingChanged = updatedSettings.EnableLocalAddonsExperimental != addonManager.EnableLocalAddonManagement;
-            if (updatedSettings.DisableMode != addonManager.DisableMode)
-            {
-                var dialogService = new DialogService();
-                await dialogService.ShowInfoAsync(
-                    L.Get("Success.Title"),
-                    L.Get("Settings.DisableModeRestart"));
-            }
-
-            if (localSettingChanged)
-            {
-                addonManager.EnableLocalAddonManagement = updatedSettings.EnableLocalAddonsExperimental;
-                await RefreshAddonsAsync(showProgress: false);
-
-                if (updatedSettings.EnableLocalAddonsExperimental &&
-                    processWatcher.IsGmodRunning &&
-                    processWatcher.IsNoAddonsActive())
-                {
-                    var dialogService = new DialogService();
-                    await dialogService.ShowInfoAsync(
-                        L.Get("Warning.Title"),
-                        L.Get("Warning.LocalAddonsNoAddons"));
-                }
-            }
             AddonGridViewModel.ReloadSettings(updatedSettings);
         }
         catch (Exception ex)
@@ -1257,11 +868,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             ErrorHandler = errorHandler,
             DisableMode = DisableMode.Soft,
             CustomGmodInstallPath = settings.CustomGmodInstallPath,
-            CustomWorkshopPath = settings.CustomWorkshopPath,
-            EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+            CustomWorkshopPath = settings.CustomWorkshopPath
         }))
         {
-            repairManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
             await repairManager.InitializeAsync();
             var repairPendingChangeManager = new PendingChangeManager(
                 repairManager,
@@ -1293,25 +902,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var workingDirectory = Path.GetDirectoryName(processPath);
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = processPath,
-                WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
-                    ? Environment.CurrentDirectory
-                    : workingDirectory,
-                UseShellExecute = false
-            };
-
-            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
-            {
-                startInfo.ArgumentList.Add(arg);
-            }
-
-            if (Avalonia.Application.Current is App app)
-            {
-                app.ReleaseApplicationLockForRestart();
-            }
+            var startInfo = RestartHandoff.CreateRestartStartInfo(
+                processPath,
+                Environment.GetCommandLineArgs().Skip(1),
+                Environment.ProcessId);
 
             var process = Process.Start(startInfo);
             if (process == null)
@@ -1341,7 +935,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         return true;
     }
-    
+
     private async Task ResetManagerAsync()
     {
         try
@@ -1350,10 +944,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 荳谺｡遒ｺ隱・
             var confirmed = await dialogService.ShowConfirmAsync(
-                L.Get("Warning.Title"), 
-                addonManager.DisableMode == DisableMode.Hard
-                    ? L.Get("Warning.ResetManager")
-                    : L.Get("Warning.ResetManagerSoft"));
+                L.Get("Warning.Title"),
+                L.Get("Warning.ResetManagerSoft"));
             
             if (!confirmed)
             {
@@ -1381,10 +973,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             // Reset蜃ｦ逅・ｒ螳溯｡・
             await addonManager.ResetManagerAsync();
             progressDialog?.Close();
-            
-            // 蛻晄悄隱ｭ縺ｿ霎ｼ縺ｿ逕ｻ髱｢繧定｡ｨ遉ｺ
-            await ShowInitialLoadingWindow();
-            
+
             // UI繧貞・隱ｭ縺ｿ霎ｼ縺ｿ
             AssetListViewModel.LoadAssets();
             await AddonGridViewModel.LoadAddonsAsync();
@@ -1399,63 +988,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             await dialogService.ShowErrorAsync(
                 L.Get("Error.Title"), 
                 L.Get("Error.ResetFailed"));
-        }
-    }
-    
-    private async Task RestoreOriginalAsync()
-    {
-        try
-        {
-            var dialogService = new DialogService();
-            
-            // 荳谺｡遒ｺ隱・
-            var confirmed = await dialogService.ShowConfirmAsync(
-                L.Get("Warning.Title"), 
-                addonManager.DisableMode == DisableMode.Hard
-                    ? L.Get("Confirm.RestoreOriginal")
-                    : L.Get("Confirm.RestoreOriginalSoft"));
-            
-            if (!confirmed)
-            {
-                return;
-            }
-            
-            // 莠梧ｬ｡遒ｺ隱搾ｼ医ｈ繧雁ｼｷ縺・ｭｦ蜻奇ｼ・
-            var confirmed2 = await dialogService.ShowConfirmAsync(
-                L.Get("Confirm.FinalConfirmation"), 
-                addonManager.DisableMode == DisableMode.Hard
-                    ? L.Get("Confirm.RestoreOriginalFinal")
-                    : L.Get("Confirm.RestoreOriginalFinalSoft"));
-            
-            if (!confirmed2)
-            {
-                return;
-            }
-            
-            var desktopLifetime = Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
-            var mainWindow = desktopLifetime?.MainWindow;
-            using var progressDialog = ProgressDialogService.Show(
-                mainWindow,
-                L.Get("Busy.RestoringOriginal"));
-            progressDialog?.SetIndeterminate();
-
-            // Restore蜃ｦ逅・ｒ螳溯｡・
-            await addonManager.RestoreOriginalStateAsync();
-            
-            progressDialog?.Close();
-            await dialogService.ShowInfoAsync(
-                L.Get("Success.Title"), 
-                L.Get("Success.RestoreComplete"));
-                
-            // 繧｢繝励Μ繧ｱ繝ｼ繧ｷ繝ｧ繝ｳ繧堤ｵゆｺ・
-            desktopLifetime?.Shutdown();
-        }
-        catch (Exception ex)
-        {
-            var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(
-                L.Get("Error.Title"), 
-                L.Get("Error.RestoreFailed"));
         }
     }
 }

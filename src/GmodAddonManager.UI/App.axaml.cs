@@ -135,8 +135,6 @@ public sealed partial class App : Application, IDisposable
                 startupDesktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             }
 
-            var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
-            
             applicationLock = new ApplicationLock(appDataPath);
             if (!applicationLock.TryAcquireLock())
             {
@@ -167,7 +165,9 @@ public sealed partial class App : Application, IDisposable
                     return;
                 }
             }
-            
+
+            var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
+
             try
             {
 #if DEBUG
@@ -180,10 +180,8 @@ public sealed partial class App : Application, IDisposable
                     ErrorHandler = errorHandler,
                     DisableMode = disableMode,
                     CustomGmodInstallPath = settings.CustomGmodInstallPath,
-                    CustomWorkshopPath = settings.CustomWorkshopPath,
-                    EnableLocalAddonsExperimental = settings.EnableLocalAddonsExperimental
+                    CustomWorkshopPath = settings.CustomWorkshopPath
                 });
-                addonManager.EnableLocalAddonManagement = settings.EnableLocalAddonsExperimental;
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
@@ -192,9 +190,6 @@ public sealed partial class App : Application, IDisposable
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
 
-                // 辟｡蜉ｹ蛹悶Δ繝ｼ繝芽ｨｭ螳壹ｒ驕ｩ逕ｨ
-                addonManager.StrictLinkMode = settings.StrictLinkMode || addonManager.StrictLinkMode;
-                
                 // WorkshopIconResolver setup
                 workshopIconResolver = addonManager.GetWorkshopIconResolver() as WorkshopIconResolver;
             }
@@ -207,7 +202,9 @@ public sealed partial class App : Application, IDisposable
 
                 await dialogService.ShowErrorAsync(
                     L.Get("Error.Title"),
-                    L.Get("Error.JunctionCreationFailed")
+                    L.Format(
+                        "Error.InitializationFailed",
+                        PathSanitizer.SanitizeException(ex))
                 );
 
                 applicationLock.Dispose();
@@ -262,14 +259,26 @@ public sealed partial class App : Application, IDisposable
                 throw;
             }
 
+            var initializedAddonManager = addonManager ??
+                throw new InvalidOperationException("AddonManager initialization incomplete.");
+            var initializedProcessWatcher = processWatcher ??
+                throw new InvalidOperationException("GMod process watcher initialization incomplete.");
+
+            // Install the single runtime-state authority before startup pending
+            // changes are considered. PendingChangeManager must observe the
+            // watcher's exact gmod/hl2 identity check, including at startup.
+            initializedAddonManager.GmodRunningProvider = () =>
+                initializedProcessWatcher.IsGmodRunning ||
+                SteamProcessChecker.IsGmodRunning();
+
             try
             {
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"Creating PendingChangeManager at: {DateTime.Now}\n");
 #endif
                 pendingChangeManager = new PendingChangeManager(
-                    addonManager, 
-                    addonManager.GetManagerPath(),
+                    initializedAddonManager,
+                    initializedAddonManager.GetManagerPath(),
                     errorHandler
                 );
 #if DEBUG
@@ -292,10 +301,8 @@ public sealed partial class App : Application, IDisposable
                 }
 
                 // GMod邨ゆｺ・ｾ後↓菫晉蕗螟画峩繧定・蜍暮←逕ｨ
-                if (processWatcher != null)
-                {
-                    processWatcher.GmodStopped += (_, __) => _ = ApplyPendingChangesAfterGmodStoppedAsync();
-                }
+                initializedProcessWatcher.GmodStopped +=
+                    (_, __) => _ = ApplyPendingChangesAfterGmodStoppedAsync();
             }
             catch (Exception ex)
             {
@@ -307,7 +314,6 @@ public sealed partial class App : Application, IDisposable
 
             if (addonManager != null)
             {
-                addonManager.GmodRunningProvider = () => processWatcher?.IsGmodRunning;
                 addonManager.PendingChangeCountProvider = () => pendingChangeManager?.GetPendingChangeCount();
             }
 

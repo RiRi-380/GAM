@@ -1,3 +1,4 @@
+using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 
 namespace GmodAddonManager.Core.Tests;
@@ -62,7 +63,7 @@ public sealed class AddonManagerEmptyDirectoryTests
     }
 
     [Fact]
-    public async Task ScanForNewAddonsAsync_CacheTitleForPendingAddon_ClearsTitleUpdate()
+    public async Task ScanForNewAddonsAsync_PendingDownloadIsAggregateOnly()
     {
         using var env = new TestEnvironment();
         var cachePath = env.WriteWorkshopCache((env.AddonId, "Door STool"));
@@ -71,14 +72,13 @@ public sealed class AddonManagerEmptyDirectoryTests
         await manager.InitializeAsync();
 
         var addons = await manager.ScanForNewAddonsAsync();
-        var addon = Assert.Single(addons, addon => addon.Id == env.AddonId);
-
-        Assert.Equal("Door STool", addon.Title);
-        Assert.False(addon.NeedsTitleUpdate);
+        Assert.DoesNotContain(addons, addon => addon.Id == env.AddonId);
+        Assert.Equal(1, manager.PendingDownloadCount);
+        Assert.False(manager.GetConfiguration().AddonMetadata.ContainsKey(env.AddonId));
     }
 
     [Fact]
-    public async Task ScanWorkshopFolderAsync_EmptyDirectoryAfterPayload_RemovesStaleMetadata()
+    public async Task ScanWorkshopFolderAsync_EmptyDirectoryAfterPayload_HidesCardButPreservesMetadataWithoutSubscriptionAuthority()
     {
         using var env = new TestEnvironment();
         env.WriteAddonPayload();
@@ -95,7 +95,116 @@ public sealed class AddonManagerEmptyDirectoryTests
         var rescannedAddons = await manager.ScanWorkshopFolderAsync();
 
         Assert.DoesNotContain(rescannedAddons, addon => addon.Id == env.AddonId);
-        Assert.False(manager.GetConfiguration().AddonMetadata.ContainsKey(env.AddonId));
+        Assert.True(manager.GetConfiguration().AddonMetadata.ContainsKey(env.AddonId));
+    }
+
+    [Fact]
+    public async Task ScanWorkshopFolderAsync_UnsubscribedReference_IsRemovedByDefault()
+    {
+        using var env = new TestEnvironment();
+        env.WriteAddonPayload();
+        var cachePath = env.WriteWorkshopCache((env.AddonId, "Door STool"));
+        using var manager = env.CreateManager(new[] { cachePath });
+        await manager.InitializeAsync();
+        var custom = new Asset("Custom");
+        custom.Addons.Add("999999999");
+        manager.GetConfiguration().Assets.Add(custom);
+        await manager.SaveConfigurationAsync();
+
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.DoesNotContain("999999999", custom.Addons);
+        Assert.False(manager.GetConfiguration().AddonMetadata.ContainsKey("999999999"));
+    }
+
+    [Fact]
+    public async Task ScanWorkshopFolderAsync_UnsubscribedReference_CanBeRetainedAsUnavailable()
+    {
+        using var env = new TestEnvironment();
+        env.WriteAddonPayload();
+        var cachePath = env.WriteWorkshopCache((env.AddonId, "Door STool"));
+        using var manager = env.CreateManager(new[] { cachePath });
+        await manager.InitializeAsync();
+        var custom = new Asset("Custom");
+        custom.Addons.Add("999999999");
+        var configuration = manager.GetConfiguration();
+        configuration.Assets.Add(custom);
+        configuration.RetainMissingAssetReferences = true;
+        await manager.SaveConfigurationAsync();
+
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.Contains("999999999", custom.Addons);
+        var metadata = Assert.IsType<WorkshopAddon>(
+            configuration.AddonMetadata["999999999"]);
+        Assert.False(metadata.IsAvailable);
+        Assert.False(metadata.IsDownloadPending);
+    }
+
+    [Fact]
+    public async Task ScanWorkshopFolderAsync_ZeroByteCacheGmaIsHiddenAndPreserved()
+    {
+        using var env = new TestEnvironment();
+        Directory.CreateDirectory(env.GmodCachePath);
+        var zeroByteGma = Path.Combine(env.GmodCachePath, env.AddonId + ".gma");
+        File.WriteAllBytes(zeroByteGma, Array.Empty<byte>());
+
+        using var manager = env.CreateManager();
+        await manager.InitializeAsync();
+        manager.GetConfiguration().AddonMetadata[env.AddonId] =
+            new WorkshopAddon(env.AddonId, zeroByteGma)
+            {
+                IsGmaFile = true
+            };
+        manager.InvalidateWorkshopScanCache();
+
+        var addons = await manager.ScanWorkshopFolderAsync();
+
+        Assert.DoesNotContain(addons, addon => addon.Id == env.AddonId);
+        Assert.True(File.Exists(zeroByteGma));
+        Assert.Equal(0, new FileInfo(zeroByteGma).Length);
+    }
+
+    [Fact]
+    public async Task ScanWorkshopFolderAsync_AppliesWorkshopUpdateTimestampFromManifest()
+    {
+        using var env = new TestEnvironment();
+        env.WriteAddonPayload();
+        var cachePath = env.WriteWorkshopCache((env.AddonId, "Door STool"));
+
+        using var manager = env.CreateManager([cachePath]);
+        await manager.InitializeAsync();
+        var addon = Assert.Single(await manager.ScanWorkshopFolderAsync());
+
+        Assert.Equal(
+            DateTimeOffset.FromUnixTimeSeconds(1700000000).UtcDateTime,
+            addon.WorkshopUpdatedAtUtc);
+    }
+
+    [Fact]
+    public async Task ScanWorkshopFolderAsync_RefreshesSizeWhenDirectoryChanges()
+    {
+        using var env = new TestEnvironment();
+        env.WriteAddonPayload();
+
+        using var manager = env.CreateManager();
+        await manager.InitializeAsync();
+        var first = Assert.Single(await manager.ScanWorkshopFolderAsync());
+        var firstSize = first.Size;
+        var firstTimestamp = first.LastUpdated;
+
+        File.WriteAllBytes(
+            Path.Combine(env.AddonDirectoryPath, "new-payload.bin"),
+            new byte[128]);
+        Directory.SetLastWriteTimeUtc(
+            env.AddonDirectoryPath,
+            firstTimestamp.AddSeconds(2));
+        manager.InvalidateWorkshopScanCache();
+
+        var refreshed = Assert.Single(await manager.ScanWorkshopFolderAsync());
+
+        Assert.True(refreshed.Size >= firstSize + 128);
+        Assert.True(refreshed.LastUpdated > firstTimestamp);
     }
 
     private sealed class TestEnvironment : IDisposable
@@ -107,13 +216,18 @@ public sealed class AddonManagerEmptyDirectoryTests
             rootPath = Path.Combine(Path.GetTempPath(), "gam-empty-dir-tests-" + Guid.NewGuid().ToString("N"));
             WorkshopPath = Path.Combine(rootPath, "steamapps", "workshop", "content", "4000");
             AppDataPath = Path.Combine(rootPath, "appdata");
+            GmodRootPath = Path.Combine(rootPath, "steamapps", "common", "GarrysMod");
             Directory.CreateDirectory(WorkshopPath);
             Directory.CreateDirectory(AppDataPath);
+            Directory.CreateDirectory(GmodRootPath);
         }
 
         public string AddonId { get; } = "123456789";
         public string WorkshopPath { get; }
         public string AppDataPath { get; }
+        public string GmodRootPath { get; }
+        public string GmodCachePath =>
+            Path.Combine(GmodRootPath, "garrysmod", "cache", "workshop");
         public string AddonDirectoryPath => Path.Combine(WorkshopPath, AddonId);
         public string PayloadPath => Path.Combine(AddonDirectoryPath, "lua", "autorun.lua");
 
@@ -123,6 +237,7 @@ public sealed class AddonManagerEmptyDirectoryTests
             {
                 CustomWorkshopPath = WorkshopPath,
                 CustomAppDataPath = AppDataPath,
+                CustomGmodInstallPath = GmodRootPath,
                 DisableMode = DisableMode.Soft,
                 DisableCacheScan = true,
                 CustomWorkshopCacheFilePaths = workshopCacheFilePaths ?? Array.Empty<string>(),
@@ -163,6 +278,7 @@ public sealed class AddonManagerEmptyDirectoryTests
                 builder.Append("        \"").Append(addon.Id).AppendLine("\"");
                 builder.AppendLine("        {");
                 builder.Append("            \"title\" \"").Append(addon.Title).AppendLine("\"");
+                builder.AppendLine("            \"timeupdated\" \"1700000000\"");
                 builder.AppendLine("        }");
             }
 

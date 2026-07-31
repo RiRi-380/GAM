@@ -31,14 +31,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private DateTime lastModified;
     private string? thumbnailUrl;
     private bool isThumbnailLoading = true;
-    private AddonState? currentAddonState;
     private AssetItemViewModel? currentAsset;
     private string? notes;
     private bool isNotesLoaded;
     private bool isFavorite;
     private Bitmap? thumbnailBitmap;
-    private IReadOnlyDictionary<string, AddonState>? addonStateMarkers;
-    private IReadOnlyDictionary<string, IReadOnlyList<string>>? inactiveAssetMembershipMarkers;
+    private ResolvedAddonState? resolvedState;
+    private bool? actualEnabled;
+    private bool isRuntimeApplyPending;
     private bool isFileSizeCalculated;
     private bool disposed;
 
@@ -180,35 +180,6 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void SetAddonStateMarkers(IReadOnlyDictionary<string, AddonState>? markers)
-    {
-        if (ReferenceEquals(addonStateMarkers, markers))
-        {
-            return;
-        }
-
-        addonStateMarkers = markers;
-        this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
-        this.RaisePropertyChanged(nameof(BorderColor));
-        this.RaisePropertyChanged(nameof(StateText));
-        this.RaisePropertyChanged(nameof(DisplayAddonState));
-        this.RaisePropertyChanged(nameof(EffectiveAddonState));
-        this.RaisePropertyChanged(nameof(IsDisplayOff));
-        this.RaisePropertyChanged(nameof(IsEffectivelyOff));
-    }
-
-    public void SetInactiveAssetMembershipMarkers(IReadOnlyDictionary<string, IReadOnlyList<string>>? markers)
-    {
-        if (ReferenceEquals(inactiveAssetMembershipMarkers, markers))
-        {
-            return;
-        }
-
-        inactiveAssetMembershipMarkers = markers;
-        this.RaisePropertyChanged(nameof(IsInInactiveAsset));
-        this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
-    }
-    
     // WorkshopAddonから情報を更新するメソッド
     public void UpdateFromWorkshopAddon(WorkshopAddon workshopAddon)
     {
@@ -230,6 +201,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             isFileSizeCalculated = true;
         }
         addon.LastUpdated = workshopAddon.LastUpdated;
+        addon.FirstSeenSubscribedAtUtc = workshopAddon.FirstSeenSubscribedAtUtc;
+        addon.WorkshopUpdatedAtUtc = workshopAddon.WorkshopUpdatedAtUtc;
+        addon.IsAvailable = workshopAddon.IsAvailable;
+        addon.IsDownloadPending = workshopAddon.IsDownloadPending;
         addon.Description = workshopAddon.Description;
         addon.Author = workshopAddon.Author;
         addon.ThumbnailUrl = workshopAddon.ThumbnailUrl;
@@ -248,6 +223,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(Type));
         this.RaisePropertyChanged(nameof(TypeDisplay));
         this.RaisePropertyChanged(nameof(TagsDisplay));
+        this.RaisePropertyChanged(nameof(IsAvailable));
+        this.RaisePropertyChanged(nameof(IsMissing));
+        this.RaisePropertyChanged(nameof(CardOpacity));
         
         // サムネイルURLが変更された場合は再読み込み
         if (!string.IsNullOrEmpty(workshopAddon.ThumbnailUrl) &&
@@ -280,30 +258,16 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     
     public bool IsGmaFile => addon.IsGmaFile;
     public bool IsLocal => addon.IsLocal;
-    public bool IsInInactiveAsset
-    {
-        get
-        {
-            return inactiveAssetMembershipMarkers != null &&
-                   inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) &&
-                   assetNames.Count > 0;
-        }
-    }
+    internal WorkshopAddon SortSource => addon;
 
-    public string InactiveAssetTooltip
-    {
-        get
-        {
-            if (inactiveAssetMembershipMarkers == null ||
-                !inactiveAssetMembershipMarkers.TryGetValue(AddonId, out var assetNames) ||
-                assetNames.Count == 0)
-            {
-                return string.Empty;
-            }
+    public bool IsAvailable => addon.IsAvailable;
 
-            return L.Format("AddonGrid.OffAssetTooltip", string.Join(", ", assetNames));
-        }
-    }
+    public bool IsMissing =>
+        !addon.IsAvailable &&
+        !addon.IsDownloadPending &&
+        !addon.IsLocal;
+
+    public double CardOpacity => addon.IsAvailable ? 1.0 : 0.55;
 
     public bool IsSelected
     {
@@ -413,18 +377,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     public ObservableCollection<FileTreeNode> FileTree { get; } = new();
     public string StateText
     {
-        get
-        {
-            var state = GetDisplayAddonState();
-            if (state == null)
-            {
-                return L.Get("Common.Unknown");
-            }
-
-            var stateKey = $"AddonState.{state.Value}";
-            var localized = L.Get(stateKey);
-            return localized == stateKey ? state.Value.ToString() : localized;
-        }
+        get => ActualStateText;
     }
     public string IsGmaFileText => IsGmaFile ? L.Get("Common.Yes") : L.Get("Common.No");
     
@@ -446,7 +399,6 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     public void SetCurrentAsset(AssetItemViewModel? asset)
     {
         currentAsset = asset;
-        UpdateAddonState();
         
         // 詳細が読み込まれている場合は、アセット情報を更新
         if (IsDetailsLoaded)
@@ -458,30 +410,39 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // アドオンの状態を更新
     public void UpdateAddonState()
     {
-        if (currentAsset == null)
-        {
-            currentAddonState = null;
-            this.RaisePropertyChanged(nameof(BorderColor));
-            this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
-            this.RaisePropertyChanged(nameof(StateText));
-            this.RaisePropertyChanged(nameof(DisplayAddonState));
-            this.RaisePropertyChanged(nameof(EffectiveAddonState));
-            this.RaisePropertyChanged(nameof(IsDisplayOff));
-            this.RaisePropertyChanged(nameof(IsEffectivelyOff));
-            return;
-        }
-        
-        // 現在のアセットでの状態を取得
-        currentAddonState = currentAsset.GetAddonState(AddonId);
-        
-        // プロパティ変更通知
+        RefreshRuntimeState(
+            addonManager.GetResolvedAddonState(AddonId),
+            addonManager.GetActualAddonEnabledState(AddonId),
+            false);
+    }
+
+    public void RefreshRuntimeState(
+        ResolvedAddonState? state,
+        bool? actualState,
+        bool hasQueuedRuntimeApply)
+    {
+        resolvedState = state;
+        actualEnabled = actualState;
+        isRuntimeApplyPending =
+            hasQueuedRuntimeApply &&
+            state?.IsRuntimeTarget == true &&
+            (!actualState.HasValue || actualState.Value != state.DesiredEnabled);
+
         this.RaisePropertyChanged(nameof(BorderColor));
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(StateText));
+        this.RaisePropertyChanged(nameof(ActualStateText));
+        this.RaisePropertyChanged(nameof(DesiredStateText));
+        this.RaisePropertyChanged(nameof(StateReasonText));
+        this.RaisePropertyChanged(nameof(PendingStateText));
+        this.RaisePropertyChanged(nameof(ActualStateBadgeBackground));
+        this.RaisePropertyChanged(nameof(CardOpacity));
         this.RaisePropertyChanged(nameof(DisplayAddonState));
-        this.RaisePropertyChanged(nameof(EffectiveAddonState));
         this.RaisePropertyChanged(nameof(IsDisplayOff));
-        this.RaisePropertyChanged(nameof(IsEffectivelyOff));
+        this.RaisePropertyChanged(nameof(ActualEnabled));
+        this.RaisePropertyChanged(nameof(DesiredEnabled));
+        this.RaisePropertyChanged(nameof(ResolvedState));
+        this.RaisePropertyChanged(nameof(IsRuntimeApplyPending));
     }
 
     private void OnLocalizationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -489,7 +450,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         if (e.PropertyName == nameof(LocalizationManager.CurrentLanguage) || string.IsNullOrEmpty(e.PropertyName))
         {
             this.RaisePropertyChanged(nameof(StateText));
-            this.RaisePropertyChanged(nameof(InactiveAssetTooltip));
+            this.RaisePropertyChanged(nameof(ActualStateText));
+            this.RaisePropertyChanged(nameof(DesiredStateText));
+            this.RaisePropertyChanged(nameof(StateReasonText));
+            this.RaisePropertyChanged(nameof(PendingStateText));
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
 
@@ -570,14 +534,13 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 return "#4A90E2"; // アクセントカラー（青）
             }
             
-            var state = GetDisplayAddonState();
-
-            if (state == AddonState.Excluded)
+            if (actualEnabled == false &&
+                resolvedState?.Reason == AddonStateResolutionReason.Excluded)
             {
                 return "#F44336"; // 赤
             }
             
-            if (state == AddonState.Disabled)
+            if (actualEnabled == false)
             {
                 return "#FF9800"; // オレンジ
             }
@@ -589,86 +552,130 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // どこかのアセットで除外されているかチェック
     public bool IsExcludedAnywhere
     {
+        get => resolvedState?.Reason == AddonStateResolutionReason.Excluded;
+    }
+
+    public ResolvedAddonState? ResolvedState => resolvedState;
+
+    public bool? ActualEnabled => actualEnabled;
+
+    public bool DesiredEnabled => resolvedState?.DesiredEnabled == true;
+
+    public bool IsRuntimeApplyPending => isRuntimeApplyPending;
+
+    public string ActualStateText => actualEnabled switch
+    {
+        true => LocalizeState(AddonState.Enabled),
+        false => LocalizeState(AddonState.Disabled),
+        _ => L.Get("Common.Unknown")
+    };
+
+    public string ActualStateBadgeBackground => actualEnabled switch
+    {
+        true => "#2E7D32",
+        false when resolvedState?.Reason == AddonStateResolutionReason.Excluded => "#C62828",
+        false => "#EF6C00",
+        _ => "#455A64"
+    };
+
+    public string DesiredStateText
+    {
         get
         {
-            if (addonStateMarkers != null)
+            if (resolvedState == null || !resolvedState.IsRuntimeTarget)
             {
-                return addonStateMarkers.TryGetValue(AddonId, out var state)
-                    && state == AddonState.Excluded;
+                return L.Get("Common.Unknown");
             }
 
-            var config = addonManager.GetConfiguration();
-            foreach (var asset in config.Assets)
+            return LocalizeState(
+                resolvedState.Reason == AddonStateResolutionReason.Excluded
+                    ? AddonState.Excluded
+                    : resolvedState.DesiredEnabled
+                        ? AddonState.Enabled
+                        : AddonState.Disabled);
+        }
+    }
+
+    public string StateReasonText
+    {
+        get
+        {
+            if (resolvedState == null)
             {
-                if (!asset.Enabled)
-                {
-                    continue;
-                }
-
-                if (asset.Addons.Contains(AddonId) || asset.ContainsAllAddons())
-                {
-                    if (asset.GetAddonState(AddonId) == AddonState.Excluded)
-                    {
-                        return true;
-                    }
-                }
+                return L.Get("Common.Unknown");
             }
-            return false;
+
+            var japanese = LocalizationManager.Instance.CurrentLanguage
+                .StartsWith("ja", StringComparison.OrdinalIgnoreCase);
+            return resolvedState.Reason switch
+            {
+                AddonStateResolutionReason.NotSubscribed =>
+                    japanese ? "Steamで購読されていません" : "Not subscribed on Steam",
+                AddonStateResolutionReason.Excluded =>
+                    FormatSourceReason(
+                        japanese ? "共通除外" : "Globally excluded",
+                        resolvedState.ExcludedByAssets),
+                AddonStateResolutionReason.Enabled when
+                    resolvedState.EnabledBySubscribe &&
+                    resolvedState.EnabledByAssets.Count == 0 =>
+                    japanese ? "Subscribeが有効" : "Enabled by Subscribe",
+                AddonStateResolutionReason.Enabled when resolvedState.EnabledBySubscribe =>
+                    FormatSourceReason(
+                        japanese ? "SubscribeとAssetが有効" : "Enabled by Subscribe and assets",
+                        resolvedState.EnabledByAssets),
+                AddonStateResolutionReason.Enabled =>
+                    FormatSourceReason(
+                        japanese ? "Assetが有効" : "Enabled by assets",
+                        resolvedState.EnabledByAssets),
+                _ => japanese ? "有効な構成がありません" : "No enabled source"
+            };
         }
     }
 
-    private AddonState? GetGlobalAddonStateMarker()
-    {
-        if (addonStateMarkers != null && addonStateMarkers.TryGetValue(AddonId, out var state))
-        {
-            return state;
-        }
-
-        return null;
-    }
-
-    private AddonState? GetDisplayAddonState()
-    {
-        return currentAddonState ?? GetGlobalAddonStateMarker();
-    }
-
-    private AddonState? GetEffectiveAddonState()
-    {
-        var globalState = GetGlobalAddonStateMarker();
-
-        if (currentAddonState == AddonState.Excluded || globalState == AddonState.Excluded)
-        {
-            return AddonState.Excluded;
-        }
-
-        if (currentAddonState == AddonState.Disabled || globalState == AddonState.Disabled)
-        {
-            return AddonState.Disabled;
-        }
-
-        return currentAddonState ?? globalState;
-    }
-
-    public AddonState? DisplayAddonState => GetDisplayAddonState();
-
-    public AddonState? EffectiveAddonState => GetEffectiveAddonState();
-
-    public bool IsDisplayOff
+    public string PendingStateText
     {
         get
         {
-            var state = DisplayAddonState;
-            return state == AddonState.Disabled || state == AddonState.Excluded;
+            if (!isRuntimeApplyPending)
+            {
+                return string.Empty;
+            }
+
+            return LocalizationManager.Instance.CurrentLanguage
+                .StartsWith("ja", StringComparison.OrdinalIgnoreCase)
+                ? "GMod終了後に反映"
+                : "Applies after GMod exits";
         }
     }
 
-    public bool IsEffectivelyOff
+    public AddonState? DisplayAddonState => actualEnabled switch
     {
-        get
-        {
-            var state = EffectiveAddonState;
-            return state == AddonState.Disabled || state == AddonState.Excluded;
-        }
+        true => AddonState.Enabled,
+        false => AddonState.Disabled,
+        _ => null
+    };
+
+    public bool IsDisplayOff => actualEnabled == false;
+
+    private static string LocalizeState(AddonState state)
+    {
+        var stateKey = $"AddonState.{state}";
+        var localized = L.Get(stateKey);
+        return localized == stateKey ? state.ToString() : localized;
+    }
+
+    private static string FormatSourceReason(
+        string prefix,
+        IReadOnlyList<ResolvedAddonStateSource> sources)
+    {
+        var names = sources
+            .Select(source => source.AssetName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return names.Length == 0
+            ? prefix
+            : $"{prefix}: {string.Join(", ", names)}";
     }
 
     public Task LoadDetailsBackgroundAsync()

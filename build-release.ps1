@@ -1,6 +1,6 @@
 # Build script for GAM - Same as GitHub Actions
 param(
-    [string]$Version = "v1.0.0",
+    [string]$Version = "v2.0.0",
     [ValidateSet("prompt", "run", "skip")]
     [string]$RunMode = "prompt"
 )
@@ -77,14 +77,15 @@ if ($innoSetupPath) {
     # Check for VC++ Redistributable
     $vcRedistPath = Join-Path $PSScriptRoot "redist\VC_redist.x64.exe"
     if (-not (Test-Path $vcRedistPath)) {
-        Write-Host "⚠️ WARNING: Visual C++ Redistributable not found!" -ForegroundColor Yellow
-        Write-Host "  Expected at: $vcRedistPath" -ForegroundColor Yellow
-        Write-Host "  Download from: https://aka.ms/vs/17/release/vc_redist.x64.exe" -ForegroundColor Yellow
-        Write-Host "  The installer will be built without VC++ Redistributable." -ForegroundColor Yellow
-        Write-Host "  Users may need to install it manually." -ForegroundColor Yellow
-    } else {
-        Write-Host "✓ Visual C++ Redistributable found" -ForegroundColor Green
+        throw "Visual C++ Redistributable is required for installer builds. Expected: $vcRedistPath"
     }
+
+    $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedistPath
+    if ($vcSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $vcSignature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
+        throw "VC++ Redistributable signature validation failed: $($vcSignature.Status)"
+    }
+    Write-Host "✓ Visual C++ Redistributable signature is valid" -ForegroundColor Green
     
     & $innoSetupPath installer/setup.iss /DMyAppVersion=$normalizedVersion
     

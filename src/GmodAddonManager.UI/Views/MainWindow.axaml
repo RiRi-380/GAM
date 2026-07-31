@@ -84,13 +84,6 @@
                         <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
                     </Button>
 
-                    <Button Command="{Binding ImportDisableManifestCommand}"
-                            IsVisible="{Binding IsDisableManifestImportEnabled}"
-                            ToolTip.Tip="{loc:Localize MainWindow.ImportDisableList}"
-                            Width="32" Height="32">
-                        <PathIcon Data="{StaticResource ImportIcon}" Width="16" Height="16"/>
-                    </Button>
-                    
                     <Button Command="{Binding UndoCommand}"
                             IsEnabled="{Binding CanUndo}"
                             ToolTip.Tip="{loc:Localize MainWindow.UndoLastAction}"
@@ -98,18 +91,11 @@
                         <TextBlock Text="↩️" FontSize="16"/>
                     </Button>
 
-                    <Button Command="{Binding MigrateAddonsCommand}"
-                            ToolTip.Tip="{loc:Localize MainWindow.ManualMigration}"
+                    <Button Command="{Binding AllOffCommand}"
+                            ToolTip.Tip="{loc:Localize MainWindow.AllOff}"
                             Width="32" Height="32"
                             Classes="danger">
-                        <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
-                    </Button>
-                    
-                    <Button Command="{Binding ResetAllStatesCommand}"
-                            ToolTip.Tip="{loc:Localize MainWindow.ResetAllStates}"
-                            Width="32" Height="32"
-                            Classes="danger">
-                        <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                        <PathIcon Data="{StaticResource DisabledIcon}" Width="16" Height="16"/>
                     </Button>
                 </StackPanel>
                 

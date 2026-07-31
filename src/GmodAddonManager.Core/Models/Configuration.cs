@@ -7,6 +7,11 @@ namespace GmodAddonManager.Core.Models
 {
     public class Configuration
     {
+        public const int CurrentSchemaVersion = 2;
+
+        [JsonProperty("schemaVersion")]
+        public int SchemaVersion { get; set; }
+
         [JsonProperty("version")]
         public string Version { get; set; }
 
@@ -25,25 +30,51 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("pathState")]
         public PathState PathState { get; set; }
 
+        [JsonProperty("initialRuntimeImportCompleted")]
+        public bool InitialRuntimeImportCompleted { get; set; }
+
+        [JsonProperty("initialRuntimeImportCompletedAtUtc")]
+        public DateTime? InitialRuntimeImportCompletedAtUtc { get; set; }
+
+        [JsonProperty("subscriptionBaselineInitialized")]
+        public bool SubscriptionBaselineInitialized { get; set; }
+
+        [JsonProperty("knownSubscribedAddonIds")]
+        public List<string> KnownSubscribedAddonIds { get; set; }
+
+        [JsonProperty("subscriptionFirstSeenAtUtc")]
+        public Dictionary<string, DateTime> SubscriptionFirstSeenAtUtc { get; set; }
+
+        [JsonProperty("retainMissingAssetReferences")]
+        public bool RetainMissingAssetReferences { get; set; }
+
         public Configuration()
         {
-            Version = "1.0";
+            SchemaVersion = CurrentSchemaVersion;
+            Version = "2.0";
             LastUpdated = DateTime.UtcNow;
             Assets = new List<Asset>();
             AddonMetadata = new Dictionary<string, WorkshopAddon>();
             JunctionHistory = new Dictionary<string, List<string>>();
             PathState = new PathState();
+            InitialRuntimeImportCompleted = false;
+            InitialRuntimeImportCompletedAtUtc = null;
+            SubscriptionBaselineInitialized = false;
+            KnownSubscribedAddonIds = new List<string>();
+            SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>();
+            RetainMissingAssetReferences = false;
         }
 
         public void CreateDefaultAssets()
         {
-            CreateDefaultAssets(includeJunction: true);
+            CreateDefaultAssets(includeJunction: false);
         }
 
         public void CreateDefaultAssets(bool includeJunction)
         {
             var subscribeAsset = new Asset("Subscribe Asset", true);
             subscribeAsset.Id = "subscribe-system-asset";
+            subscribeAsset.SetWholeState(AddonState.Enabled);
             subscribeAsset.SetAllAddons();
             Assets.Add(subscribeAsset);
 
@@ -51,7 +82,7 @@ namespace GmodAddonManager.Core.Models
             {
                 var junctionAsset = new Asset("Junction", true);
                 junctionAsset.Id = "junction-system-asset";
-                junctionAsset.Enabled = false;
+                junctionAsset.SetWholeState(AddonState.Disabled);
                 Assets.Add(junctionAsset);
             }
         }

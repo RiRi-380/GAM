@@ -19,8 +19,47 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("isSystem")]
         public bool IsSystem { get; set; }
 
+        /// <summary>
+        /// Asset全体の状態。Custom AssetはEnabled/Disabled/Excluded、
+        /// Subscribe AssetはEnabled/Disabledだけを使用する。
+        /// </summary>
+        [JsonProperty("state")]
+        public AddonState State { get; set; }
+
+        /// <summary>
+        /// ユーザーが上部へ固定したCustom Assetか。
+        /// </summary>
+        [JsonProperty("isFavorite")]
+        public bool IsFavorite { get; set; }
+
+        /// <summary>
+        /// 旧構成の個別状態が混在しており、移行後の確認が必要か。
+        /// </summary>
+        [JsonProperty("needsMigrationReview")]
+        public bool NeedsMigrationReview { get; set; }
+
+        /// <summary>
+        /// 旧schemaとの読込互換用。新schemaではStateをtruth sourceとし、
+        /// このプロパティは書き出さない。
+        /// </summary>
         [JsonProperty("enabled")]
-        public bool Enabled { get; set; }
+        public bool Enabled
+        {
+            get => State != AddonState.Disabled;
+            set
+            {
+                if (!value)
+                {
+                    State = AddonState.Disabled;
+                }
+                else if (State == AddonState.Disabled)
+                {
+                    State = AddonState.Enabled;
+                }
+            }
+        }
+
+        public bool ShouldSerializeEnabled() => false;
 
         [JsonProperty("addons")]
         public List<string> Addons { get; set; }
@@ -31,24 +70,36 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         [JsonProperty("addonStates")]
         public Dictionary<string, AddonState> AddonStates { get; set; }
+
+        public bool ShouldSerializeAddonStates() => false;
         
         /// <summary>
         /// アセット内の全アドオンのデフォルト状態
         /// </summary>
         [JsonProperty("defaultAddonState")]
-        public AddonState DefaultAddonState { get; set; }
+        public AddonState DefaultAddonState
+        {
+            get => State;
+            set => State = value;
+        }
+
+        public bool ShouldSerializeDefaultAddonState() => false;
         
         /// <summary>
         /// WorkshopコレクションID（公開している場合）
         /// </summary>
         [JsonProperty("workshopCollectionId")]
         public string? WorkshopCollectionId { get; set; }
+
+        public bool ShouldSerializeWorkshopCollectionId() => false;
         
         /// <summary>
         /// コレクションの自動更新が有効か
         /// </summary>
         [JsonProperty("autoUpdateCollection")]
         public bool AutoUpdateCollection { get; set; }
+
+        public bool ShouldSerializeAutoUpdateCollection() => false;
         
         /// <summary>
         /// 現在のバージョン
@@ -74,12 +125,13 @@ namespace GmodAddonManager.Core.Models
             Name = string.Empty;
             ImagePath = null;
             IsSystem = false;
-            Enabled = true;
+            State = AddonState.Enabled;
+            IsFavorite = false;
+            NeedsMigrationReview = false;
             Addons = new List<string>();
             AddonStates = new Dictionary<string, AddonState>();
-            DefaultAddonState = AddonState.Enabled;
             WorkshopCollectionId = null;
-            AutoUpdateCollection = true; // デフォルトで自動更新ON
+            AutoUpdateCollection = false;
             CurrentVersion = 0;
             VersionHistory = new List<AssetVersion>();
         }
@@ -110,7 +162,6 @@ namespace GmodAddonManager.Core.Models
             {
                 Addons.Add(addonId);
             }
-            AddonStates[addonId] = state;
         }
         
         /// <summary>
@@ -118,14 +169,7 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         public AddonState GetAddonState(string addonId)
         {
-            // 個別の状態が設定されている場合はそれを返す
-            if (AddonStates.ContainsKey(addonId))
-            {
-                return AddonStates[addonId];
-            }
-            
-            // 個別の状態がない場合は、DefaultAddonStateを返す
-            return DefaultAddonState;
+            return State;
         }
         
         /// <summary>
@@ -133,11 +177,21 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         public void SetAddonState(string addonId, AddonState state)
         {
-            // ContainsAllAddonsまたは個別に含まれている場合は状態を設定
             if (ContainsAllAddons() || Addons.Contains(addonId))
             {
-                AddonStates[addonId] = state;
+                SetWholeState(state);
             }
+        }
+
+        public AddonState GetWholeState()
+        {
+            return State;
+        }
+
+        public void SetWholeState(AddonState state)
+        {
+            State = state;
+            AddonStates.Clear();
         }
         
         /// <summary>

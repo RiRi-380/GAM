@@ -58,9 +58,11 @@
                     <DataTemplate x:DataType="vm:AssetItemViewModel">
                         <Border Padding="10,8"
                                 Background="Transparent">
-                            <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Grid ColumnDefinitions="Auto,*">
                                 <!-- アイコン -->
-                                <Border Width="32" Height="32"
+                                <Border Grid.Column="0"
+                                        Width="32" Height="32"
+                                        Margin="0,0,10,0"
                                         ClipToBounds="True"
                                         Classes="assetImage"
                                         Classes.hasImage="{Binding HasCustomImage}">
@@ -91,20 +93,19 @@
                                 </Border>
                                 
                                 <!-- 情報 -->
-                                <StackPanel VerticalAlignment="Center">
+                                <StackPanel Grid.Column="1"
+                                            VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Name}"
                                               FontWeight="Bold"
-                                              FontSize="14"/>
-                                    <TextBlock Opacity="0.7"
-                                              FontSize="12">
-                                        <TextBlock.Text>
-                                            <MultiBinding StringFormat="{}{0} addons">
-                                                <Binding Path="AddonCount"/>
-                                            </MultiBinding>
-                                        </TextBlock.Text>
-                                    </TextBlock>
+                                              FontSize="14"
+                                              MaxLines="1"
+                                              TextTrimming="CharacterEllipsis"
+                                              ToolTip.Tip="{Binding Name}"/>
+                                    <TextBlock Text="{Binding AddonCountDisplay}"
+                                               Opacity="0.7"
+                                               FontSize="12"/>
                                 </StackPanel>
-                            </StackPanel>
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>

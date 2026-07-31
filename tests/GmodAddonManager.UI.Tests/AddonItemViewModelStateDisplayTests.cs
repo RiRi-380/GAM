@@ -1,3 +1,4 @@
+using System.Reflection;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
@@ -18,323 +19,183 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         LocalizationManager.Instance.ChangeLanguage("en-US");
     }
 
-    public static IEnumerable<object?[]> BorderColorCases()
+    public AddonItemViewModelStateDisplayTests()
     {
-        yield return new object?[] { AddonState.Enabled, true, null, false, "#303030", "Enabled", false };
-        yield return new object?[] { AddonState.Enabled, false, null, false, "#303030", "Enabled", false };
-        yield return new object?[] { AddonState.Disabled, true, null, false, "#FF9800", "Disabled", false };
-        yield return new object?[] { AddonState.Disabled, false, null, false, "#FF9800", "Disabled", false };
-        yield return new object?[] { AddonState.Excluded, true, null, false, "#F44336", "Excluded", true };
-        yield return new object?[] { AddonState.Excluded, false, null, false, "#F44336", "Excluded", false };
-        yield return new object?[] { AddonState.Enabled, true, AddonState.Disabled, false, "#303030", "Enabled", false };
-        yield return new object?[] { AddonState.Enabled, true, AddonState.Excluded, false, "#303030", "Enabled", true };
-        yield return new object?[] { AddonState.Disabled, true, AddonState.Excluded, false, "#FF9800", "Disabled", true };
-        yield return new object?[] { AddonState.Excluded, true, AddonState.Excluded, true, "#4A90E2", "Excluded", true };
+        LocalizationManager.Instance.ChangeLanguage("en-US");
     }
 
-    [Theory]
-    [MemberData(nameof(BorderColorCases))]
-    public async Task BorderColorMatchesDisplayContract(
-        AddonState localState,
-        bool assetEnabled,
-        AddonState? globalState,
-        bool isSelected,
-        string expectedBorderColor,
-        string expectedStateText,
-        bool expectedIsExcludedAnywhere)
+    [Fact]
+    public async Task ActualAndDesiredStatesRemainDistinctWhileRuntimeApplyIsPending()
     {
         using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: assetEnabled, localState);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = CreateResolvedState(
+            desiredEnabled: false,
+            AddonStateResolutionReason.Excluded,
+            excludedBy: new[] { "Global blacklist" });
 
-        if (globalState.HasValue)
-        {
-            addon.SetAddonStateMarkers(new Dictionary<string, AddonState>
+        addon.RefreshRuntimeState(resolved, actualState: true, hasQueuedRuntimeApply: true);
+
+        Assert.True(addon.ActualEnabled);
+        Assert.False(addon.DesiredEnabled);
+        Assert.Equal("Enabled", addon.ActualStateText);
+        Assert.Equal("Excluded", addon.DesiredStateText);
+        Assert.Contains("Global blacklist", addon.StateReasonText);
+        Assert.True(addon.IsRuntimeApplyPending);
+        Assert.Equal("Applies after GMod exits", addon.PendingStateText);
+        Assert.Equal("#303030", addon.BorderColor);
+    }
+
+    [Fact]
+    public async Task ActualOffCardUsesResolvedReasonOnlyToExplainItsOffState()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+        var excluded = CreateResolvedState(
+            desiredEnabled: false,
+            AddonStateResolutionReason.Excluded,
+            excludedBy: new[] { "Capture" });
+
+        addon.RefreshRuntimeState(excluded, actualState: false, hasQueuedRuntimeApply: false);
+
+        Assert.Equal("Disabled", addon.ActualStateText);
+        Assert.Equal("Excluded", addon.DesiredStateText);
+        Assert.True(addon.IsDisplayOff);
+        Assert.True(addon.IsExcludedAnywhere);
+        Assert.False(addon.IsRuntimeApplyPending);
+        Assert.Equal("#F44336", addon.BorderColor);
+    }
+
+    [Fact]
+    public async Task ResolutionReasonNamesSubscribeAndContributingAssets()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: true,
+            desiredEnabled: true,
+            enabledBySubscribe: true,
+            reason: AddonStateResolutionReason.Enabled,
+            enabledByAssets: new[]
             {
-                ["addon-1"] = globalState.Value
-            });
+                new ResolvedAddonStateSource("fps", "FPS"),
+                new ResolvedAddonStateSource("recording", "Recording")
+            },
+            excludedByAssets: Array.Empty<ResolvedAddonStateSource>());
+
+        addon.RefreshRuntimeState(resolved, actualState: true, hasQueuedRuntimeApply: false);
+
+        Assert.Equal("Enabled", addon.DesiredStateText);
+        Assert.Contains("Subscribe", addon.StateReasonText);
+        Assert.Contains("FPS", addon.StateReasonText);
+        Assert.Contains("Recording", addon.StateReasonText);
+    }
+
+    [Fact]
+    public async Task ActualStateFilterDoesNotTreatUnknownAsEnabled()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+        addon.RefreshRuntimeState(
+            CreateResolvedState(true, AddonStateResolutionReason.Enabled),
+            actualState: null,
+            hasQueuedRuntimeApply: false);
+
+        Assert.False(InvokeMatchesAddonStateFilter(addon, filterIndex: 1));
+        Assert.False(InvokeMatchesAddonStateFilter(addon, filterIndex: 2));
+        Assert.True(InvokeMatchesAddonStateFilter(addon, filterIndex: 0));
+    }
+
+    [Fact]
+    public async Task QueuedApplyIsVisibleWhenActualStateCannotBeRead()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+
+        addon.RefreshRuntimeState(
+            CreateResolvedState(false, AddonStateResolutionReason.NoEnabledSource),
+            actualState: null,
+            hasQueuedRuntimeApply: true);
+
+        Assert.Equal("Unknown", addon.ActualStateText);
+        Assert.True(addon.IsRuntimeApplyPending);
+        Assert.Equal("Applies after GMod exits", addon.PendingStateText);
+    }
+
+    [Fact]
+    public async Task RetainedUnavailableReferenceIsMarkedMissing()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = new AddonItemViewModel(
+            new WorkshopAddon
+            {
+                Id = "123456789",
+                Title = "Missing Addon",
+                FolderPath = string.Empty,
+                IsAvailable = false,
+                IsDownloadPending = false,
+                NeedsTitleUpdate = false
+            },
+            manager);
+
+        Assert.False(addon.IsAvailable);
+        Assert.True(addon.IsMissing);
+        Assert.Equal(0.55, addon.CardOpacity);
+
+        addon.UpdateFromWorkshopAddon(new WorkshopAddon
+        {
+            Id = addon.AddonId,
+            Title = addon.Title,
+            FolderPath = string.Empty,
+            IsAvailable = true,
+            IsDownloadPending = false,
+            NeedsTitleUpdate = false
+        });
+
+        Assert.True(addon.IsAvailable);
+        Assert.False(addon.IsMissing);
+        Assert.Equal(1.0, addon.CardOpacity);
+    }
+
+    [Fact]
+    public async Task SortPreferenceDefaultsToRecentDescendingAndPersistsGlobally()
+    {
+        using var manager = await CreateManagerAsync();
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(
+            manager,
+            Path.Combine(rootPath, "pending-appdata"));
+        var settingsPath = Path.Combine(rootPath, "addon-sort.json");
+
+        using (var grid = new AddonGridViewModel(
+                   manager,
+                   pendingChangeManager,
+                   processWatcher,
+                   settingsPath))
+        {
+            Assert.Equal(0, grid.SelectedSortModeIndex);
+            Assert.Equal("Descending ↓", grid.SortDirectionLabel);
+
+            grid.SelectedSortModeIndex = (int)AddonSortMode.Size;
+            using var execution = grid.ToggleSortDirectionCommand.Execute().Subscribe();
+            Assert.Equal("Ascending ↑", grid.SortDirectionLabel);
         }
 
-        addon.SetCurrentAsset(assetViewModel);
-        addon.IsSelected = isSelected;
-
-        Assert.Equal(expectedIsExcludedAnywhere, addon.IsExcludedAnywhere);
-        Assert.Equal(expectedBorderColor, addon.BorderColor);
-        Assert.Equal(expectedStateText, addon.StateText);
-    }
-
-    [Fact]
-    public async Task InactiveAssetExcludedAddonShowsLocalRedBorderOnly()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: false, AddonState.Excluded);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.False(addon.IsExcludedAnywhere);
-        Assert.Equal("#F44336", addon.BorderColor);
-        Assert.Equal("Excluded", addon.StateText);
-    }
-
-    [Fact]
-    public async Task EnabledAssetExcludedAddonShowsEffectiveRedBorder()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Excluded);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.True(addon.IsExcludedAnywhere);
-        Assert.Equal("#F44336", addon.BorderColor);
-        Assert.Equal("Excluded", addon.StateText);
-    }
-
-    [Fact]
-    public async Task InactiveAssetDisabledAddonShowsLocalOrangeBorderOnly()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: false, AddonState.Disabled);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.False(addon.IsExcludedAnywhere);
-        Assert.Equal("#FF9800", addon.BorderColor);
-        Assert.Equal("Disabled", addon.StateText);
-    }
-
-    [Fact]
-    public async Task GlobalDisabledMarkerDoesNotOverrideCurrentAssetEnabledDisplay()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Enabled);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetAddonStateMarkers(new Dictionary<string, AddonState>
-        {
-            ["addon-1"] = AddonState.Disabled
-        });
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.False(addon.IsExcludedAnywhere);
-        Assert.True(addon.IsEffectivelyOff);
-        Assert.Equal("#303030", addon.BorderColor);
-        Assert.Equal("Enabled", addon.StateText);
-    }
-
-    [Fact]
-    public async Task GlobalExcludedMarkerDoesNotOverrideCurrentAssetDisabledDisplay()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Disabled);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetAddonStateMarkers(new Dictionary<string, AddonState>
-        {
-            ["addon-1"] = AddonState.Excluded
-        });
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.True(addon.IsExcludedAnywhere);
-        Assert.True(addon.IsEffectivelyOff);
-        Assert.Equal("#FF9800", addon.BorderColor);
-        Assert.Equal("Disabled", addon.StateText);
-    }
-
-    [Fact]
-    public async Task AddonStateMarkersIgnoreInactiveAssetsAndPreferExcluded()
-    {
-        using var manager = await CreateManagerAsync();
-        CreateAsset(manager, enabled: false, AddonState.Excluded, addonId: "addon-2");
-        CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1");
-        CreateAsset(manager, enabled: true, AddonState.Excluded, addonId: "addon-1");
-        using var processWatcher = new GmodProcessWatcher();
-        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
-        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
-
-        var markers = InvokeBuildAddonStateMarkers(grid, manager.GetConfiguration());
-
-        Assert.True(markers.TryGetValue("addon-1", out var addon1State));
-        Assert.Equal(AddonState.Excluded, addon1State);
-        Assert.False(markers.ContainsKey("addon-2"));
-    }
-
-    [Fact]
-    public async Task OffAssetMembershipMarkersIncludeInactiveAndOtherActiveOffAssetsOnly()
-    {
-        using var manager = await CreateManagerAsync();
-        var currentAsset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1", assetName: "Asset A");
-        currentAsset.AddAddon("addon-2", AddonState.Enabled);
-        currentAsset.AddAddon("addon-3", AddonState.Enabled);
-        var inactiveAsset = CreateAsset(manager, enabled: false, AddonState.Enabled, addonId: "addon-1", assetName: "Asset B");
-        inactiveAsset.AddAddon("addon-2", AddonState.Disabled);
-        inactiveAsset.AddAddon("addon-3", AddonState.Excluded);
-        CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1", assetName: "Asset C");
-        using var processWatcher = new GmodProcessWatcher();
-        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
-        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
-
-        var markers = InvokeBuildInactiveAssetMembershipMarkers(
-            grid,
-            manager.GetConfiguration(),
-            currentAsset.Id);
-
-        Assert.Equal(new[] { "Asset B", "Asset C" }, markers["addon-1"]);
-        Assert.Equal(new[] { "Asset B" }, markers["addon-2"]);
-        Assert.Equal(new[] { "Asset B" }, markers["addon-3"]);
-
-        var selfSkippedMarkers = InvokeBuildInactiveAssetMembershipMarkers(
-            grid,
-            manager.GetConfiguration(),
-            inactiveAsset.Id);
-
-        Assert.Equal(new[] { "Asset C" }, selfSkippedMarkers["addon-1"]);
-        Assert.False(selfSkippedMarkers.ContainsKey("addon-2"));
-        Assert.False(selfSkippedMarkers.ContainsKey("addon-3"));
-    }
-
-    [Fact]
-    public async Task InactiveAssetBadgeDoesNotChangeDisplayState()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Enabled);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetInactiveAssetMembershipMarkers(new Dictionary<string, IReadOnlyList<string>>
-        {
-            ["addon-1"] = new[] { "Asset B" }
-        });
-        addon.SetCurrentAsset(assetViewModel);
-
-        Assert.True(addon.IsInInactiveAsset);
-        Assert.Contains("Asset B", addon.InactiveAssetTooltip);
-        Assert.Equal("#303030", addon.BorderColor);
-        Assert.Equal("Enabled", addon.StateText);
-    }
-
-    [Fact]
-    public async Task OtherActiveDisabledAssetMarksEverySharedAddonAsEffectiveOffWithoutChangingCurrentAssetDisplay()
-    {
-        using var manager = await CreateManagerAsync();
-        var currentAsset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1", assetName: "Asset A");
-        currentAsset.AddAddon("addon-2", AddonState.Enabled);
-        currentAsset.AddAddon("addon-3", AddonState.Enabled);
-
-        var otherAsset = CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1", assetName: "Asset B");
-        otherAsset.AddAddon("addon-2", AddonState.Disabled);
-        otherAsset.AddAddon("addon-3", AddonState.Disabled);
-
-        var addon1 = CreateAddonViewModel(manager, addonId: "addon-1");
-        var addon2 = CreateAddonViewModel(manager, addonId: "addon-2");
-        var addon3 = CreateAddonViewModel(manager, addonId: "addon-3");
-        using var currentAssetViewModel = CreateAssetViewModel(currentAsset, manager);
-        using var processWatcher = new GmodProcessWatcher();
-        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
-        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
-
-        SetAllAddons(grid, addon1, addon2, addon3);
-        addon1.SetCurrentAsset(currentAssetViewModel);
-        addon2.SetCurrentAsset(currentAssetViewModel);
-        addon3.SetCurrentAsset(currentAssetViewModel);
-        InvokeRefreshAddonStateMarkers(grid, manager.GetConfiguration());
-
-        foreach (var addon in new[] { addon1, addon2, addon3 })
-        {
-            Assert.Equal("#303030", addon.BorderColor);
-            Assert.Equal("Enabled", addon.StateText);
-            Assert.True(addon.IsEffectivelyOff);
-            Assert.True(addon.IsInInactiveAsset);
-            Assert.Contains("Asset B", addon.InactiveAssetTooltip);
-        }
-    }
-
-    [Fact]
-    public async Task StateMarkerRefreshReflectsCrossAssetMarkersAfterUnsavedAssetMutation()
-    {
-        using var manager = await CreateManagerAsync();
-        var currentAsset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1");
-        currentAsset.AddAddon("addon-2", AddonState.Enabled);
-        var otherAsset = CreateAsset(manager, enabled: true, AddonState.Disabled, addonId: "addon-1");
-        var addon2 = CreateAddonViewModel(manager, addonId: "addon-2");
-        using var currentAssetViewModel = CreateAssetViewModel(currentAsset, manager);
-        using var processWatcher = new GmodProcessWatcher();
-        var pendingChangeManager = new PendingChangeManager(manager, Path.Combine(rootPath, "appdata"));
-        using var grid = new AddonGridViewModel(manager, pendingChangeManager, processWatcher);
-
-        SetAllAddons(grid, addon2);
-        addon2.SetCurrentAsset(currentAssetViewModel);
-        InvokeRefreshAddonStateMarkers(grid, manager.GetConfiguration());
-
-        Assert.Equal("#303030", addon2.BorderColor);
-        Assert.Equal("Enabled", addon2.StateText);
-        Assert.False(addon2.IsEffectivelyOff);
-        Assert.False(addon2.IsInInactiveAsset);
-
-        manager.AddAddonToAsset(otherAsset.Id, "addon-2", AddonState.Disabled);
-        InvokeRefreshAddonStateMarkers(grid, manager.GetConfiguration());
-
-        Assert.Equal("#303030", addon2.BorderColor);
-        Assert.Equal("Enabled", addon2.StateText);
-        Assert.True(addon2.IsEffectivelyOff);
-        Assert.True(addon2.IsInInactiveAsset);
-        Assert.Contains(otherAsset.Name, addon2.InactiveAssetTooltip);
-    }
-
-    [Fact]
-    public async Task AddonStateFilterTreatsDisabledAndExcludedAsOff()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Enabled, addonId: "addon-1");
-        asset.AddAddon("addon-2", AddonState.Disabled);
-        asset.AddAddon("addon-3", AddonState.Excluded);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-        var addon1 = CreateAddonViewModel(manager, addonId: "addon-1");
-        var addon2 = CreateAddonViewModel(manager, addonId: "addon-2");
-        var addon3 = CreateAddonViewModel(manager, addonId: "addon-3");
-
-        addon1.SetCurrentAsset(assetViewModel);
-        addon2.SetCurrentAsset(assetViewModel);
-        addon3.SetCurrentAsset(assetViewModel);
-
-        Assert.True(InvokeMatchesAddonStateFilter(addon1, filterIndex: 1));
-        Assert.False(InvokeMatchesAddonStateFilter(addon2, filterIndex: 1));
-        Assert.False(InvokeMatchesAddonStateFilter(addon3, filterIndex: 1));
-        Assert.False(InvokeMatchesAddonStateFilter(addon1, filterIndex: 2));
-        Assert.True(InvokeMatchesAddonStateFilter(addon2, filterIndex: 2));
-        Assert.True(InvokeMatchesAddonStateFilter(addon3, filterIndex: 2));
-    }
-
-    [Fact]
-    public async Task ClearingCurrentAssetClearsStaleLocalState()
-    {
-        using var manager = await CreateManagerAsync();
-        var asset = CreateAsset(manager, enabled: true, AddonState.Disabled);
-        var addon = CreateAddonViewModel(manager);
-        using var assetViewModel = CreateAssetViewModel(asset, manager);
-
-        addon.SetCurrentAsset(assetViewModel);
-        Assert.Equal("#FF9800", addon.BorderColor);
-        Assert.Equal("Disabled", addon.StateText);
-
-        addon.SetCurrentAsset(null);
-
-        Assert.Equal("#303030", addon.BorderColor);
-        Assert.Equal("Unknown", addon.StateText);
+        using var restoredGrid = new AddonGridViewModel(
+            manager,
+            pendingChangeManager,
+            processWatcher,
+            settingsPath);
+        Assert.Equal((int)AddonSortMode.Size, restoredGrid.SelectedSortModeIndex);
+        Assert.Equal("Ascending ↑", restoredGrid.SortDirectionLabel);
     }
 
     private async Task<AddonManager> CreateManagerAsync()
     {
-        var workshopPath = Path.Combine(rootPath, "workshop", "content", "4000");
-        var appDataPath = Path.Combine(rootPath, "appdata");
+        var instancePath = Path.Combine(rootPath, Guid.NewGuid().ToString("N"));
+        var workshopPath = Path.Combine(instancePath, "workshop", "content", "4000");
+        var appDataPath = Path.Combine(instancePath, "appdata");
         Directory.CreateDirectory(workshopPath);
         Directory.CreateDirectory(appDataPath);
 
@@ -350,30 +211,12 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         return manager;
     }
 
-    private static Asset CreateAsset(
-        AddonManager manager,
-        bool enabled,
-        AddonState state,
-        string addonId = "addon-1",
-        string assetName = "Test Asset")
-    {
-        var asset = new Asset(assetName)
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Enabled = enabled,
-            DefaultAddonState = AddonState.Enabled
-        };
-        asset.AddAddon(addonId, state);
-        manager.GetConfiguration().Assets.Add(asset);
-        return asset;
-    }
-
-    private static AddonItemViewModel CreateAddonViewModel(AddonManager manager, string addonId = "addon-1")
+    private static AddonItemViewModel CreateAddonViewModel(AddonManager manager)
     {
         return new AddonItemViewModel(
             new WorkshopAddon
             {
-                Id = addonId,
+                Id = "123456789",
                 Title = "Test Addon",
                 FolderPath = string.Empty,
                 NeedsTitleUpdate = false
@@ -381,69 +224,34 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
             manager);
     }
 
-    private static AssetItemViewModel CreateAssetViewModel(Asset asset, AddonManager manager)
+    private static ResolvedAddonState CreateResolvedState(
+        bool desiredEnabled,
+        AddonStateResolutionReason reason,
+        IReadOnlyList<string>? enabledBy = null,
+        IReadOnlyList<string>? excludedBy = null)
     {
-        return new AssetItemViewModel(asset, manager, null!, null!, showExclusiveApply: true);
-    }
-
-    private static Dictionary<string, AddonState> InvokeBuildAddonStateMarkers(
-        AddonGridViewModel grid,
-        Configuration configuration)
-    {
-        var method = typeof(AddonGridViewModel).GetMethod(
-            "BuildAddonStateMarkers",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.NotNull(method);
-        var result = method!.Invoke(grid, new object[] { configuration });
-        return Assert.IsType<Dictionary<string, AddonState>>(result);
-    }
-
-    private static Dictionary<string, IReadOnlyList<string>> InvokeBuildInactiveAssetMembershipMarkers(
-        AddonGridViewModel grid,
-        Configuration configuration,
-        string? currentAssetId)
-    {
-        var method = typeof(AddonGridViewModel).GetMethod(
-            "BuildInactiveAssetMembershipMarkers",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.NotNull(method);
-        var result = method!.Invoke(grid, new object?[] { configuration, currentAssetId });
-        return Assert.IsType<Dictionary<string, IReadOnlyList<string>>>(result);
+        return new ResolvedAddonState(
+            "123456789",
+            isSubscribed: true,
+            desiredEnabled,
+            enabledBySubscribe: reason == AddonStateResolutionReason.Enabled,
+            reason,
+            (enabledBy ?? Array.Empty<string>())
+                .Select((name, index) => new ResolvedAddonStateSource($"enabled-{index}", name))
+                .ToArray(),
+            (excludedBy ?? Array.Empty<string>())
+                .Select((name, index) => new ResolvedAddonStateSource($"excluded-{index}", name))
+                .ToArray());
     }
 
     private static bool InvokeMatchesAddonStateFilter(AddonItemViewModel addon, int filterIndex)
     {
         var method = typeof(AddonGridViewModel).GetMethod(
             "MatchesAddonStateFilter",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            BindingFlags.Static | BindingFlags.NonPublic);
 
         Assert.NotNull(method);
-        var result = method!.Invoke(null, new object[] { addon, filterIndex });
-        return Assert.IsType<bool>(result);
-    }
-
-    private static void SetAllAddons(AddonGridViewModel grid, params AddonItemViewModel[] addons)
-    {
-        var field = typeof(AddonGridViewModel).GetField(
-            "allAddons",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.NotNull(field);
-        field!.SetValue(grid, new System.Collections.ObjectModel.ObservableCollection<AddonItemViewModel>(addons));
-    }
-
-    private static void InvokeRefreshAddonStateMarkers(
-        AddonGridViewModel grid,
-        Configuration configuration)
-    {
-        var method = typeof(AddonGridViewModel).GetMethod(
-            "RefreshAddonStateMarkers",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.NotNull(method);
-        method!.Invoke(grid, new object[] { configuration });
+        return Assert.IsType<bool>(method!.Invoke(null, new object[] { addon, filterIndex }));
     }
 
     public void Dispose()

@@ -10,6 +10,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
@@ -21,6 +22,8 @@ namespace GmodAddonManager.UI;
 
 class Program
 {
+    private static int shutdownRequested;
+
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll")]
     static extern bool AllocConsole();
@@ -44,6 +47,16 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        if (!RestartHandoff.TryWaitForPreviousProcess(args, out var applicationArgs))
+        {
+            SafeFileLogger.TryLogInfo(
+                "Program.Main",
+                "Restart handoff failed or timed out; startup was cancelled to avoid overlapping instances.");
+            return;
+        }
+
+        args = applicationArgs;
+
         try
         {
             // Keep relative logs/resources under the app output directory.
@@ -260,28 +273,15 @@ class Program
             e.Cancel = true; // 蜊ｳ蠎ｧ縺ｫ邨ゆｺ・＠縺ｪ縺・
             PerformGracefulShutdown();
         };
-        
-        // 繝励Ο繧ｻ繧ｹ邨ゆｺ・う繝吶Φ繝・
-        AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
-        {
-            PerformGracefulShutdown();
-        };
-        
-        // 繧｢繝励Μ繧ｱ繝ｼ繧ｷ繝ｧ繝ｳ邨ゆｺ・凾縺ｮ繝輔ャ繧ｯ・・indows蜷代￠・・
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-            {
-                if (e.IsTerminating)
-                {
-                    PerformGracefulShutdown();
-                }
-            };
-        }
     }
     
     private static void PerformGracefulShutdown()
     {
+        if (Interlocked.Exchange(ref shutdownRequested, 1) != 0)
+        {
+            return;
+        }
+
         try
         {
             // 迴ｾ蝨ｨ縺ｮ謫堺ｽ懃憾諷九ｒ菫晏ｭ・
@@ -291,12 +291,37 @@ class Program
             // Avalonia繧｢繝励Μ繧ｱ繝ｼ繧ｷ繝ｧ繝ｳ縺ｮ繧ｷ繝｣繝・ヨ繝繧ｦ繝ｳ
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                desktop.Shutdown();
+                if (Dispatcher.UIThread.CheckAccess())
+                {
+                    ShutdownDesktop(desktop);
+                }
+                else
+                {
+                    Dispatcher.UIThread.Post(() => ShutdownDesktop(desktop));
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // The Avalonia dispatcher is already shutting down. There is
+            // nothing left to request, and this is a normal exit condition.
         }
         catch (Exception ex)
         {
             LogUnhandledException(ex);
+        }
+    }
+
+    private static void ShutdownDesktop(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            desktop.Shutdown();
+        }
+        catch (OperationCanceledException)
+        {
+            // A concurrent window close may already have stopped the
+            // dispatcher. Treat that as a completed shutdown.
         }
     }
     
