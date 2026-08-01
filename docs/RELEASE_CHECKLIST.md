@@ -29,6 +29,8 @@
 
 ## 配布物の内容確認
 - [ ] ZIP に LICENSE が含まれている。
+- [ ] publish/ZIP/インストーラはself-containedの複数ファイル構成で、`GmodAddonManager.UI.exe` と同階層のDLLを欠落させていない。
+- [ ] Release publishで `PublishSingleFile=false` を指定し、`IncludeNativeLibrariesForSelfExtract` を使用していない（起動前の `%TEMP%\.net` 展開を避ける）。
 - [ ] インストーラに LICENSE 画面が表示される。
 - [ ] ZIP/インストーラに steam_api64.dll / steam_appid.txt が含まれていない。
 - [ ] GmodAddonManager.UI.exe が起動する（必要なら管理者実行）。

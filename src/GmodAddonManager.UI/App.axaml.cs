@@ -53,6 +53,7 @@ public sealed partial class App : Application, IDisposable
 
     public override async void OnFrameworkInitializationCompleted()
     {
+        SafeFileLogger.TryLogStartupMilestone("FrameworkInitializationStarted");
 #if DEBUG
         try
         {
@@ -167,6 +168,7 @@ public sealed partial class App : Application, IDisposable
             }
 
             var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
+            SafeFileLogger.TryLogStartupMilestone("PathRecoveryCompleted");
 
             try
             {
@@ -186,6 +188,7 @@ public sealed partial class App : Application, IDisposable
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
                 await addonManager.InitializeAsync();
+                SafeFileLogger.TryLogStartupMilestone("AddonManagerInitialized");
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
@@ -421,6 +424,7 @@ public sealed partial class App : Application, IDisposable
                     
                     // 繧ｦ繧｣繝ｳ繝峨え繧呈・遉ｺ逧・↓陦ｨ遉ｺ
                     desktop.MainWindow.Show();
+                    SafeFileLogger.TryLogStartupMilestone("MainWindowShown");
                     if (originalShutdownMode.HasValue)
                     {
                         desktop.ShutdownMode = originalShutdownMode.Value;

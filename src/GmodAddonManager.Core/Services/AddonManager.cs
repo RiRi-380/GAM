@@ -32,6 +32,7 @@ namespace GmodAddonManager.Core.Services
         private readonly string addonsPath;
         private readonly string? gmodCachePath;
         private readonly IReadOnlyList<string>? customWorkshopCacheFilePaths;
+        private readonly int _maxParallelWorkshopScans;
         private string? gmodCacheManagerPath;
         private string? gmodCacheAddonsPath;
         private string? gmodRootPath;
@@ -165,6 +166,9 @@ namespace GmodAddonManager.Core.Services
             _maxParallelAddonStateUpdates = options.MaxParallelAddonStateUpdates.HasValue
                 ? Math.Max(1, options.MaxParallelAddonStateUpdates.Value)
                 : Math.Clamp(Environment.ProcessorCount, 2, 6);
+            _maxParallelWorkshopScans = options.MaxParallelWorkshopScans.HasValue
+                ? Math.Max(1, options.MaxParallelWorkshopScans.Value)
+                : Math.Clamp(Environment.ProcessorCount, 2, 4);
             customGmodInstallPath = string.IsNullOrWhiteSpace(options.CustomGmodInstallPath)
                 ? null
                 : options.CustomGmodInstallPath;
@@ -412,7 +416,10 @@ namespace GmodAddonManager.Core.Services
         private void RecordCurrentPathState()
         {
             configuration.PathState ??= new PathState();
-            var snapshot = DetectCurrentPathSnapshot();
+            // The constructor already resolved the startup paths. Re-running discovery here
+            // used to traverse every Workshop directory for a second time before any window
+            // could be shown. Manual path-health operations still request a fresh snapshot.
+            var snapshot = pathSnapshot ?? DetectCurrentPathSnapshot();
             PathHealthService.UpdatePathState(configuration, snapshot, managerPath, addonsPath);
         }
 
@@ -1682,10 +1689,17 @@ namespace GmodAddonManager.Core.Services
             var addons = new List<WorkshopAddon>();
             var processedIds = new HashSet<string>(StringComparer.Ordinal);
             var config = configuration ?? throw new InvalidOperationException("Configuration not initialized.");
+            var disabledAddonIds = CaptureDisabledAddonIdsForScan();
+            var invalidWorkshopIds = new List<string>();
+            var emptyCachePlaceholderCount = 0;
+
+            bool IsEnabledForScan(string addonId) =>
+                disabledAddonIds == null || !disabledAddonIds.Contains(addonId);
 
             if (Directory.Exists(workshopPath))
             {
                 var workshopDirs = GetVisibleWorkshopDirectoriesOrEmpty("ScanWorkshopFolderSoftAsync");
+                var validWorkshopDirectories = new List<(string AddonId, string Directory)>();
 
                 foreach (var directory in workshopDirs)
                 {
@@ -1695,50 +1709,83 @@ namespace GmodAddonManager.Core.Services
                         continue;
                     }
 
-                    if (!DirectoryHasAddonPayload(directory, "ScanWorkshopFolderSoftAsync"))
+                    if (!DirectoryHasAddonPayload(
+                            directory,
+                            "ScanWorkshopFolderSoftAsync",
+                            logInvalidPayload: false))
                     {
-                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "ScanWorkshopFolderSoftAsync");
+                        invalidWorkshopIds.Add(addonId);
                         continue;
                     }
 
                     processedIds.Add(addonId);
+                    validWorkshopDirectories.Add((addonId, directory));
+                }
 
-                    if (config.AddonMetadata.TryGetValue(addonId, out var savedAddon))
+                using var scanSemaphore = new SemaphoreSlim(_maxParallelWorkshopScans);
+                var scanTasks = validWorkshopDirectories.Select(async entry =>
+                {
+                    await scanSemaphore.WaitAsync();
+                    try
                     {
-                        savedAddon.FolderPath = directory;
-                        savedAddon.IsGmaFile = IsGmaAddonRuntime(addonId);
-                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
-                        try
+                        if (config.AddonMetadata.TryGetValue(entry.AddonId, out var savedAddon))
                         {
-                            var directoryInfo = new DirectoryInfo(directory);
-                            var lastUpdatedUtc = directoryInfo.LastWriteTimeUtc;
-                            if (savedAddon.Size <= 0 ||
-                                savedAddon.LastUpdated != lastUpdatedUtc)
+                            savedAddon.FolderPath = entry.Directory;
+                            savedAddon.IsGmaFile = IsGmaAddonRuntime(entry.AddonId);
+                            savedAddon.IsEnabled = IsEnabledForScan(entry.AddonId);
+                            try
                             {
-                                savedAddon.Size =
-                                    await CalculateDirectorySizeAsync(directoryInfo);
-                                savedAddon.LastUpdated = lastUpdatedUtc;
+                                var directoryInfo = new DirectoryInfo(entry.Directory);
+                                var lastUpdatedUtc = directoryInfo.LastWriteTimeUtc;
+                                if (savedAddon.Size <= 0 ||
+                                    savedAddon.LastUpdated != lastUpdatedUtc)
+                                {
+                                    savedAddon.Size =
+                                        await CalculateDirectorySizeAsync(directoryInfo);
+                                    savedAddon.LastUpdated = lastUpdatedUtc;
+                                }
                             }
+                            catch (Exception ex)
+                            {
+                                errorHandler.HandleWarning(
+                                    $"Failed to refresh addon size metadata for {entry.AddonId}: {ex.Message}",
+                                    "ScanWorkshopFolderSoftAsync");
+                            }
+
+                            return (entry.AddonId, Addon: savedAddon, IsNew: false);
                         }
-                        catch (Exception ex)
-                        {
-                            errorHandler.HandleWarning(
-                                $"Failed to refresh addon size metadata for {addonId}: {ex.Message}",
-                                "ScanWorkshopFolderSoftAsync");
-                        }
-                        addons.Add(savedAddon);
-                    }
-                    else
-                    {
-                        var addon = await ScanAddonAsync(directory);
+
+                        var addon = await ScanAddonAsyncCore(
+                            entry.Directory,
+                            payloadAlreadyValidated: true);
                         if (addon != null)
                         {
-                            addon.IsGmaFile = IsGmaAddonRuntime(addonId);
-                            addon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
-                            config.AddonMetadata[addonId] = addon;
-                            addons.Add(addon);
+                            addon.IsGmaFile = IsGmaAddonRuntime(entry.AddonId);
+                            addon.IsEnabled = IsEnabledForScan(entry.AddonId);
                         }
+
+                        return (entry.AddonId, Addon: addon, IsNew: addon != null);
                     }
+                    finally
+                    {
+                        scanSemaphore.Release();
+                    }
+                }).ToList();
+
+                var scannedWorkshopAddons = await Task.WhenAll(scanTasks);
+                foreach (var result in scannedWorkshopAddons)
+                {
+                    if (result.Addon == null)
+                    {
+                        continue;
+                    }
+
+                    if (result.IsNew)
+                    {
+                        config.AddonMetadata[result.AddonId] = result.Addon;
+                    }
+
+                    addons.Add(result.Addon);
                 }
             }
 
@@ -1779,7 +1826,7 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
 
-                        kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                        kvp.Value.IsEnabled = IsEnabledForScan(kvp.Key);
                         if (addonExists && gmaPath != null)
                         {
                             kvp.Value.FolderPath = gmaPath;
@@ -1788,11 +1835,14 @@ namespace GmodAddonManager.Core.Services
                     else
                     {
                         var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
-                        if (DirectoryHasAddonPayload(workshopDirPath, "ScanWorkshopFolderSoftAsync"))
+                        if (DirectoryHasAddonPayload(
+                                workshopDirPath,
+                                "ScanWorkshopFolderSoftAsync",
+                                logInvalidPayload: false))
                         {
                             addonExists = true;
                             kvp.Value.FolderPath = workshopDirPath;
-                            kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                            kvp.Value.IsEnabled = IsEnabledForScan(kvp.Key);
                         }
                     }
 
@@ -1816,9 +1866,7 @@ namespace GmodAddonManager.Core.Services
 
                     if (!HasNonEmptyFile(gmaFile))
                     {
-                        errorHandler.HandleInfo(
-                            $"Skipping empty GMA cache placeholder: {gmaFile}",
-                            "ScanWorkshopFolderSoftAsync");
+                        emptyCachePlaceholderCount++;
                         continue;
                     }
 
@@ -1834,7 +1882,7 @@ namespace GmodAddonManager.Core.Services
                         var savedAddon = configuration.AddonMetadata[addonId];
                         savedAddon.FolderPath = gmaFile;
                         savedAddon.IsGmaFile = true;
-                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        savedAddon.IsEnabled = IsEnabledForScan(addonId);
                         var fileInfo = new FileInfo(gmaFile);
                         savedAddon.Size = fileInfo.Length;
                         savedAddon.LastUpdated = fileInfo.LastWriteTimeUtc;
@@ -1846,7 +1894,7 @@ namespace GmodAddonManager.Core.Services
                         var addon = new WorkshopAddon(addonId, gmaFile)
                         {
                             IsGmaFile = true,
-                            IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true
+                            IsEnabled = IsEnabledForScan(addonId)
                         };
 
                         ReadGmaMetadata(gmaFile, addon);
@@ -1868,6 +1916,21 @@ namespace GmodAddonManager.Core.Services
                         addons.Add(addon);
                     }
                 }
+            }
+
+            if (invalidWorkshopIds.Count > 0)
+            {
+                errorHandler.HandleInfo(
+                    $"Skipped {invalidWorkshopIds.Count} empty or invalid Workshop folders. " +
+                    $"Example IDs: {string.Join(", ", invalidWorkshopIds.Take(5))}",
+                    "ScanWorkshopFolderSoftAsync");
+            }
+
+            if (emptyCachePlaceholderCount > 0)
+            {
+                errorHandler.HandleInfo(
+                    $"Skipped {emptyCachePlaceholderCount} empty GMA cache placeholders.",
+                    "ScanWorkshopFolderSoftAsync");
             }
 
             var deletedAddonIds = await CleanupDeletedWorkshopAddonsAsync(addons);
@@ -2993,7 +3056,14 @@ namespace GmodAddonManager.Core.Services
             return newAddons;
         }
 
-        public async Task<WorkshopAddon?> ScanAddonAsync(string addonPath)
+        public Task<WorkshopAddon?> ScanAddonAsync(string addonPath)
+        {
+            return ScanAddonAsyncCore(addonPath, payloadAlreadyValidated: false);
+        }
+
+        private async Task<WorkshopAddon?> ScanAddonAsyncCore(
+            string addonPath,
+            bool payloadAlreadyValidated)
         {
             string addonId = Path.GetFileName(addonPath);
             
@@ -3002,7 +3072,8 @@ namespace GmodAddonManager.Core.Services
                 return null;
             }
 
-            if (!DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
+            if (!payloadAlreadyValidated &&
+                !DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
             {
                 return null;
             }
@@ -3450,7 +3521,33 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
+        private HashSet<string>? CaptureDisabledAddonIdsForScan()
+        {
+            if (gmodAddonStateStore == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var snapshot = gmodAddonStateStore.ReadSnapshot();
+                return snapshot.IsValidFormat
+                    ? new HashSet<string>(snapshot.DisabledIds, StringComparer.Ordinal)
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to read addonnomount.txt once for Workshop scan: {ex.Message}",
+                    "ScanWorkshopFolderSoftAsync");
+                return null;
+            }
+        }
+
+        private bool DirectoryHasAddonPayload(
+            string directoryPath,
+            string operationName,
+            bool logInvalidPayload = true)
         {
             var result = AddonPayloadValidator.Validate(directoryPath);
             if (result.IsValid)
@@ -3458,7 +3555,9 @@ namespace GmodAddonManager.Core.Services
                 return true;
             }
 
-            if (!string.IsNullOrWhiteSpace(directoryPath) && Directory.Exists(directoryPath))
+            if (logInvalidPayload &&
+                !string.IsNullOrWhiteSpace(directoryPath) &&
+                Directory.Exists(directoryPath))
             {
                 errorHandler.HandleInfo(
                     $"Skipping invalid addon payload at {directoryPath}: {string.Join("; ", result.Reasons)}",
@@ -10463,6 +10562,9 @@ namespace GmodAddonManager.Core.Services
                 var subscriptionTruthAvailable = TryGetSubscribedAddonIdSet(
                     "CleanupDeletedWorkshopAddons",
                     out var subscribedAddonIds);
+                var currentAddonIds = new HashSet<string>(
+                    currentAddons.Where(addon => !addon.IsLocal).Select(addon => addon.Id),
+                    StringComparer.Ordinal);
 
                 if (!PathOverrideResolver.IsDirectoryUsable(workshopPath))
                 {
@@ -10487,6 +10589,14 @@ namespace GmodAddonManager.Core.Services
                     var addon = kvp.Value;
 
                     if (addon.IsLocal)
+                    {
+                        continue;
+                    }
+
+                    // The caller has already validated every item in the current inventory.
+                    // Re-validating those directories here doubled the filesystem walk and
+                    // duplicate-log volume on every startup.
+                    if (currentAddonIds.Contains(addonId))
                     {
                         continue;
                     }

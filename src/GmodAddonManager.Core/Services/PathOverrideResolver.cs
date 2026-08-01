@@ -141,7 +141,14 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
-            var installDir = ReadValveKeyValueFile(manifestPath).TryGetValue("installdir", out var value) &&
+            var manifest = ReadValveKeyValueFile(manifestPath);
+            if (!manifest.TryGetValue("appid", out var appId) ||
+                !string.Equals(appId, GmodAppId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var installDir = manifest.TryGetValue("installdir", out var value) &&
                              !string.IsNullOrWhiteSpace(value)
                 ? value
                 : "GarrysMod";
@@ -254,46 +261,60 @@ namespace GmodAddonManager.Core.Services
 
         private static WorkshopRootCandidate BuildWorkshopCandidate(string workshopRootPath, string? library)
         {
-            var validPayloadCount = 0;
-            var invalidPayloadCount = 0;
-            var rootIsUsable = IsDirectoryUsable(workshopRootPath);
-            if (rootIsUsable)
+            var expectedWorkshopRoot = string.IsNullOrWhiteSpace(library)
+                ? null
+                : Path.Combine(library, "steamapps", "workshop", "content", GmodAppId);
+            var rootMatchesLibrary = !string.IsNullOrWhiteSpace(expectedWorkshopRoot) &&
+                                     string.Equals(
+                                         NormalizePath(workshopRootPath),
+                                         NormalizePath(expectedWorkshopRoot),
+                                         StringComparison.OrdinalIgnoreCase);
+            var manifestPath = rootMatchesLibrary
+                ? Path.Combine(library!, "steamapps", "workshop", "appworkshop_4000.acf")
+                : string.Empty;
+            var hasManifest = !string.IsNullOrWhiteSpace(manifestPath) && File.Exists(manifestPath);
+            var rootIsUsable = WorkshopRootInspector.TryCheckDirectoryReadable(workshopRootPath, out _);
+            var manifestIsAuthoritative = false;
+            var manifestMatchedFolderCount = 0;
+            if (rootIsUsable && hasManifest)
             {
-                foreach (var directory in SafeEnumerateDirectories(workshopRootPath))
-                {
-                    var name = Path.GetFileName(directory);
-                    if (string.IsNullOrWhiteSpace(name) || !long.TryParse(name, out _))
-                    {
-                        continue;
-                    }
-
-                    if (AddonPayloadValidator.HasValidAddonPayload(directory))
-                    {
-                        validPayloadCount++;
-                    }
-                    else
-                    {
-                        invalidPayloadCount++;
-                    }
-                }
+                manifestMatchedFolderCount = WorkshopRootInspector.CountManifestMatchedFolders(
+                    workshopRootPath,
+                    manifestPath,
+                    out manifestIsAuthoritative);
             }
 
-            var manifestPath = string.IsNullOrWhiteSpace(library)
-                ? string.Empty
-                : Path.Combine(library, "steamapps", "workshop", "appworkshop_4000.acf");
+            var hasValidPayload = false;
+            if (rootIsUsable && !manifestIsAuthoritative)
+            {
+                hasValidPayload = WorkshopRootInspector.HasValidPayloadFallback(workshopRootPath);
+            }
+
+            var confidence = PathCandidateConfidence.Rejected;
+            if (rootIsUsable && manifestIsAuthoritative)
+            {
+                confidence = manifestMatchedFolderCount > 0
+                    ? PathCandidateConfidence.High
+                    : PathCandidateConfidence.Low;
+            }
+            else if (rootIsUsable)
+            {
+                confidence = hasValidPayload
+                    ? PathCandidateConfidence.Medium
+                    : PathCandidateConfidence.Low;
+            }
 
             return new WorkshopRootCandidate
             {
                 LibraryPath = library ?? string.Empty,
                 RootPath = workshopRootPath,
                 AppWorkshopManifestPath = manifestPath,
-                HasAppWorkshopManifest = !string.IsNullOrWhiteSpace(manifestPath) && File.Exists(manifestPath),
+                HasAppWorkshopManifest = hasManifest,
                 ContentRootExists = rootIsUsable,
-                ValidPayloadCount = validPayloadCount,
-                EmptyOrInvalidFolderCount = invalidPayloadCount,
-                Confidence = rootIsUsable
-                    ? validPayloadCount > 0 ? PathCandidateConfidence.High : PathCandidateConfidence.Low
-                    : PathCandidateConfidence.Rejected,
+                // Path discovery deliberately does not perform exhaustive payload validation.
+                ValidPayloadCount = 0,
+                EmptyOrInvalidFolderCount = 0,
+                Confidence = confidence,
                 RejectReasons = rootIsUsable
                     ? Array.Empty<string>()
                     : new[] { "Workshop content root is missing or unreadable." }
@@ -302,21 +323,7 @@ namespace GmodAddonManager.Core.Services
 
         public static bool IsDirectoryUsable(string? path)
         {
-            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-            {
-                return false;
-            }
-
-            try
-            {
-                using var enumerator = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
-                _ = enumerator.MoveNext();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return WorkshopRootInspector.TryCheckDirectoryReadable(path, out _);
         }
 
         private static string? TryInferWorkshopRootFromGmodInstall(string gmodInstallPath)
@@ -397,18 +404,6 @@ namespace GmodAddonManager.Core.Services
         private static string NormalizePath(string path)
         {
             return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-
-        private static IEnumerable<string> SafeEnumerateDirectories(string path)
-        {
-            try
-            {
-                return Directory.EnumerateDirectories(path).ToList();
-            }
-            catch
-            {
-                return Array.Empty<string>();
-            }
         }
 
         private static Dictionary<string, string> ReadValveKeyValueFile(string path)

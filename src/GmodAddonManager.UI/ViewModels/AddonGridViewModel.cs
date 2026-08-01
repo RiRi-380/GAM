@@ -1048,137 +1048,57 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> RemoveSelectedAddonsCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleSortDirectionCommand { get; }
 
-    public async Task LoadAddonsAsync()
+    public async Task LoadAddonsAsync(CancellationToken cancellationToken = default)
     {
+        var loadingStarted = false;
         try
         {
-            IsLoading = true;
-            ReloadSettings();
-            CancelBackgroundPreload();
-            CancelMetadataSupplement();
+            AddonSortOptions? sortOptions = null;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ObjectDisposedException.ThrowIf(disposed, this);
+
+                IsLoading = true;
+                loadingStarted = true;
+                ReloadSettings();
+                CancelBackgroundPreload();
+                CancelMetadataSupplement();
+                sortOptions = CurrentSortOptions;
+            });
 #if DEBUG
             // AddonGridViewModel.LoadAddonsAsync called
 #endif
-            
-            // 新しいコレクションを作成
-            var newAllAddons = new ObservableCollection<AddonItemViewModel>();
 
-            // ScanWorkshopFolderAsyncは全てのアドオン（GMAファイル含む）を返す
+            // ScanWorkshopFolderAsync contains synchronous directory enumeration
+            // around its awaits. Run the whole inventory pipeline on a worker so
+            // no continuation can capture and block Avalonia's UI context.
 #if DEBUG
             // Calling ScanWorkshopFolderAsync from AddonGridViewModel
 #endif
-            var addonList = await addonManager.ScanWorkshopFolderAsync();
-            addonList = addonList
-                .Where(addon => !addon.IsLocal && !addon.IsDownloadPending)
-                .ToList();
+            var preparedInventory = await Task.Run(
+                () => PrepareAddonInventoryAsync(sortOptions!, cancellationToken),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 #if DEBUG
-            // ScanWorkshopFolderAsync returned {addonList.Count} addons
+            // ScanWorkshopFolderAsync returned {preparedInventory.Addons.Count} addons
 #endif
-            
-            var config = addonManager.GetConfiguration();
-            currentSubscribedAddonIds = new HashSet<string>(
-                addonManager.GetResolvedAddonStates().Keys,
-                StringComparer.Ordinal);
-            var loadedAddonIds = new HashSet<string>(
-                addonList.Select(addon => addon.Id),
-                StringComparer.Ordinal);
 
-            // Only confirmed-unsubscribed references retained by custom assets get a
-            // synthetic unavailable card. Subscribed-but-pending IDs stay aggregate-only.
-            var customAssetAddonIds = config.Assets
-                .Where(asset => !asset.IsSystem)
-                .SelectMany(asset => asset.Addons)
-                .Where(addonId => addonId != "*")
-                .Distinct(StringComparer.Ordinal);
+            // Bound view models and collections are created, updated, disposed,
+            // and replaced only on Avalonia's UI thread.
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (disposed)
+                    {
+                        return;
+                    }
 
-            foreach (var addonId in customAssetAddonIds)
-            {
-                if (loadedAddonIds.Contains(addonId) ||
-                    addonManager.IsLocalAddonId(addonId) ||
-                    !config.AddonMetadata.TryGetValue(addonId, out var metadata) ||
-                    !ShouldAddRetainedMissingAddon(
-                        config.RetainMissingAssetReferences,
-                        config.SubscriptionBaselineInitialized,
-                        metadata,
-                        currentSubscribedAddonIds.Contains(addonId)))
-                {
-                    continue;
-                }
-
-                addonList.Add(new WorkshopAddon(metadata.Id, metadata.FolderPath)
-                {
-                    Title = metadata.Title,
-                    Size = metadata.Size,
-                    LastUpdated = metadata.LastUpdated,
-                    ThumbnailUrl = metadata.ThumbnailUrl,
-                    Author = metadata.Author,
-                    IsEnabled = metadata.IsEnabled,
-                    Description = metadata.Description,
-                    Type = metadata.Type,
-                    Tags = metadata.Tags,
-                    IsGmaFile = metadata.IsGmaFile,
-                    NeedsTitleUpdate = metadata.NeedsTitleUpdate,
-                    IsFavorite = metadata.IsFavorite,
-                    IsLocal = metadata.IsLocal,
-                    LocalMountPath = metadata.LocalMountPath,
-                    LocalManagedPath = metadata.LocalManagedPath,
-                    FirstSeenSubscribedAtUtc = metadata.FirstSeenSubscribedAtUtc,
-                    WorkshopUpdatedAtUtc = metadata.WorkshopUpdatedAtUtc,
-                    IsAvailable = false,
-                    IsDownloadPending = false
-                });
-            }
-            
-            // 既存のViewModelのマッピングを作成（再利用のため）
-            var existingViewModels = AllAddons.ToDictionary(vm => vm.AddonId, vm => vm);
-            var reusedAddonIds = new HashSet<string>(StringComparer.Ordinal);
-            
-            foreach (var addon in addonSortService.Sort(addonList, CurrentSortOptions))
-            {
-                // 既存のViewModelがあれば再利用、なければ新規作成
-                if (existingViewModels.TryGetValue(addon.Id, out var existingVm))
-                {
-                    reusedAddonIds.Add(addon.Id);
-                    // 既存のViewModelを更新（タイトル等が変更されている可能性がある）
-                    existingVm.UpdateFromWorkshopAddon(addon);
-                    newAllAddons.Add(existingVm);
-                }
-                else
-                {
-                    var addonVm = new AddonItemViewModel(addon, addonManager, null); // logger removed
-                    newAllAddons.Add(addonVm);
-                }
-            }
-
-            foreach (var kvp in existingViewModels)
-            {
-                if (!reusedAddonIds.Contains(kvp.Key))
-                {
-                    kvp.Value.Dispose();
-                }
-            }
-            
-            // UIスレッドで一度に置き換える
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                AllAddons = newAllAddons;
-            });
-            
-            ApplyFilter();
-            
-            // プロパティ変更通知
-            this.RaisePropertyChanged(nameof(FilteredAddonsCount));
-            this.RaisePropertyChanged(nameof(TotalAddonsCount));
-            
-            // バックグラウンドでタイトルを更新
-            if (enableBackgroundTitleUpdates)
-            {
-                _ = UpdateAddonTitlesInBackgroundAsync();
-            }
-
-            QueueMetadataSupplement();
-            
-            // logger.LogInformation($"Loaded {AllAddons.Count} addons"); // Removed logging
+                    ApplyPreparedAddonInventory(preparedInventory);
+                },
+                DispatcherPriority.Normal,
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -1190,8 +1110,149 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
         finally
         {
-            IsLoading = false;
+            if (loadingStarted &&
+                !disposed &&
+                !cancellationToken.IsCancellationRequested)
+            {
+                await Dispatcher.UIThread.InvokeAsync(
+                    () =>
+                    {
+                        if (!disposed && !cancellationToken.IsCancellationRequested)
+                        {
+                            IsLoading = false;
+                        }
+                    },
+                    DispatcherPriority.Normal,
+                    cancellationToken);
+            }
         }
+    }
+
+    private async Task<PreparedAddonInventory> PrepareAddonInventoryAsync(
+        AddonSortOptions sortOptions,
+        CancellationToken cancellationToken)
+    {
+        var addonList = await addonManager.ScanWorkshopFolderAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        addonList = addonList
+            .Where(addon => !addon.IsLocal && !addon.IsDownloadPending)
+            .ToList();
+
+        var config = addonManager.GetConfiguration();
+        var subscribedAddonIds = new HashSet<string>(
+            addonManager.GetResolvedAddonStates().Keys,
+            StringComparer.Ordinal);
+        var loadedAddonIds = new HashSet<string>(
+            addonList.Select(addon => addon.Id),
+            StringComparer.Ordinal);
+
+        // Only confirmed-unsubscribed references retained by custom assets get a
+        // synthetic unavailable card. Subscribed-but-pending IDs stay aggregate-only.
+        var customAssetAddonIds = config.Assets
+            .Where(asset => !asset.IsSystem)
+            .SelectMany(asset => asset.Addons)
+            .Where(addonId => addonId != "*")
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var addonId in customAssetAddonIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (loadedAddonIds.Contains(addonId) ||
+                addonManager.IsLocalAddonId(addonId) ||
+                !config.AddonMetadata.TryGetValue(addonId, out var metadata) ||
+                !ShouldAddRetainedMissingAddon(
+                    config.RetainMissingAssetReferences,
+                    config.SubscriptionBaselineInitialized,
+                    metadata,
+                    subscribedAddonIds.Contains(addonId)))
+            {
+                continue;
+            }
+
+            addonList.Add(new WorkshopAddon(metadata.Id, metadata.FolderPath)
+            {
+                Title = metadata.Title,
+                Size = metadata.Size,
+                LastUpdated = metadata.LastUpdated,
+                ThumbnailUrl = metadata.ThumbnailUrl,
+                Author = metadata.Author,
+                IsEnabled = metadata.IsEnabled,
+                Description = metadata.Description,
+                Type = metadata.Type,
+                Tags = metadata.Tags,
+                IsGmaFile = metadata.IsGmaFile,
+                NeedsTitleUpdate = metadata.NeedsTitleUpdate,
+                IsFavorite = metadata.IsFavorite,
+                IsLocal = metadata.IsLocal,
+                LocalMountPath = metadata.LocalMountPath,
+                LocalManagedPath = metadata.LocalManagedPath,
+                FirstSeenSubscribedAtUtc = metadata.FirstSeenSubscribedAtUtc,
+                WorkshopUpdatedAtUtc = metadata.WorkshopUpdatedAtUtc,
+                IsAvailable = false,
+                IsDownloadPending = false
+            });
+        }
+
+        var sortedAddons = addonSortService.Sort(addonList, sortOptions).ToList();
+        return new PreparedAddonInventory(sortedAddons, subscribedAddonIds);
+    }
+
+    private void ApplyPreparedAddonInventory(PreparedAddonInventory inventory)
+    {
+        var newAllAddons = new ObservableCollection<AddonItemViewModel>();
+        var existingViewModels = AllAddons.ToDictionary(vm => vm.AddonId, vm => vm);
+        var reusedAddonIds = new HashSet<string>(StringComparer.Ordinal);
+
+        currentSubscribedAddonIds = inventory.SubscribedAddonIds;
+        foreach (var addon in inventory.Addons)
+        {
+            if (existingViewModels.TryGetValue(addon.Id, out var existingVm))
+            {
+                reusedAddonIds.Add(addon.Id);
+                existingVm.UpdateFromWorkshopAddon(addon);
+                newAllAddons.Add(existingVm);
+            }
+            else
+            {
+                newAllAddons.Add(new AddonItemViewModel(addon, addonManager, null));
+            }
+        }
+
+        foreach (var kvp in existingViewModels)
+        {
+            if (!reusedAddonIds.Contains(kvp.Key))
+            {
+                kvp.Value.Dispose();
+            }
+        }
+
+        AllAddons = newAllAddons;
+        ApplyFilter();
+        this.RaisePropertyChanged(nameof(FilteredAddonsCount));
+        this.RaisePropertyChanged(nameof(TotalAddonsCount));
+
+        if (enableBackgroundTitleUpdates)
+        {
+            _ = UpdateAddonTitlesInBackgroundAsync();
+        }
+
+        QueueMetadataSupplement();
+    }
+
+    private sealed class PreparedAddonInventory
+    {
+        public PreparedAddonInventory(
+            IReadOnlyList<WorkshopAddon> addons,
+            HashSet<string> subscribedAddonIds)
+        {
+            Addons = addons;
+            SubscribedAddonIds = subscribedAddonIds;
+        }
+
+        public IReadOnlyList<WorkshopAddon> Addons { get; }
+
+        public HashSet<string> SubscribedAddonIds { get; }
     }
 
     public void ApplyFilter()

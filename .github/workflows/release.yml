@@ -47,7 +47,10 @@ jobs:
         )
 
         dotnet build -c Release @versionProps
-        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true @versionProps -o publish
+        # Keep the release self-contained, but publish as multiple files. A single-file
+        # bundle extracts native Avalonia/runtime libraries to %TEMP%\.net before the
+        # process can show a window, which makes a cold start look like launch failed.
+        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false @versionProps -o publish
       shell: pwsh
       
     - name: Copy LICENSE

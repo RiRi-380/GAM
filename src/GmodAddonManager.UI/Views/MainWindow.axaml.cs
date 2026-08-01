@@ -5,16 +5,20 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 
 namespace GmodAddonManager.UI.Views;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IDisposable
 {
     private TextBox? _searchTextBox;
+    private readonly CancellationTokenSource _startupCancellation = new();
     private int _activationRefreshGeneration;
+    private int _resourcesDisposed;
+    private int _startupStarted;
     private bool _isClosed;
     
     public MainWindow()
@@ -60,12 +64,29 @@ public partial class MainWindow : Window
         try
         {
             base.OnOpened(e);
+
+            if (Interlocked.Exchange(ref _startupStarted, 1) != 0)
+            {
+                return;
+            }
             
-            // ViewModelのInitializeAsyncを呼び出す
+            // Keep the existing window visible and responsive while the initial
+            // Workshop inventory is prepared. Yielding at Render priority makes
+            // sure the busy overlay gets a frame before filesystem work starts.
             if (DataContext is MainWindowViewModel viewModel)
             {
+                var startupToken = _startupCancellation.Token;
                 viewModel.StartStartupUpdateCheck();
-                await viewModel.InitializeAsync();
+                using (viewModel.BeginBusy(
+                           L.Get("Busy.RefreshingAddons"),
+                           L.Get("Busy.ScanningWorkshop")))
+                {
+                    await Dispatcher.UIThread.InvokeAsync(
+                        static () => { },
+                        DispatcherPriority.Render);
+                    startupToken.ThrowIfCancellationRequested();
+                    await viewModel.InitializeAsync(startupToken);
+                }
             }
             
             // 検索ボックスの参照を取得
@@ -80,6 +101,10 @@ public partial class MainWindow : Window
                     // 特に何もしなくても、自動的に青枠とカーソルが消える
                 };
             }
+        }
+        catch (OperationCanceledException) when (_isClosed)
+        {
+            // Closing the window during the initial scan is an expected race.
         }
         catch (Exception ex)
         {
@@ -113,8 +138,21 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _isClosed = true;
+        Dispose();
         Interlocked.Increment(ref _activationRefreshGeneration);
         Activated -= OnWindowActivated;
         base.OnClosed(e);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _resourcesDisposed, 1) != 0)
+        {
+            return;
+        }
+
+        _startupCancellation.Cancel();
+        _startupCancellation.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

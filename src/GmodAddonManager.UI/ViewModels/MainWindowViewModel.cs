@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Disposables;
+using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Views;
@@ -305,7 +306,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         private set => SetAndRaise(ref addonStatistics, value);
     }
 
-    public async Task InitializeAsync()
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         try
         {
@@ -315,7 +316,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
             // AddonManager is initialized once by App. The grid load owns the single
             // startup workshop scan and updates the configuration before assets render.
-            await AddonGridViewModel.LoadAddonsAsync();
+            await AddonGridViewModel.LoadAddonsAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            SafeFileLogger.TryLogStartupMilestone("InventoryReady");
 
             // ViewModel繧貞・譛溷喧
             AssetListViewModel.LoadAssets();
@@ -341,6 +344,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 繧｢繝・・繝・・繝医メ繧ｧ繝・け繧帝幕蟋・
         
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Let the owner window end its opened-handler without touching closed UI.
+            throw;
         }
         catch (Exception ex)
         {

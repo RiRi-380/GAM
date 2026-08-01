@@ -48,6 +48,7 @@ Steamの購読・購読解除はSteamクライアント側で行います。GAM�
 ## 動作環境
 - Windows 10/11 (64-bit)
 - Setup/Portable配布物はself-containedのため、.NET Runtimeの別途導入は不要
+- 起動前の一時展開を避けるため、配布物は複数ファイル構成です。Portable版はZIPをフォルダーへ展開し、同梱ファイルを保ったまま `GmodAddonManager.UI.exe` を起動してください
 - Setup版はVisual C++ 2015-2022 x64を必要に応じて導入（Portable版では別途必要な場合があります）
 
 ## インストール

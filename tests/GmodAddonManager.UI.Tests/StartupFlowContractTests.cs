@@ -12,19 +12,25 @@ public sealed class StartupFlowContractTests
             "GmodAddonManager.UI",
             "ViewModels",
             "MainWindowViewModel.cs");
-        var initializeMethod = ExtractMethod(source, "public async Task InitializeAsync()");
+        var initializeMethod = ExtractMethod(
+            source,
+            "public async Task InitializeAsync(CancellationToken cancellationToken = default)");
 
         Assert.Contains(
-            "await AddonGridViewModel.LoadAddonsAsync();",
+            "await AddonGridViewModel.LoadAddonsAsync(cancellationToken);",
             initializeMethod,
             StringComparison.Ordinal);
         Assert.Contains(
             "AssetListViewModel.LoadAssets();",
             initializeMethod,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "SafeFileLogger.TryLogStartupMilestone(\"InventoryReady\");",
+            initializeMethod,
+            StringComparison.Ordinal);
         Assert.True(
             initializeMethod.IndexOf(
-                "await AddonGridViewModel.LoadAddonsAsync();",
+                "await AddonGridViewModel.LoadAddonsAsync(cancellationToken);",
                 StringComparison.Ordinal) <
             initializeMethod.IndexOf(
                 "AssetListViewModel.LoadAssets();",
@@ -47,6 +53,114 @@ public sealed class StartupFlowContractTests
             "NewAddonCheckWindow",
             initializeMethod,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowRendersItsBusyOverlayBeforeStartingInventoryLoad()
+    {
+        var source = ReadRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Views",
+            "MainWindow.axaml.cs");
+        var openedMethod = ExtractMethod(
+            source,
+            "protected override async void OnOpened(EventArgs e)");
+
+        var busyIndex = openedMethod.IndexOf(
+            "viewModel.BeginBusy(",
+            StringComparison.Ordinal);
+        var renderIndex = openedMethod.IndexOf(
+            "DispatcherPriority.Render",
+            StringComparison.Ordinal);
+        var initializeIndex = openedMethod.IndexOf(
+            "await viewModel.InitializeAsync(startupToken);",
+            StringComparison.Ordinal);
+
+        Assert.True(busyIndex >= 0, "Startup must expose the existing busy overlay.");
+        Assert.True(
+            renderIndex > busyIndex,
+            "The busy state must be set before yielding a render turn.");
+        Assert.True(
+            initializeIndex > renderIndex,
+            "Workshop inventory loading must start only after the render turn.");
+        Assert.Contains(
+            "startupToken.ThrowIfCancellationRequested();",
+            openedMethod,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkshopInventoryRunsOnAWorkerAndAppliesBoundStateOnTheUiThread()
+    {
+        var source = ReadRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "ViewModels",
+            "AddonGridViewModel.cs");
+        var loadMethod = ExtractMethod(
+            source,
+            "public async Task LoadAddonsAsync(CancellationToken cancellationToken = default)");
+        var prepareMethod = ExtractMethod(
+            source,
+            "private async Task<PreparedAddonInventory> PrepareAddonInventoryAsync(");
+
+        Assert.Contains("await Task.Run(", loadMethod, StringComparison.Ordinal);
+        Assert.Contains(
+            "PrepareAddonInventoryAsync(sortOptions!, cancellationToken)",
+            loadMethod,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await addonManager.ScanWorkshopFolderAsync().ConfigureAwait(false)",
+            prepareMethod,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Dispatcher.UIThread",
+            prepareMethod,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("AllAddons", prepareMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddonItemViewModel", prepareMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaisePropertyChanged", prepareMethod, StringComparison.Ordinal);
+
+        var applyIndex = loadMethod.IndexOf(
+            "ApplyPreparedAddonInventory(preparedInventory);",
+            StringComparison.Ordinal);
+        var dispatcherIndex = loadMethod.LastIndexOf(
+            "await Dispatcher.UIThread.InvokeAsync(",
+            applyIndex,
+            StringComparison.Ordinal);
+        Assert.True(applyIndex >= 0, "Prepared inventory must be applied.");
+        Assert.True(
+            dispatcherIndex >= 0 && dispatcherIndex < applyIndex,
+            "Observable state must be applied through the UI dispatcher.");
+        Assert.Contains(
+            "!cancellationToken.IsCancellationRequested",
+            loadMethod,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DispatcherPriority.Normal",
+            loadMethod,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClosingTheMainWindowCancelsPendingStartupInventory()
+    {
+        var source = ReadRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Views",
+            "MainWindow.axaml.cs");
+        var closedMethod = ExtractMethod(
+            source,
+            "protected override void OnClosed(EventArgs e)");
+        var disposeMethod = ExtractMethod(
+            source,
+            "public void Dispose()");
+
+        Assert.Contains("Dispose();", closedMethod, StringComparison.Ordinal);
+        Assert.Contains("_startupCancellation.Cancel();", disposeMethod, StringComparison.Ordinal);
+        Assert.Contains("_startupCancellation.Dispose();", disposeMethod, StringComparison.Ordinal);
     }
 
     [Fact]
