@@ -357,16 +357,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void RefreshActualStateFromRuntime()
+    public async Task RefreshActualStateFromRuntimeAsync()
     {
         if (!isInitialized)
         {
             return;
         }
 
-        // ApplyFilter refreshes each card from CaptureState(). This is deliberately
-        // read-only: focus recovery must accept GMod-side changes without reconciling.
-        AddonGridViewModel.ApplyFilter();
+        await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();
+        RefreshGmodDisabledAssetPresentation();
     }
 
     public async Task RefreshAddonsAsync(bool rescanWorkshop = true, bool showProgress = false)
@@ -418,9 +417,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             {
                 AddonGridViewModel.ApplyFilter();
             }
-            
-            // 繧｢繝峨が繝ｳ邨ｱ險域ュ蝣ｱ繧呈峩譁ｰ
-            UpdateAddonStatistics();
+
+            await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();
+            RefreshGmodDisabledAssetPresentation();
         }
         catch (Exception ex)
         {
@@ -432,6 +431,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         {
             progressDialog?.Close();
         }
+    }
+
+    public void RefreshGmodDisabledAssetPresentation()
+    {
+        var currentAssetId = AddonGridViewModel.CurrentAsset?.Id ??
+                             AssetListViewModel.SelectedAsset?.Id;
+        AssetListViewModel.RefreshGmodDisabledAsset();
+
+        if (!string.IsNullOrWhiteSpace(currentAssetId))
+        {
+            var refreshedCurrentAsset = AssetListViewModel.GetAssetById(currentAssetId);
+            if (refreshedCurrentAsset != null &&
+                !ReferenceEquals(refreshedCurrentAsset, AddonGridViewModel.CurrentAsset))
+            {
+                AssetListViewModel.SelectedAsset = refreshedCurrentAsset;
+                AddonGridViewModel.SetCurrentAsset(refreshedCurrentAsset);
+            }
+        }
+
+        // Reconciliation only updates GAM's fixed system Asset. ApplyFilter then
+        // refreshes card states and selected-Asset membership without writing GMod.
+        AddonGridViewModel.ApplyFilter();
+        UpdateAddonStatistics();
     }
     
     private void UpdateAddonStatistics()

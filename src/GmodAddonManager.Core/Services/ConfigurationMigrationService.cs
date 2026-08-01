@@ -28,8 +28,10 @@ namespace GmodAddonManager.Core.Services
     /// </summary>
     public sealed class ConfigurationMigrationService
     {
-        private const string SubscribeSystemAssetId = "subscribe-system-asset";
-        private const string JunctionSystemAssetId = "junction-system-asset";
+        private const string SubscribeSystemAssetId = SystemAssetDefinitions.SubscribeId;
+        private const string JunctionSystemAssetId = SystemAssetDefinitions.JunctionId;
+        private readonly GmodDisabledAddonReconciliationService gmodDisabledService =
+            new GmodDisabledAddonReconciliationService();
 
         public bool RequiresMigration(JObject rawConfiguration)
         {
@@ -81,6 +83,15 @@ namespace GmodAddonManager.Core.Services
             configuration.PathState ??= new PathState();
             configuration.KnownSubscribedAddonIds ??= new List<string>();
             configuration.SubscriptionFirstSeenAtUtc ??= new Dictionary<string, DateTime>();
+            configuration.LastGamAppliedAddonStates ??= new Dictionary<string, bool>();
+            configuration.LastObservedGmodAddonStates ??= new Dictionary<string, bool>();
+
+            // Eligibility must be evaluated before legacy fields are stripped.
+            // Otherwise a user-edited same-name Asset could be normalized into
+            // the shape of the old generated import and be absorbed by mistake.
+            var gmodDisabledNormalization = gmodDisabledService.EnsureSystemAsset(
+                configuration,
+                absorbUntouchedLegacyImport: true);
 
             foreach (var asset in configuration.Assets.ToList())
             {
@@ -90,6 +101,11 @@ namespace GmodAddonManager.Core.Services
                 if (IsSubscribeAsset(asset, rawAsset))
                 {
                     NormalizeSubscribeAsset(asset, rawAsset);
+                }
+                else if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(asset.Id))
+                {
+                    // The dedicated Asset is normalized after duplicate and legacy
+                    // import handling below.
                 }
                 else if (IsJunctionAsset(asset, rawAsset) && removeLegacyJunctionAsset)
                 {
@@ -109,6 +125,9 @@ namespace GmodAddonManager.Core.Services
             }
 
             EnsureSubscribeAsset(configuration);
+            gmodDisabledService.EnsureSystemAsset(
+                configuration,
+                absorbUntouchedLegacyImport: false);
 
             configuration.SchemaVersion = Configuration.CurrentSchemaVersion;
             configuration.Version = "2.0";
@@ -117,6 +136,20 @@ namespace GmodAddonManager.Core.Services
             configuration.SubscriptionBaselineInitialized = false;
             configuration.KnownSubscribedAddonIds.Clear();
             configuration.SubscriptionFirstSeenAtUtc.Clear();
+            configuration.GamAppliedRuntimeBaselineInitialized = false;
+            configuration.LastGamAppliedAddonStates.Clear();
+            configuration.LastGamAppliedRuntimeAtUtc = null;
+            configuration.LastGamAppliedStateStorePath = null;
+            configuration.GmodObservationBaselineInitialized = false;
+            configuration.LastObservedGmodAddonStates.Clear();
+            configuration.LastObservedGmodRuntimeAtUtc = null;
+            configuration.LastObservedGmodStateStorePath = null;
+            configuration.PendingGamRuntimeWrite = null;
+            configuration.GmodAttributionMigrationPending = true;
+            if (gmodDisabledNormalization.AbsorbedLegacyImport)
+            {
+                result.Changed = true;
+            }
             result.Changed = true;
             return result;
         }
@@ -151,6 +184,10 @@ namespace GmodAddonManager.Core.Services
             configuration.PathState ??= new PathState();
             configuration.KnownSubscribedAddonIds ??= new List<string>();
             configuration.SubscriptionFirstSeenAtUtc ??= new Dictionary<string, DateTime>();
+            configuration.LastGamAppliedAddonStates ??= new Dictionary<string, bool>();
+            configuration.LastObservedGmodAddonStates ??= new Dictionary<string, bool>();
+
+            NormalizeAttributionState(configuration);
 
             var subscribeSeen = false;
             foreach (var asset in configuration.Assets.ToList())
@@ -166,6 +203,10 @@ namespace GmodAddonManager.Core.Services
 
                     NormalizeSubscribeAsset(asset, rawAsset: null);
                     subscribeSeen = true;
+                }
+                else if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(asset.Id))
+                {
+                    // Normalized after duplicate handling and legacy conversion.
                 }
                 else
                 {
@@ -190,6 +231,9 @@ namespace GmodAddonManager.Core.Services
             }
 
             EnsureSubscribeAsset(configuration);
+            gmodDisabledService.EnsureSystemAsset(
+                configuration,
+                absorbUntouchedLegacyImport: false);
             configuration.SchemaVersion = Configuration.CurrentSchemaVersion;
             configuration.Version = "2.0";
         }
@@ -299,6 +343,55 @@ namespace GmodAddonManager.Core.Services
                 !ReferenceEquals(asset, subscribe));
             configuration.Assets.Remove(subscribe);
             configuration.Assets.Insert(0, subscribe);
+        }
+
+        private static void NormalizeAttributionState(Configuration configuration)
+        {
+            configuration.LastGamAppliedAddonStates = NormalizeStateMap(
+                configuration.LastGamAppliedAddonStates);
+            configuration.LastObservedGmodAddonStates = NormalizeStateMap(
+                configuration.LastObservedGmodAddonStates);
+
+            if (!configuration.GamAppliedRuntimeBaselineInitialized)
+            {
+                configuration.LastGamAppliedAddonStates.Clear();
+                configuration.LastGamAppliedRuntimeAtUtc = null;
+                configuration.LastGamAppliedStateStorePath = null;
+            }
+            if (!configuration.GmodObservationBaselineInitialized)
+            {
+                configuration.LastObservedGmodAddonStates.Clear();
+                configuration.LastObservedGmodRuntimeAtUtc = null;
+                configuration.LastObservedGmodStateStorePath = null;
+            }
+
+            if (configuration.PendingGamRuntimeWrite != null)
+            {
+                configuration.PendingGamRuntimeWrite.OperationId ??= string.Empty;
+                configuration.PendingGamRuntimeWrite.TargetStates = NormalizeStateMap(
+                    configuration.PendingGamRuntimeWrite.TargetStates);
+                configuration.PendingGamRuntimeWrite.PreviousStates = NormalizeStateMap(
+                    configuration.PendingGamRuntimeWrite.PreviousStates);
+                if (configuration.PendingGamRuntimeWrite.TargetStates.Count == 0)
+                {
+                    configuration.PendingGamRuntimeWrite = null;
+                }
+            }
+        }
+
+        private static Dictionary<string, bool> NormalizeStateMap(
+            IEnumerable<KeyValuePair<string, bool>>? states)
+        {
+            return (states ?? Enumerable.Empty<KeyValuePair<string, bool>>())
+                .Where(entry =>
+                    !string.IsNullOrWhiteSpace(entry.Key) &&
+                    ulong.TryParse(entry.Key.Trim(), out _))
+                .GroupBy(entry => entry.Key.Trim(), StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Last().Value,
+                    StringComparer.Ordinal);
         }
 
         private static void NormalizeAssetCollections(Asset asset)

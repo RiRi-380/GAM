@@ -77,9 +77,10 @@ public sealed class AddonManagerInitializationTests : IDisposable
             await manager.InitializeAsync();
 
             Assert.False(manager.GetConfiguration().InitialRuntimeImportCompleted);
-            Assert.DoesNotContain(
+            var disabled = Assert.Single(
                 manager.GetConfiguration().Assets,
-                asset => asset.Name == InitialAddonStateImportService.ImportedAssetName);
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+            Assert.Empty(disabled.Addons);
         }
 
         Assert.Equal(malformed, File.ReadAllText(noMountPath));
@@ -126,7 +127,9 @@ public sealed class AddonManagerInitializationTests : IDisposable
 
         Assert.Equal(
             legacyJson,
-            File.ReadAllText(configPath + ".pre-v2.bak", Encoding.UTF8));
+            File.ReadAllText(
+                configPath + $".pre-schema-{Configuration.CurrentSchemaVersion}.bak",
+                Encoding.UTF8));
         var mixed = Assert.Single(manager.GetConfiguration().Assets, asset => asset.Id == "mixed");
         Assert.Equal(AddonState.Disabled, mixed.GetWholeState());
         Assert.True(mixed.NeedsMigrationReview);
@@ -134,7 +137,7 @@ public sealed class AddonManagerInitializationTests : IDisposable
     }
 
     [Fact]
-    public async Task Initialize_ExistingSchemaV2WithoutImportMarkerDoesNotRunFirstImport()
+    public async Task Initialize_ExistingCurrentSchemaWithoutImportMarkerDoesNotRunFirstImport()
     {
         WriteManifest(("100", true));
         var originalNoMount = BuildNoMount("100");
@@ -161,9 +164,8 @@ public sealed class AddonManagerInitializationTests : IDisposable
         await manager.InitializeAsync();
 
         Assert.True(manager.GetConfiguration().InitialRuntimeImportCompleted);
-        Assert.DoesNotContain(
-            manager.GetConfiguration().Assets,
-            asset => asset.Name == InitialAddonStateImportService.ImportedAssetName);
+        Assert.Empty(manager.GetConfiguration().Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
         Assert.Equal(originalNoMount, File.ReadAllText(noMountPath, Encoding.UTF8));
 
         var persisted = JObject.Parse(
@@ -180,7 +182,7 @@ public sealed class AddonManagerInitializationTests : IDisposable
         File.WriteAllText(noMountPath, originalNoMount, new UTF8Encoding(false));
         var configPath = Path.Combine(appDataPath, "config.json");
         const string futureJson =
-            "{\"schemaVersion\":3,\"version\":\"3.0\",\"futureOnly\":{\"preserve\":true},\"assets\":[]}";
+            "{\"schemaVersion\":4,\"version\":\"4.0\",\"futureOnly\":{\"preserve\":true},\"assets\":[]}";
         File.WriteAllText(configPath, futureJson, new UTF8Encoding(false));
 
         using var manager = CreateManager();
@@ -188,7 +190,8 @@ public sealed class AddonManagerInitializationTests : IDisposable
 
         Assert.Equal(futureJson, File.ReadAllText(configPath, Encoding.UTF8));
         Assert.Equal(originalNoMount, File.ReadAllText(noMountPath, Encoding.UTF8));
-        Assert.False(File.Exists(configPath + ".pre-v2.bak"));
+        Assert.False(File.Exists(
+            configPath + $".pre-schema-{Configuration.CurrentSchemaVersion}.bak"));
     }
 
     [Fact]

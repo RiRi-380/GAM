@@ -272,10 +272,132 @@ public sealed class ConfigurationMigrationServiceTests
         var service = new ConfigurationMigrationService();
 
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":1}")));
-        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":2}")));
+        Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":2}")));
+        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":3}")));
         var exception = Assert.Throws<UnsupportedConfigurationSchemaException>(
-            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":3}")));
-        Assert.Equal(3, exception.FoundVersion);
+            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":4}")));
+        Assert.Equal(4, exception.FoundVersion);
         Assert.Equal(Configuration.CurrentSchemaVersion, exception.SupportedVersion);
+    }
+
+    [Fact]
+    public void Migrate_AbsorbsExactlyUntouchedLegacyImportedAssetBeforeNormalization()
+    {
+        var raw = CreateLegacyImportConfiguration();
+        var config = raw.ToObject<Configuration>()!;
+
+        new ConfigurationMigrationService().Migrate(
+            raw,
+            config,
+            removeLegacyJunctionAsset: true);
+
+        var disabled = Assert.Single(
+            config.Assets,
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+        Assert.Equal(["100", "200"], disabled.Addons);
+        Assert.DoesNotContain(config.Assets, asset => asset.Id == "legacy-import");
+    }
+
+    [Theory]
+    [InlineData("image")]
+    [InlineData("favorite")]
+    [InlineData("collection")]
+    [InlineData("addonStates")]
+    [InlineData("version")]
+    [InlineData("name")]
+    [InlineData("state")]
+    public void Migrate_DoesNotAbsorbModifiedLegacyNamedAsset(string modification)
+    {
+        var raw = CreateLegacyImportConfiguration();
+        var legacy = (JObject)((JArray)raw["assets"]!)[0]!;
+        switch (modification)
+        {
+            case "image":
+                legacy["imagePath"] = "asset-images/custom.png";
+                break;
+            case "favorite":
+                legacy["isFavorite"] = true;
+                break;
+            case "collection":
+                legacy["workshopCollectionId"] = "123";
+                break;
+            case "addonStates":
+                legacy["addonStates"] = new JObject { ["100"] = 2 };
+                break;
+            case "version":
+                legacy["currentVersion"] = 1;
+                legacy["versionHistory"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["version"] = 1,
+                        ["createdAt"] = "2026-01-01T00:00:00Z",
+                        ["addonIds"] = new JArray("100")
+                    }
+                };
+                break;
+            case "name":
+                legacy["name"] = "My GMod Disabled List";
+                break;
+            case "state":
+                legacy["state"] = 0;
+                break;
+        }
+        var config = raw.ToObject<Configuration>()!;
+
+        new ConfigurationMigrationService().Migrate(
+            raw,
+            config,
+            removeLegacyJunctionAsset: true);
+
+        Assert.Contains(config.Assets, asset => asset.Id == "legacy-import");
+        Assert.Empty(config.Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
+    }
+
+    [Fact]
+    public void NormalizeCurrentSchema_DoesNotAbsorbLaterSameNameCustomAsset()
+    {
+        var config = new Configuration
+        {
+            InitialRuntimeImportCompleted = true
+        };
+        config.CreateDefaultAssets();
+        config.Assets.Add(new Asset(
+            GmodDisabledAddonReconciliationService.LegacyImportedAssetName)
+        {
+            Id = "user-created-later",
+            Addons = ["100"],
+            State = AddonState.Excluded
+        });
+
+        new ConfigurationMigrationService().NormalizeCurrentSchema(config);
+
+        Assert.Contains(config.Assets, asset => asset.Id == "user-created-later");
+        Assert.Empty(config.Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
+    }
+
+    private static JObject CreateLegacyImportConfiguration()
+    {
+        return JObject.Parse(
+            $$"""
+            {
+              "schemaVersion": 2,
+              "initialRuntimeImportCompleted": true,
+              "assets": [
+                {
+                  "id": "legacy-import",
+                  "name": "{{GmodDisabledAddonReconciliationService.LegacyImportedAssetName}}",
+                  "isSystem": false,
+                  "state": 2,
+                  "addons": ["100", "200"],
+                  "addonStates": {},
+                  "currentVersion": 0,
+                  "versionHistory": []
+                }
+              ]
+            }
+            """);
     }
 }

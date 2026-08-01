@@ -48,7 +48,7 @@ public partial class MainWindow : Window, IDisposable
 
             if (DataContext is MainWindowViewModel viewModel)
             {
-                viewModel.RefreshActualStateFromRuntime();
+                await viewModel.RefreshActualStateFromRuntimeAsync();
             }
         }
         catch (Exception ex)

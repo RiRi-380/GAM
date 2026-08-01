@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
@@ -492,19 +493,38 @@ public sealed partial class App : Application, IDisposable
 
     private async Task ApplyPendingChangesAfterGmodStoppedAsync()
     {
-        if (pendingChangeManager == null)
+        if (addonManager == null)
         {
             return;
         }
 
         try
         {
-            await pendingChangeManager.ApplyPendingChangesAsync();
+            if (pendingChangeManager?.HasPendingChanges() == true)
+            {
+                // PendingChangeManager owns the atomic pre-apply observation and
+                // conflict decision. Reading here first could consume its journal conflict.
+                await pendingChangeManager.ApplyPendingChangesAsync();
+            }
+            else
+            {
+                await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop &&
+                    desktop.MainWindow?.IsVisible == true &&
+                    desktop.MainWindow.DataContext is MainWindowViewModel mainViewModel)
+                {
+                    mainViewModel.RefreshGmodDisabledAssetPresentation();
+                }
+            });
         }
         catch (Exception ex)
         {
             // Best-effort; avoid crashing shutdown.
-            SafeFileLogger.TryLogException("App.PendingChangeManager.ApplyPendingChangesAsync", ex);
+            SafeFileLogger.TryLogException("App.GmodStoppedRuntimeSync", ex);
         }
     }
 

@@ -971,6 +971,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         StringComparison.OrdinalIgnoreCase));
             }
 
+            if (CurrentAsset?.IsGmodDisabledAsset == true && ShowOnlyAssetAddons)
+            {
+                return FormatFixedMembershipCountDisplay(
+                    FilteredAddonsCount,
+                    CurrentAsset.AddonCount);
+            }
+
             if (CurrentAsset == null)
             {
                 return $"({FilteredAddonsCount})";
@@ -2539,6 +2546,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         return japanese
             ? $"(表示 {visibleCount} / 利用可能 {availableCount} / 購読中 {subscribedCount})"
             : $"(Showing {visibleCount} / Available {availableCount} / Subscribed {subscribedCount})";
+    }
+
+    private static string FormatFixedMembershipCountDisplay(
+        int visibleCount,
+        int membershipCount)
+    {
+        return visibleCount == membershipCount
+            ? $"({membershipCount})"
+            : $"({visibleCount}/{membershipCount})";
     }
 
     private static bool MatchesAssetMembership(

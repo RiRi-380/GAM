@@ -32,6 +32,7 @@ namespace GmodAddonManager.Core.Services
         private readonly SemaphoreSlim applyGate = new SemaphoreSlim(1, 1);
         private PendingChanges pendingChanges = new PendingChanges();
         private Guid markerGeneration = Guid.Empty;
+        private bool pendingStateReadWasAuthoritative;
 
         internal Func<Task>? BeforeRuntimeApplyAsync { get; set; }
 
@@ -49,7 +50,22 @@ namespace GmodAddonManager.Core.Services
             this.errorHandler = errorHandler;
             LoadPendingChanges();
 
+            addonManager.PendingChangeCountProvider = () => GetPendingChangeCount();
+            addonManager.QueueRuntimeApplyTrackedProvider = QueueApplyStatesTracked;
+            addonManager.ClearRuntimeApplyIfGenerationProvider =
+                TryClearApplyMarkerIfGeneration;
             addonManager.QueueRuntimeApplyProvider = QueueApplyStates;
+            try
+            {
+                addonManager.TryFinalizeOrphanedRuntimeAttributionConflict(
+                    HasDurablyConfirmedNoPendingMarker());
+            }
+            catch (Exception ex)
+            {
+                errorHandler?.HandleWarning(
+                    $"An orphaned runtime-attribution conflict could not be finalized: {ex.Message}",
+                    "PendingChangeManager.Initialize");
+            }
         }
 
         public void QueueChange(AddonChange change)
@@ -84,14 +100,49 @@ namespace GmodAddonManager.Core.Services
 
         public void QueueApplyStates()
         {
+            _ = QueueApplyStatesTracked();
+        }
+
+        internal Guid QueueApplyStatesTracked()
+        {
             lock (lockObject)
             {
+                var previousChanges = pendingChanges.Changes.ToList();
+                var previousGeneration = markerGeneration;
                 ReplaceWithApplyMarkerNoLock(DateTime.UtcNow);
                 if (!TrySavePendingChangesNoLock())
                 {
+                    pendingChanges.Changes = previousChanges;
+                    markerGeneration = previousGeneration;
                     throw new IOException(
                         "The pending runtime apply marker could not be persisted.");
                 }
+
+                return markerGeneration;
+            }
+        }
+
+        internal bool TryClearApplyMarkerIfGeneration(Guid expectedGeneration)
+        {
+            lock (lockObject)
+            {
+                if (markerGeneration != expectedGeneration)
+                {
+                    return false;
+                }
+
+                var previousChanges = pendingChanges.Changes.ToList();
+                pendingChanges.Changes.RemoveAll(
+                    change => ParseActionType(change.Action) ==
+                              PendingChangeActionType.ApplyStates);
+                if (!TrySavePendingChangesNoLock())
+                {
+                    pendingChanges.Changes = previousChanges;
+                    throw new IOException(
+                        "The pending runtime apply marker could not be durably cleared.");
+                }
+
+                return true;
             }
         }
 
@@ -148,9 +199,61 @@ namespace GmodAddonManager.Core.Services
                     await BeforeRuntimeApplyAsync();
                 }
 
-                var applied = await addonManager.UpdateAddonStatesAsync();
-                if (!applied)
+                var pendingObservation =
+                    await addonManager.RefreshGmodDisabledAddonsBeforePendingApplyAsync();
+                if (pendingObservation?.PendingRecovery ==
+                    PendingGamRuntimeWriteRecovery.Conflicted)
                 {
+                    var markerCleared = TryClearApplyMarkerIfGeneration(
+                        capturedMarkerGeneration);
+                    if (markerCleared)
+                    {
+                        await addonManager.FinalizeRuntimeAttributionConflictAsync(
+                            pendingObservation.PendingOperationId);
+                    }
+
+                    var conflictError = new InvalidOperationException(
+                        "Automatic runtime apply was cancelled because GMod changed while a prior GAM write was unresolved.");
+                    ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
+                    {
+                        Change = marker,
+                        Error = conflictError
+                    });
+                    errorHandler?.HandleWarning(
+                        conflictError.Message,
+                        "PendingChangeManager.ApplyPendingChangesAsync");
+                    return;
+                }
+
+                var applyResult = await addonManager.UpdateAddonStatesWithResultAsync();
+                if (!applyResult.Succeeded)
+                {
+                    if (string.Equals(
+                            applyResult.FailureCode,
+                            AddonManager.RuntimeAttributionConflictFailureCode,
+                            StringComparison.Ordinal))
+                    {
+                        var markerCleared = TryClearApplyMarkerIfGeneration(
+                            capturedMarkerGeneration);
+                        if (markerCleared)
+                        {
+                            await addonManager.FinalizeRuntimeAttributionConflictAsync(
+                                applyResult.AttributionConflictOperationId);
+                        }
+
+                        var conflictError = new InvalidOperationException(
+                            "Automatic runtime apply was cancelled because GMod changed while a prior GAM write was unresolved.");
+                        ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
+                        {
+                            Change = marker,
+                            Error = conflictError
+                        });
+                        errorHandler?.HandleWarning(
+                            conflictError.Message,
+                            "PendingChangeManager.ApplyPendingChangesAsync");
+                        return;
+                    }
+
                     var applyError = new InvalidOperationException(
                         "The latest desired addon state could not be reconciled.");
                     ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
@@ -247,17 +350,27 @@ namespace GmodAddonManager.Core.Services
             {
                 var loadedChanges = new List<AddonChange>();
                 var loadedAny = false;
-                if (TryReadPendingChanges(pendingPath, out var primary))
+                var primaryExists = File.Exists(pendingPath);
+                var primaryReadable =
+                    TryReadPendingChanges(pendingPath, out var primary);
+                if (primaryReadable)
                 {
                     loadedAny = true;
                     loadedChanges.AddRange(primary.Changes);
                 }
 
-                if (TryReadPendingChanges(pendingBackupPath, out var backup))
+                var backupExists = File.Exists(pendingBackupPath);
+                var backupReadable =
+                    TryReadPendingChanges(pendingBackupPath, out var backup);
+                if (backupReadable)
                 {
                     loadedAny = true;
                     loadedChanges.AddRange(backup.Changes);
                 }
+
+                pendingStateReadWasAuthoritative =
+                    (!primaryExists || primaryReadable) &&
+                    (!backupExists || backupReadable);
 
                 pendingChanges = new PendingChanges();
                 if (!loadedAny || loadedChanges.Count == 0)
@@ -267,7 +380,21 @@ namespace GmodAddonManager.Core.Services
 
                 ReplaceWithApplyMarkerNoLock(
                     loadedChanges.Max(change => change.Timestamp));
-                _ = TrySavePendingChangesNoLock();
+                if (TrySavePendingChangesNoLock())
+                {
+                    pendingStateReadWasAuthoritative = true;
+                }
+            }
+        }
+
+        private bool HasDurablyConfirmedNoPendingMarker()
+        {
+            lock (lockObject)
+            {
+                return pendingStateReadWasAuthoritative &&
+                       pendingChanges.Changes.All(
+                           change => ParseActionType(change.Action) !=
+                                     PendingChangeActionType.ApplyStates);
             }
         }
 
@@ -317,10 +444,12 @@ namespace GmodAddonManager.Core.Services
             {
                 WriteAtomic(pendingBackupPath, json);
                 WriteAtomic(pendingPath, json);
+                pendingStateReadWasAuthoritative = true;
                 return true;
             }
             catch (Exception ex)
             {
+                pendingStateReadWasAuthoritative = false;
                 errorHandler?.HandleError(
                     ex,
                     "PendingChangeManager.SavePendingChanges",

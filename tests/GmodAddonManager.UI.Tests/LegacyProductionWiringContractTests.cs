@@ -193,7 +193,7 @@ public sealed class LegacyProductionWiringContractTests
     }
 
     [Fact]
-    public void WindowActivationRefreshesOnlyReadOnlyActualState()
+    public void WindowActivationReconcilesTheReadOnlyGmodOriginAssetAndRefreshesCards()
     {
         var windowSource = ReadRepositoryFile(
             "src",
@@ -208,11 +208,13 @@ public sealed class LegacyProductionWiringContractTests
 
         Assert.Contains("Activated += OnWindowActivated;", windowSource, StringComparison.Ordinal);
         Assert.Contains("Interlocked.Increment(ref _activationRefreshGeneration)", windowSource, StringComparison.Ordinal);
-        Assert.Contains("viewModel.RefreshActualStateFromRuntime();", windowSource, StringComparison.Ordinal);
+        Assert.Contains("await viewModel.RefreshActualStateFromRuntimeAsync();", windowSource, StringComparison.Ordinal);
         Assert.DoesNotContain("UpdateAddonStates", windowSource, StringComparison.Ordinal);
         Assert.DoesNotContain("ApplyPendingChanges", windowSource, StringComparison.Ordinal);
 
-        Assert.Contains("public void RefreshActualStateFromRuntime()", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("public async Task RefreshActualStateFromRuntimeAsync()", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();", viewModelSource, StringComparison.Ordinal);
+        Assert.Contains("AssetListViewModel.RefreshGmodDisabledAsset();", viewModelSource, StringComparison.Ordinal);
         Assert.Contains("AddonGridViewModel.ApplyFilter();", viewModelSource, StringComparison.Ordinal);
     }
 
