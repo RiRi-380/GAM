@@ -1,6 +1,6 @@
 # Build script for GAM - Same as GitHub Actions
 param(
-    [string]$Version = "v2.0.0",
+    [string]$Version = "v2.0.1",
     [ValidateSet("prompt", "run", "skip")]
     [string]$RunMode = "prompt"
 )
