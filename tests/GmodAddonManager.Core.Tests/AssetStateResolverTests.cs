@@ -141,6 +141,31 @@ public sealed class AssetStateResolverTests
         Assert.Empty(result.ExcludedByAssets);
     }
 
+    [Fact]
+    public void Resolve_GmodDisabledSystemAssetIsAuthoritativeExcludedSource()
+    {
+        var subscribe = CreateSubscribe(AddonState.Enabled);
+        var gmodDisabled = new Asset(
+            SystemAssetDefinitions.GmodDisabledName,
+            isSystem: true)
+        {
+            Id = SystemAssetDefinitions.GmodDisabledId,
+            Addons = [AddonId]
+        };
+        gmodDisabled.SetWholeState(AddonState.Excluded);
+
+        var result = Resolve(
+            AddonId,
+            [subscribe, gmodDisabled],
+            AddonId);
+
+        Assert.False(result.DesiredEnabled);
+        Assert.Equal(AddonStateResolutionReason.Excluded, result.Reason);
+        Assert.Equal(
+            SystemAssetDefinitions.GmodDisabledId,
+            Assert.Single(result.ExcludedByAssets).AssetId);
+    }
+
     private ResolvedAddonState Resolve(
         string addonId,
         IEnumerable<Asset> assets,

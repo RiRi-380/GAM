@@ -21,6 +21,9 @@ public sealed class StartupPathRecoveryTests
         Assert.Equal(env.GmodInstallPath, resolution.GmodInstallPath);
         Assert.Equal(env.WorkshopRootPath, resolution.WorkshopRootPath);
         Assert.Equal(env.GmodInstallPath, resolution.Snapshot.GmodInstall!.InstallPath);
+        Assert.Equal(PathCandidateConfidence.High, resolution.Snapshot.ActiveWorkshopRoot!.Confidence);
+        Assert.Equal(0, resolution.Snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+        Assert.Equal(0, resolution.Snapshot.ActiveWorkshopRoot.EmptyOrInvalidFolderCount);
     }
 
     [Fact]
@@ -39,6 +42,29 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
+    public void PathOverrideResolver_RejectsSteamLibraryWhoseManifestHasWrongAppId()
+    {
+        using var env = new TestSteamLayout();
+        File.WriteAllText(
+            Path.Combine(env.LibraryPath, "steamapps", "appmanifest_4000.acf"),
+            """
+            "AppState"
+            {
+                "appid" "9999"
+                "installdir" "GarrysMod"
+            }
+            """);
+
+        var ok = PathOverrideResolver.TryResolveSelectedFolder(
+            env.LibraryPath,
+            out _,
+            out var error);
+
+        Assert.False(ok);
+        Assert.Contains("Select the Garry's Mod install folder", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PathOverrideResolver_AcceptsWorkshopRootFolder()
     {
         using var env = new TestSteamLayout();
@@ -51,6 +77,47 @@ public sealed class StartupPathRecoveryTests
         Assert.True(ok, error);
         Assert.Equal(env.GmodInstallPath, resolution.GmodInstallPath);
         Assert.Equal(env.WorkshopRootPath, resolution.WorkshopRootPath);
+    }
+
+    [Fact]
+    public void PathOverrideResolver_DoesNotApplyLibraryManifestToCustomWorkshopRoot()
+    {
+        using var env = new TestSteamLayout();
+        var customWorkshopRoot = Path.Combine(env.LibraryPath, "custom-workshop");
+        var luaPath = Path.Combine(customWorkshopRoot, "456", "lua");
+        Directory.CreateDirectory(luaPath);
+        File.WriteAllText(Path.Combine(luaPath, "autorun.lua"), "print('ok')");
+
+        var ok = PathOverrideResolver.TryCreateSnapshot(
+            env.GmodInstallPath,
+            customWorkshopRoot,
+            out var snapshot,
+            out var error);
+
+        Assert.True(ok, error);
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.False(snapshot.ActiveWorkshopRoot!.HasAppWorkshopManifest);
+        Assert.Equal(PathCandidateConfidence.Medium, snapshot.ActiveWorkshopRoot.Confidence);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+    }
+
+    [Fact]
+    public void PathOverrideResolver_RatesAuthoritativeManifestWithoutMatchingFolderAsLow()
+    {
+        using var env = new TestSteamLayout();
+        WorkshopManifestTestData.Write(
+            Path.Combine(env.LibraryPath, "steamapps", "workshop"));
+
+        var ok = PathOverrideResolver.TryCreateSnapshot(
+            env.GmodInstallPath,
+            env.WorkshopRootPath,
+            out var snapshot,
+            out var error);
+
+        Assert.True(ok, error);
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.True(snapshot.ActiveWorkshopRoot!.HasAppWorkshopManifest);
+        Assert.Equal(PathCandidateConfidence.Low, snapshot.ActiveWorkshopRoot.Confidence);
     }
 
     [Fact]

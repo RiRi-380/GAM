@@ -24,11 +24,15 @@ public sealed class InitialAddonStateImportServiceTests
         var imported = Assert.Single(
             configuration.Assets,
             asset => asset.Name == InitialAddonStateImportService.ImportedAssetName);
-        Assert.False(imported.IsSystem);
+        Assert.True(imported.IsSystem);
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledId, imported.Id);
         Assert.Equal(AddonState.Excluded, imported.GetWholeState());
         Assert.Equal(["200"], imported.Addons);
         Assert.DoesNotContain("300", imported.Addons);
         Assert.True(configuration.InitialRuntimeImportCompleted);
+        Assert.True(configuration.SubscriptionBaselineInitialized);
+        Assert.Equal(["100", "200"], configuration.KnownSubscribedAddonIds);
+        Assert.Empty(configuration.SubscriptionFirstSeenAtUtc);
     }
 
     [Fact]
@@ -44,10 +48,14 @@ public sealed class InitialAddonStateImportServiceTests
             completedAtUtc: DateTime.UtcNow);
 
         Assert.False(result.CreatedAsset);
-        Assert.Single(configuration.Assets);
+        Assert.Equal(2, configuration.Assets.Count);
         Assert.Equal(
             AddonState.Enabled,
-            configuration.Assets.Single().GetWholeState());
+            configuration.Assets[0].GetWholeState());
+        var disabled = Assert.Single(
+            configuration.Assets,
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+        Assert.Empty(disabled.Addons);
     }
 
     [Fact]

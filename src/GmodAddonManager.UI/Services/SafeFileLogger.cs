@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 
 namespace GmodAddonManager.UI.Services;
@@ -62,6 +63,27 @@ public static class SafeFileLogger
         catch
         {
             // Best-effort logging only.
+        }
+    }
+
+    public static void TryLogStartupMilestone(string milestone)
+    {
+        if (string.IsNullOrWhiteSpace(milestone))
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var elapsed = DateTime.Now - process.StartTime;
+            TryLogInfo(
+                "StartupTiming",
+                $"{milestone}; processElapsedMs={elapsed.TotalMilliseconds:F0}");
+        }
+        catch
+        {
+            // Startup diagnostics must never delay or prevent startup.
         }
     }
 

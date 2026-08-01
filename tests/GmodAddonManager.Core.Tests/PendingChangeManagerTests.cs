@@ -97,7 +97,7 @@ public sealed class PendingChangeManagerTests
             await manager.InitializeAsync();
             File.WriteAllText(
                 noMount,
-                "\"addonnomount\"\n{\n\t\"1\"\t\t\"100\"\n\t\"2\"\t\t\"999\"\n}\n");
+                "\"addonnomount\"\n{\n\t\"1\"\t\t\"999\"\n}\n");
 
             var pending = new PendingChangeManager(manager, appData);
             pending.QueueApplyStates();
@@ -175,7 +175,7 @@ public sealed class PendingChangeManagerTests
             manager.GmodRunningProvider = () => running;
             File.WriteAllText(
                 noMount,
-                "\"addonnomount\"\n{\n\t\"1\"\t\t\"100\"\n\t\"2\"\t\t\"999\"\n}\n");
+                "\"addonnomount\"\n{\n\t\"1\"\t\t\"999\"\n}\n");
 
             asset.SetWholeState(GmodAddonManager.Core.Models.AddonState.Excluded);
             await manager.UpdateAddonStatesAsync();
@@ -184,7 +184,7 @@ public sealed class PendingChangeManagerTests
 
             Assert.Equal(1, pending.GetPendingChangeCount());
             var whileRunning = File.ReadAllText(noMount);
-            Assert.Contains(addonId, whileRunning, StringComparison.Ordinal);
+            Assert.DoesNotContain(addonId, whileRunning, StringComparison.Ordinal);
             Assert.Contains(unknownId, whileRunning, StringComparison.Ordinal);
 
             running = false;

@@ -97,9 +97,14 @@ public sealed class AddonManagerWorkflowTests : IDisposable
 
         await manager.ResetManagerAsync();
 
-        var subscribe = Assert.Single(manager.GetConfiguration().Assets);
+        Assert.Equal(2, manager.GetConfiguration().Assets.Count);
+        var subscribe = manager.GetConfiguration().Assets[0];
         Assert.Equal("subscribe-system-asset", subscribe.Id);
         Assert.Equal(AddonState.Enabled, subscribe.GetWholeState());
+        var gmodDisabled = manager.GetConfiguration().Assets[1];
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledId, gmodDisabled.Id);
+        Assert.Equal(AddonState.Excluded, gmodDisabled.GetWholeState());
+        Assert.Empty(gmodDisabled.Addons);
         Assert.False(manager.GetConfiguration().AddonMetadata["100"].IsFavorite);
         Assert.True(File.Exists(payloadPath));
         var noMount = File.ReadAllText(noMountPath);

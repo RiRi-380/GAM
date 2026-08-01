@@ -13,7 +13,7 @@ public sealed class SteamPathDetectorSnapshotTests
         var workshopLibrary = env.CreateLibrary("LibraryWorkshop");
         env.WriteLibraryFolders(gmodLibrary, workshopLibrary);
         SteamLayout.WriteGmodInstall(gmodLibrary, "GarrysMod");
-        SteamLayout.WriteWorkshopManifest(workshopLibrary);
+        SteamLayout.WriteWorkshopManifest(workshopLibrary, "123456789");
         SteamLayout.WriteWorkshopPayload(workshopLibrary, "123456789");
 
         var detector = new SteamPathDetector(env.SteamPath);
@@ -42,7 +42,7 @@ public sealed class SteamPathDetectorSnapshotTests
         SteamLayout.WriteGmodInstall(validLibrary, "GarrysMod");
         SteamLayout.WriteWorkshopManifest(emptyLibrary);
         SteamLayout.CreateWorkshopFolder(emptyLibrary, "111111111");
-        SteamLayout.WriteWorkshopManifest(validLibrary);
+        SteamLayout.WriteWorkshopManifest(validLibrary, "222222222");
         SteamLayout.WriteWorkshopPayload(validLibrary, "222222222");
 
         var detector = new SteamPathDetector(env.SteamPath);
@@ -53,7 +53,107 @@ public sealed class SteamPathDetectorSnapshotTests
         Assert.Equal(
             Path.Combine(validLibrary, "steamapps", "workshop", "content", "4000"),
             snapshot.ActiveWorkshopRoot!.RootPath);
-        Assert.Equal(1, snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+        Assert.Equal(PathCandidateConfidence.High, snapshot.ActiveWorkshopRoot.Confidence);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_WithManifest_DoesNotInspectIndividualAddonPayloads()
+    {
+        using var env = new SteamLayout();
+        var library = env.CreateLibrary("LibraryWorkshop");
+        env.WriteLibraryFolders(library);
+        SteamLayout.WriteGmodInstall(library, "GarrysMod");
+        SteamLayout.WriteWorkshopManifest(library, "222222222");
+        SteamLayout.WriteWorkshopPayload(library, "222222222");
+
+        var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.Equal(PathCandidateConfidence.High, snapshot.ActiveWorkshopRoot!.Confidence);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.EmptyOrInvalidFolderCount);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_PrefersManifestMatchesInSeparateWorkshopLibrary()
+    {
+        using var env = new SteamLayout();
+        var gmodLibrary = env.CreateLibrary("LibraryGmod");
+        var workshopLibrary = env.CreateLibrary("LibraryWorkshop");
+        env.WriteLibraryFolders(gmodLibrary, workshopLibrary);
+        SteamLayout.WriteGmodInstall(gmodLibrary, "GarrysMod");
+        SteamLayout.WriteWorkshopManifest(gmodLibrary);
+        SteamLayout.CreateWorkshopFolder(gmodLibrary, "111111111");
+        SteamLayout.WriteWorkshopManifest(workshopLibrary, "333333333");
+        SteamLayout.WriteWorkshopPayload(workshopLibrary, "333333333");
+
+        var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.Equal(
+            Path.Combine(workshopLibrary, "steamapps", "workshop", "content", "4000"),
+            snapshot.ActiveWorkshopRoot!.RootPath);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_PrefersManifestlessPayloadOverManifestWithoutMatches()
+    {
+        using var env = new SteamLayout();
+        var staleManifestLibrary = env.CreateLibrary("LibraryStaleManifest");
+        var payloadLibrary = env.CreateLibrary("LibraryPayload");
+        env.WriteLibraryFolders(staleManifestLibrary, payloadLibrary);
+        SteamLayout.WriteGmodInstall(staleManifestLibrary, "GarrysMod");
+        SteamLayout.WriteWorkshopManifest(staleManifestLibrary);
+        SteamLayout.CreateWorkshopFolder(staleManifestLibrary, "111111111");
+        SteamLayout.WriteWorkshopPayload(payloadLibrary, "444444444");
+
+        var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.Equal(
+            Path.Combine(payloadLibrary, "steamapps", "workshop", "content", "4000"),
+            snapshot.ActiveWorkshopRoot!.RootPath);
+        Assert.Equal(PathCandidateConfidence.Medium, snapshot.ActiveWorkshopRoot.Confidence);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_WithoutManifest_UsesShallowPayloadFallback()
+    {
+        using var env = new SteamLayout();
+        var library = env.CreateLibrary("LibraryWorkshop");
+        env.WriteLibraryFolders(library);
+        SteamLayout.WriteGmodInstall(library, "GarrysMod");
+        SteamLayout.WriteWorkshopPayload(library, "222222222");
+
+        var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.False(snapshot.ActiveWorkshopRoot!.HasAppWorkshopManifest);
+        Assert.Equal(PathCandidateConfidence.Medium, snapshot.ActiveWorkshopRoot.Confidence);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.EmptyOrInvalidFolderCount);
+    }
+
+    [Fact]
+    public void DetectPathSnapshot_WithoutManifest_DoesNotExposeBoundedSampleAsTotalCounts()
+    {
+        using var env = new SteamLayout();
+        var library = env.CreateLibrary("LibraryWorkshop");
+        env.WriteLibraryFolders(library);
+        SteamLayout.WriteGmodInstall(library, "GarrysMod");
+        for (var index = 0; index < 65; index++)
+        {
+            SteamLayout.CreateWorkshopFolder(
+                library,
+                (100000000L + index).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        var snapshot = new SteamPathDetector(env.SteamPath).DetectPathSnapshot();
+
+        Assert.NotNull(snapshot.ActiveWorkshopRoot);
+        Assert.Equal(PathCandidateConfidence.Low, snapshot.ActiveWorkshopRoot!.Confidence);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.ValidPayloadCount);
+        Assert.Equal(0, snapshot.ActiveWorkshopRoot.EmptyOrInvalidFolderCount);
     }
 
     [Fact]
@@ -200,11 +300,10 @@ public sealed class SteamPathDetectorSnapshotTests
             Directory.CreateDirectory(Path.Combine(libraryPath, "steamapps", "common", installDir, "garrysmod", "cfg"));
         }
 
-        public static void WriteWorkshopManifest(string libraryPath)
+        public static void WriteWorkshopManifest(string libraryPath, params string[] addonIds)
         {
             var workshopPath = Path.Combine(libraryPath, "steamapps", "workshop");
-            Directory.CreateDirectory(workshopPath);
-            File.WriteAllText(Path.Combine(workshopPath, "appworkshop_4000.acf"), "\"AppWorkshop\"{}");
+            WorkshopManifestTestData.Write(workshopPath, addonIds);
         }
 
         public static void CreateWorkshopFolder(string libraryPath, string addonId)

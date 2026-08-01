@@ -108,7 +108,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             var configuration = addonManager.GetConfiguration();
 
             var orderedAssets = configuration.Assets
-                .OrderBy(asset => asset.Id == "subscribe-system-asset" ? 0 : asset.IsFavorite ? 1 : 2)
+                .OrderBy(GetAssetOrderGroup)
                 .ThenBy(asset => asset.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ThenBy(asset => asset.Id, StringComparer.Ordinal);
 
@@ -214,6 +214,13 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public void RefreshAssetStates()
     {
         var configuration = addonManager.GetConfiguration();
+        if (configuration.Assets.Count != Assets.Count ||
+            configuration.Assets.Any(asset => GetAssetById(asset.Id) == null))
+        {
+            LoadAssets();
+            return;
+        }
+
         foreach (var assetVm in Assets)
         {
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetVm.Id);
@@ -222,6 +229,39 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 assetVm.RefreshFromModel(asset);
             }
         }
+    }
+
+    public void RefreshGmodDisabledAsset()
+    {
+        var configuration = addonManager.GetConfiguration();
+        if (configuration.Assets.Count != Assets.Count ||
+            configuration.Assets.Any(asset => GetAssetById(asset.Id) == null))
+        {
+            LoadAssets();
+            return;
+        }
+
+        var model = configuration.Assets.FirstOrDefault(
+            asset => asset.Id == AssetItemViewModel.GmodDisabledSystemAssetId);
+        var viewModel = GetAssetById(AssetItemViewModel.GmodDisabledSystemAssetId);
+        if (model == null || viewModel == null)
+        {
+            LoadAssets();
+            return;
+        }
+
+        viewModel.RefreshFromModel(model);
+    }
+
+    private static int GetAssetOrderGroup(GmodAddonManager.Core.Models.Asset asset)
+    {
+        return asset.Id switch
+        {
+            GmodAddonManager.Core.Models.SystemAssetDefinitions.SubscribeId => 0,
+            AssetItemViewModel.GmodDisabledSystemAssetId => 1,
+            _ when asset.IsFavorite => 2,
+            _ => 3
+        };
     }
 }
 

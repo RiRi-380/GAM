@@ -136,7 +136,7 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
                      addonIds,
                      allAddons,
                      availableAddonIds,
-                     assetViewModel.IsSubscribeAsset))
+                     assetViewModel.IsSubscribeAsset || assetViewModel.IsGmodDisabledAsset))
         {
             AllAddons.Add(item);
 
@@ -160,7 +160,7 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
         IReadOnlyCollection<string> addonIds,
         IReadOnlyDictionary<string, WorkshopAddon> addonMetadata,
         IReadOnlySet<string> availableAddonIds,
-        bool isSubscribeAsset)
+        bool includeUnavailableMembership)
     {
         var results = new List<AssetAddonMembershipItem>(addonIds.Count);
         var seenIds = new HashSet<string>(StringComparer.Ordinal);
@@ -175,21 +175,21 @@ public partial class AssetDetailsDialog : Window, INotifyPropertyChanged
             }
 
             addonMetadata.TryGetValue(addonId, out var metadata);
-            if (metadata?.IsLocal == true || (!isSubscribeAsset && metadata == null))
+            if (metadata?.IsLocal == true || (!includeUnavailableMembership && metadata == null))
             {
                 continue;
             }
 
-            var isUnavailable = isSubscribeAsset && !availableAddonIds.Contains(addonId);
+            var isUnavailable = includeUnavailableMembership && !availableAddonIds.Contains(addonId);
             results.Add(new AssetAddonMembershipItem
             {
                 AddonId = addonId,
-                Title = isSubscribeAsset && string.IsNullOrWhiteSpace(metadata?.Title)
+                Title = includeUnavailableMembership && string.IsNullOrWhiteSpace(metadata?.Title)
                     ? AddonTitleHelper.BuildPlaceholderTitle(addonId)
                     : metadata?.Title ?? string.Empty,
                 IsGmaFile = metadata?.IsGmaFile == true,
                 IsMissing =
-                    !isSubscribeAsset &&
+                    !includeUnavailableMembership &&
                     metadata != null &&
                     !metadata.IsAvailable &&
                     !metadata.IsDownloadPending,

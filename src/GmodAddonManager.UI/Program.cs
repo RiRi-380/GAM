@@ -47,6 +47,8 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        SafeFileLogger.TryLogStartupMilestone("ManagedEntry");
+
         if (!RestartHandoff.TryWaitForPreviousProcess(args, out var applicationArgs))
         {
             SafeFileLogger.TryLogInfo(

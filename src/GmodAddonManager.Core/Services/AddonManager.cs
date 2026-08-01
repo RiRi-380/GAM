@@ -32,6 +32,7 @@ namespace GmodAddonManager.Core.Services
         private readonly string addonsPath;
         private readonly string? gmodCachePath;
         private readonly IReadOnlyList<string>? customWorkshopCacheFilePaths;
+        private readonly int _maxParallelWorkshopScans;
         private string? gmodCacheManagerPath;
         private string? gmodCacheAddonsPath;
         private string? gmodRootPath;
@@ -53,7 +54,7 @@ namespace GmodAddonManager.Core.Services
         private readonly AssetStateResolver assetStateResolver;
         private readonly AssetVersionService assetVersionService;
         private readonly ConfigurationMigrationService configurationMigrationService;
-        private readonly InitialAddonStateImportService initialAddonStateImportService;
+        private readonly GmodDisabledAddonReconciliationService gmodDisabledAddonReconciliationService;
         private readonly SubscriptionObservationService subscriptionObservationService;
         private readonly IErrorHandler errorHandler;
         private readonly ExperimentEventLogger eventLogger;
@@ -72,7 +73,7 @@ namespace GmodAddonManager.Core.Services
         private List<WorkshopAddon>? _scanCache;
         private DateTime _scanCacheTimestampUtc = DateTime.MinValue;
         private TimeSpan _scanCacheTtl = TimeSpan.Zero;
-        private int _bulkStateUpdateDepth = 0;
+        private readonly AsyncLocal<int> bulkStateUpdateDepth = new AsyncLocal<int>();
         private readonly int _maxParallelAddonStateUpdates;
         private readonly SemaphoreSlim _configurationSaveGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _runtimeReconcileGate = new SemaphoreSlim(1, 1);
@@ -106,7 +107,45 @@ namespace GmodAddonManager.Core.Services
         public bool IsExperimentContextActive => eventLogger.IsExperimentContextActive;
         public Func<bool?>? GmodRunningProvider { get; set; }
         public Func<int?>? PendingChangeCountProvider { get; set; }
-        public Action? QueueRuntimeApplyProvider { get; set; }
+        public Action? QueueRuntimeApplyProvider
+        {
+            get => queueRuntimeApplyProvider;
+            set
+            {
+                queueRuntimeApplyProvider = value;
+                if (value != null && runtimeReapplyRequiredFromRecovery)
+                {
+                    try
+                    {
+                        value.Invoke();
+                        var pendingIntent = configuration.PendingGamRuntimeWrite;
+                        if (pendingIntent != null && !pendingIntent.ConflictDetected)
+                        {
+                            configuration.PendingGamRuntimeWrite = null;
+                            try
+                            {
+                                SaveConfigurationImmediatelySynchronously();
+                            }
+                            catch
+                            {
+                                configuration.PendingGamRuntimeWrite = pendingIntent;
+                                throw;
+                            }
+                        }
+                        runtimeReapplyRequiredFromRecovery = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        runtimeReapplyRequiredFromRecovery = true;
+                        errorHandler.HandleWarning(
+                            $"Failed to queue recovered runtime apply: {ex.Message}",
+                            "QueueRuntimeApplyProvider");
+                    }
+                }
+            }
+        }
+        internal Func<Guid>? QueueRuntimeApplyTrackedProvider { get; set; }
+        internal Func<Guid, bool>? ClearRuntimeApplyIfGenerationProvider { get; set; }
         public int PendingDownloadCount { get; private set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int StateMatchPollIntervalMs { get; set; } = 200;
@@ -121,11 +160,15 @@ namespace GmodAddonManager.Core.Services
 
         private bool strictLinkMode;
         private bool enableLocalAddonManagement;
-        private bool IsBulkStateUpdate => Volatile.Read(ref _bulkStateUpdateDepth) > 0;
+        private Action? queueRuntimeApplyProvider;
+        private bool runtimeReapplyRequiredFromRecovery;
+        private bool IsBulkStateUpdate => bulkStateUpdateDepth.Value > 0;
 
         private const int ERROR_NOT_SAME_DEVICE = 17;
-        private const string SubscribeSystemAssetId = "subscribe-system-asset";
-        private const string JunctionSystemAssetId = "junction-system-asset";
+        private const string SubscribeSystemAssetId = SystemAssetDefinitions.SubscribeId;
+        private const string JunctionSystemAssetId = SystemAssetDefinitions.JunctionId;
+        internal const string RuntimeAttributionConflictFailureCode =
+            "runtime_attribution_conflict";
         private const string AssetImageDirectoryName = "asset-images";
         private const int AssetImageOutputSize = 512;
         private const float AssetImageCornerRadiusRatio = 0.15625f;
@@ -165,6 +208,9 @@ namespace GmodAddonManager.Core.Services
             _maxParallelAddonStateUpdates = options.MaxParallelAddonStateUpdates.HasValue
                 ? Math.Max(1, options.MaxParallelAddonStateUpdates.Value)
                 : Math.Clamp(Environment.ProcessorCount, 2, 6);
+            _maxParallelWorkshopScans = options.MaxParallelWorkshopScans.HasValue
+                ? Math.Max(1, options.MaxParallelWorkshopScans.Value)
+                : Math.Clamp(Environment.ProcessorCount, 2, 4);
             customGmodInstallPath = string.IsNullOrWhiteSpace(options.CustomGmodInstallPath)
                 ? null
                 : options.CustomGmodInstallPath;
@@ -191,7 +237,8 @@ namespace GmodAddonManager.Core.Services
             assetStateResolver = new AssetStateResolver();
             assetVersionService = new AssetVersionService();
             configurationMigrationService = new ConfigurationMigrationService();
-            initialAddonStateImportService = new InitialAddonStateImportService();
+            gmodDisabledAddonReconciliationService =
+                new GmodDisabledAddonReconciliationService();
             subscriptionObservationService = new SubscriptionObservationService();
             errorHandler = options.ErrorHandler ?? new DefaultErrorHandler(
                 Path.Combine(appDataPath, "logs"));
@@ -412,7 +459,10 @@ namespace GmodAddonManager.Core.Services
         private void RecordCurrentPathState()
         {
             configuration.PathState ??= new PathState();
-            var snapshot = DetectCurrentPathSnapshot();
+            // The constructor already resolved the startup paths. Re-running discovery here
+            // used to traverse every Workshop directory for a second time before any window
+            // could be shown. Manual path-health operations still request a fresh snapshot.
+            var snapshot = pathSnapshot ?? DetectCurrentPathSnapshot();
             PathHealthService.UpdatePathState(configuration, snapshot, managerPath, addonsPath);
         }
 
@@ -607,9 +657,10 @@ namespace GmodAddonManager.Core.Services
                 // Subscribeアセットに全アドオンが含まれていることを確認
                 await EnsureAllAddonsInSubscribeAssetAsync();
 
-                // 新規profileだけ、既存のGMod無効状態をread-onlyで一度取り込む。
-                // 起動時にはaddonnomount.txtへ書き戻さない。
-                await TryRunInitialAddonStateImportAsync();
+                // Read-only observation: seed a brand-new profile or reconcile
+                // GMod-side transitions before any explicit GAM runtime write.
+                await TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+                    "InitializeAsync");
                 
                 // 最後にサブスクライブ解除されたアドオンをクリーンアップ
                 await modeStrategy.CleanupUnsubscribedAddonsAsync(this);
@@ -833,32 +884,69 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private async Task TryRunInitialAddonStateImportAsync()
+        public async Task<bool> RefreshGmodDisabledAddonsFromRuntimeAsync()
         {
-            if (configuration.InitialRuntimeImportCompleted)
+            await _runtimeReconcileGate.WaitAsync();
+            try
             {
-                return;
+                var result = await TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+                    "RefreshGmodDisabledAddonsFromRuntime");
+                return result?.MembershipChanged ?? false;
             }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
 
+        internal async Task<GmodDisabledAddonReconciliationResult?>
+            RefreshGmodDisabledAddonsBeforePendingApplyAsync()
+        {
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
+                var result = await TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+                    "PendingChangeManager.BeforeRuntimeApply",
+                    runtimeApplyAlreadyQueued: true);
+                return result;
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
+
+        private async Task<GmodDisabledAddonReconciliationResult?> TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+            string operationName,
+            ISet<string>? authoritativeSubscribedIds = null,
+            bool runtimeApplyAlreadyQueued = false)
+        {
             var workshopSnapshot = GetWorkshopSnapshotFromCache();
             PendingDownloadCount = workshopSnapshot.SubscribedIds
                 .Except(workshopSnapshot.InstalledIds, StringComparer.Ordinal)
                 .Count();
 
-            if (!workshopSnapshot.IsAuthoritative)
+            var subscribedIds = authoritativeSubscribedIds;
+            if (subscribedIds == null && workshopSnapshot.IsAuthoritative)
+            {
+                subscribedIds = new HashSet<string>(
+                    workshopSnapshot.SubscribedIds,
+                    StringComparer.Ordinal);
+            }
+            if (subscribedIds == null)
             {
                 errorHandler.HandleWarning(
-                    "Steam Workshop subscription state is not authoritative; initial GMod state import will be retried later.",
-                    "InitialAddonStateImport");
-                return;
+                    "Steam Workshop subscription state is not authoritative; GMod-side addon changes were not synchronized.",
+                    operationName);
+                return null;
             }
 
             if (gmodAddonStateStore == null)
             {
                 errorHandler.HandleWarning(
-                    "Garry's Mod settings path is unavailable; initial GMod state import will be retried later.",
-                    "InitialAddonStateImport");
-                return;
+                    "Garry's Mod settings path is unavailable; GMod-side addon changes were not synchronized.",
+                    operationName);
+                return null;
             }
 
             AddonMountSnapshot runtimeSnapshot;
@@ -869,30 +957,210 @@ namespace GmodAddonManager.Core.Services
             catch (Exception ex)
             {
                 errorHandler.HandleWarning(
-                    $"Failed to read addonnomount.txt for initial import: {ex.Message}",
-                    "InitialAddonStateImport");
-                return;
+                    $"Failed to read addonnomount.txt for GMod-side synchronization: {ex.Message}",
+                    operationName);
+                return null;
             }
 
             if (!runtimeSnapshot.IsValidFormat)
             {
                 errorHandler.HandleWarning(
-                    "addonnomount.txt is malformed; initial import was not marked complete and will be retried after repair.",
-                    "InitialAddonStateImport");
+                    "addonnomount.txt is malformed; GMod-side addon changes and attribution baselines were left unchanged.",
+                    operationName);
+                return null;
+            }
+
+            var rollbackConfiguration = CloneConfiguration(configuration);
+            var allowInitialSeed = !configuration.InitialRuntimeImportCompleted;
+            var migrationDesiredStates = configuration.GmodAttributionMigrationPending
+                ? BuildExpectedStatesForAssets(
+                    configuration.Assets
+                        .Where(asset => !GmodDisabledAddonReconciliationService
+                            .IsProtectedSystemAsset(asset.Id))
+                        .ToList(),
+                    subscribedIds)
+                : null;
+            var result = gmodDisabledAddonReconciliationService.ReconcileValidObservation(
+                configuration,
+                subscribedIds,
+                runtimeSnapshot.DisabledIds,
+                runtimeSnapshot.ObservedAtUtc,
+                allowInitialSeed,
+                gmodAddonStateStore.NoMountFilePath,
+                migrationDesiredStates);
+
+            if (!result.Changed)
+            {
+                return result;
+            }
+
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                configuration = rollbackConfiguration;
+                throw;
+            }
+
+            if (result.PendingRecovery == PendingGamRuntimeWriteRecovery.NotApplied)
+            {
+                if (runtimeApplyAlreadyQueued)
+                {
+                    configuration.PendingGamRuntimeWrite = null;
+                    await SaveConfigurationImmediatelyAsync();
+                    runtimeReapplyRequiredFromRecovery = false;
+                }
+                else
+                {
+                    result.QueuedRuntimeApplyGeneration =
+                        await TryQueueRecoveredRuntimeApplyAsync(operationName);
+                }
+            }
+
+            if (result.PendingRecovery == PendingGamRuntimeWriteRecovery.Conflicted)
+            {
+                errorHandler.HandleWarning(
+                    "A pending GAM runtime write conflicted with the current GMod state. Current GMod changes were preserved and no automatic overwrite was performed.",
+                    operationName);
+            }
+
+            return result;
+        }
+
+        private async Task<Guid?> TryQueueRecoveredRuntimeApplyAsync(string operationName)
+        {
+            var queue = QueueRuntimeApplyProvider;
+            var trackedQueue = QueueRuntimeApplyTrackedProvider;
+            if (queue == null && trackedQueue == null)
+            {
+                runtimeReapplyRequiredFromRecovery = true;
+                return null;
+            }
+
+            var pendingIntent = configuration.PendingGamRuntimeWrite;
+            try
+            {
+                Guid? queuedGeneration = null;
+                if (trackedQueue != null)
+                {
+                    queuedGeneration = trackedQueue.Invoke();
+                }
+                else
+                {
+                    queue!.Invoke();
+                }
+                configuration.PendingGamRuntimeWrite = null;
+                await SaveConfigurationImmediatelyAsync();
+                runtimeReapplyRequiredFromRecovery = false;
+                return queuedGeneration;
+            }
+            catch (Exception ex)
+            {
+                configuration.PendingGamRuntimeWrite = pendingIntent;
+                runtimeReapplyRequiredFromRecovery = true;
+                errorHandler.HandleWarning(
+                    $"Failed to durably queue recovered runtime apply: {ex.Message}",
+                    operationName);
+                return null;
+            }
+        }
+
+        internal async Task<bool> FinalizeRuntimeAttributionConflictAsync(
+            string? expectedOperationId)
+        {
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
+                return await FinalizeRuntimeAttributionConflictCoreAsync(
+                    expectedOperationId);
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
+
+        internal void TryFinalizeOrphanedRuntimeAttributionConflict(
+            bool noPendingMarkerDurablyConfirmed)
+        {
+            if (!noPendingMarkerDurablyConfirmed)
+            {
                 return;
             }
 
-            initialAddonStateImportService.Import(
-                configuration,
-                workshopSnapshot.SubscribedIds,
-                runtimeSnapshot.DisabledIds,
-                DateTime.UtcNow);
-            // The completion marker is a one-time import boundary. Persist it before
-            // initialization can return so a crash cannot repeat the import and create
-            // a second Excluded asset on the next launch.
-            await SaveConfigurationImmediatelyAsync();
+            _runtimeReconcileGate.Wait();
+            try
+            {
+                var pending = configuration.PendingGamRuntimeWrite;
+                if (pending?.ConflictDetected != true)
+                {
+                    return;
+                }
+
+                FinalizeRuntimeAttributionConflictSynchronouslyCore(
+                    pending.OperationId);
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
         }
-        
+
+        private async Task<bool> FinalizeRuntimeAttributionConflictCoreAsync(
+            string? expectedOperationId)
+        {
+            var pending = configuration.PendingGamRuntimeWrite;
+            if (pending?.ConflictDetected != true ||
+                string.IsNullOrWhiteSpace(expectedOperationId) ||
+                !string.Equals(
+                    pending.OperationId,
+                    expectedOperationId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            configuration.PendingGamRuntimeWrite = null;
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+                return true;
+            }
+            catch
+            {
+                configuration.PendingGamRuntimeWrite = pending;
+                throw;
+            }
+        }
+
+        private bool FinalizeRuntimeAttributionConflictSynchronouslyCore(
+            string? expectedOperationId)
+        {
+            var pending = configuration.PendingGamRuntimeWrite;
+            if (pending?.ConflictDetected != true ||
+                string.IsNullOrWhiteSpace(expectedOperationId) ||
+                !string.Equals(
+                    pending.OperationId,
+                    expectedOperationId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            configuration.PendingGamRuntimeWrite = null;
+            try
+            {
+                SaveConfigurationImmediatelySynchronously();
+                return true;
+            }
+            catch
+            {
+                configuration.PendingGamRuntimeWrite = pending;
+                throw;
+            }
+        }
 
         public async Task MigrateExistingAddonsAsync()
         {
@@ -1682,10 +1950,17 @@ namespace GmodAddonManager.Core.Services
             var addons = new List<WorkshopAddon>();
             var processedIds = new HashSet<string>(StringComparer.Ordinal);
             var config = configuration ?? throw new InvalidOperationException("Configuration not initialized.");
+            var disabledAddonIds = CaptureDisabledAddonIdsForScan();
+            var invalidWorkshopIds = new List<string>();
+            var emptyCachePlaceholderCount = 0;
+
+            bool IsEnabledForScan(string addonId) =>
+                disabledAddonIds == null || !disabledAddonIds.Contains(addonId);
 
             if (Directory.Exists(workshopPath))
             {
                 var workshopDirs = GetVisibleWorkshopDirectoriesOrEmpty("ScanWorkshopFolderSoftAsync");
+                var validWorkshopDirectories = new List<(string AddonId, string Directory)>();
 
                 foreach (var directory in workshopDirs)
                 {
@@ -1695,50 +1970,83 @@ namespace GmodAddonManager.Core.Services
                         continue;
                     }
 
-                    if (!DirectoryHasAddonPayload(directory, "ScanWorkshopFolderSoftAsync"))
+                    if (!DirectoryHasAddonPayload(
+                            directory,
+                            "ScanWorkshopFolderSoftAsync",
+                            logInvalidPayload: false))
                     {
-                        errorHandler.HandleInfo($"Skipping empty workshop directory: {directory}", "ScanWorkshopFolderSoftAsync");
+                        invalidWorkshopIds.Add(addonId);
                         continue;
                     }
 
                     processedIds.Add(addonId);
+                    validWorkshopDirectories.Add((addonId, directory));
+                }
 
-                    if (config.AddonMetadata.TryGetValue(addonId, out var savedAddon))
+                using var scanSemaphore = new SemaphoreSlim(_maxParallelWorkshopScans);
+                var scanTasks = validWorkshopDirectories.Select(async entry =>
+                {
+                    await scanSemaphore.WaitAsync();
+                    try
                     {
-                        savedAddon.FolderPath = directory;
-                        savedAddon.IsGmaFile = IsGmaAddonRuntime(addonId);
-                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
-                        try
+                        if (config.AddonMetadata.TryGetValue(entry.AddonId, out var savedAddon))
                         {
-                            var directoryInfo = new DirectoryInfo(directory);
-                            var lastUpdatedUtc = directoryInfo.LastWriteTimeUtc;
-                            if (savedAddon.Size <= 0 ||
-                                savedAddon.LastUpdated != lastUpdatedUtc)
+                            savedAddon.FolderPath = entry.Directory;
+                            savedAddon.IsGmaFile = IsGmaAddonRuntime(entry.AddonId);
+                            savedAddon.IsEnabled = IsEnabledForScan(entry.AddonId);
+                            try
                             {
-                                savedAddon.Size =
-                                    await CalculateDirectorySizeAsync(directoryInfo);
-                                savedAddon.LastUpdated = lastUpdatedUtc;
+                                var directoryInfo = new DirectoryInfo(entry.Directory);
+                                var lastUpdatedUtc = directoryInfo.LastWriteTimeUtc;
+                                if (savedAddon.Size <= 0 ||
+                                    savedAddon.LastUpdated != lastUpdatedUtc)
+                                {
+                                    savedAddon.Size =
+                                        await CalculateDirectorySizeAsync(directoryInfo);
+                                    savedAddon.LastUpdated = lastUpdatedUtc;
+                                }
                             }
+                            catch (Exception ex)
+                            {
+                                errorHandler.HandleWarning(
+                                    $"Failed to refresh addon size metadata for {entry.AddonId}: {ex.Message}",
+                                    "ScanWorkshopFolderSoftAsync");
+                            }
+
+                            return (entry.AddonId, Addon: savedAddon, IsNew: false);
                         }
-                        catch (Exception ex)
-                        {
-                            errorHandler.HandleWarning(
-                                $"Failed to refresh addon size metadata for {addonId}: {ex.Message}",
-                                "ScanWorkshopFolderSoftAsync");
-                        }
-                        addons.Add(savedAddon);
-                    }
-                    else
-                    {
-                        var addon = await ScanAddonAsync(directory);
+
+                        var addon = await ScanAddonAsyncCore(
+                            entry.Directory,
+                            payloadAlreadyValidated: true);
                         if (addon != null)
                         {
-                            addon.IsGmaFile = IsGmaAddonRuntime(addonId);
-                            addon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
-                            config.AddonMetadata[addonId] = addon;
-                            addons.Add(addon);
+                            addon.IsGmaFile = IsGmaAddonRuntime(entry.AddonId);
+                            addon.IsEnabled = IsEnabledForScan(entry.AddonId);
                         }
+
+                        return (entry.AddonId, Addon: addon, IsNew: addon != null);
                     }
+                    finally
+                    {
+                        scanSemaphore.Release();
+                    }
+                }).ToList();
+
+                var scannedWorkshopAddons = await Task.WhenAll(scanTasks);
+                foreach (var result in scannedWorkshopAddons)
+                {
+                    if (result.Addon == null)
+                    {
+                        continue;
+                    }
+
+                    if (result.IsNew)
+                    {
+                        config.AddonMetadata[result.AddonId] = result.Addon;
+                    }
+
+                    addons.Add(result.Addon);
                 }
             }
 
@@ -1779,7 +2087,7 @@ namespace GmodAddonManager.Core.Services
                             }
                         }
 
-                        kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                        kvp.Value.IsEnabled = IsEnabledForScan(kvp.Key);
                         if (addonExists && gmaPath != null)
                         {
                             kvp.Value.FolderPath = gmaPath;
@@ -1788,11 +2096,14 @@ namespace GmodAddonManager.Core.Services
                     else
                     {
                         var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
-                        if (DirectoryHasAddonPayload(workshopDirPath, "ScanWorkshopFolderSoftAsync"))
+                        if (DirectoryHasAddonPayload(
+                                workshopDirPath,
+                                "ScanWorkshopFolderSoftAsync",
+                                logInvalidPayload: false))
                         {
                             addonExists = true;
                             kvp.Value.FolderPath = workshopDirPath;
-                            kvp.Value.IsEnabled = gmodAddonStateStore?.GetEnabled(kvp.Key) ?? true;
+                            kvp.Value.IsEnabled = IsEnabledForScan(kvp.Key);
                         }
                     }
 
@@ -1816,9 +2127,7 @@ namespace GmodAddonManager.Core.Services
 
                     if (!HasNonEmptyFile(gmaFile))
                     {
-                        errorHandler.HandleInfo(
-                            $"Skipping empty GMA cache placeholder: {gmaFile}",
-                            "ScanWorkshopFolderSoftAsync");
+                        emptyCachePlaceholderCount++;
                         continue;
                     }
 
@@ -1834,7 +2143,7 @@ namespace GmodAddonManager.Core.Services
                         var savedAddon = configuration.AddonMetadata[addonId];
                         savedAddon.FolderPath = gmaFile;
                         savedAddon.IsGmaFile = true;
-                        savedAddon.IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true;
+                        savedAddon.IsEnabled = IsEnabledForScan(addonId);
                         var fileInfo = new FileInfo(gmaFile);
                         savedAddon.Size = fileInfo.Length;
                         savedAddon.LastUpdated = fileInfo.LastWriteTimeUtc;
@@ -1846,7 +2155,7 @@ namespace GmodAddonManager.Core.Services
                         var addon = new WorkshopAddon(addonId, gmaFile)
                         {
                             IsGmaFile = true,
-                            IsEnabled = gmodAddonStateStore?.GetEnabled(addonId) ?? true
+                            IsEnabled = IsEnabledForScan(addonId)
                         };
 
                         ReadGmaMetadata(gmaFile, addon);
@@ -1868,6 +2177,21 @@ namespace GmodAddonManager.Core.Services
                         addons.Add(addon);
                     }
                 }
+            }
+
+            if (invalidWorkshopIds.Count > 0)
+            {
+                errorHandler.HandleInfo(
+                    $"Skipped {invalidWorkshopIds.Count} empty or invalid Workshop folders. " +
+                    $"Example IDs: {string.Join(", ", invalidWorkshopIds.Take(5))}",
+                    "ScanWorkshopFolderSoftAsync");
+            }
+
+            if (emptyCachePlaceholderCount > 0)
+            {
+                errorHandler.HandleInfo(
+                    $"Skipped {emptyCachePlaceholderCount} empty GMA cache placeholders.",
+                    "ScanWorkshopFolderSoftAsync");
             }
 
             var deletedAddonIds = await CleanupDeletedWorkshopAddonsAsync(addons);
@@ -2993,7 +3317,14 @@ namespace GmodAddonManager.Core.Services
             return newAddons;
         }
 
-        public async Task<WorkshopAddon?> ScanAddonAsync(string addonPath)
+        public Task<WorkshopAddon?> ScanAddonAsync(string addonPath)
+        {
+            return ScanAddonAsyncCore(addonPath, payloadAlreadyValidated: false);
+        }
+
+        private async Task<WorkshopAddon?> ScanAddonAsyncCore(
+            string addonPath,
+            bool payloadAlreadyValidated)
         {
             string addonId = Path.GetFileName(addonPath);
             
@@ -3002,7 +3333,8 @@ namespace GmodAddonManager.Core.Services
                 return null;
             }
 
-            if (!DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
+            if (!payloadAlreadyValidated &&
+                !DirectoryHasAddonPayload(addonPath, "ScanAddonAsync"))
             {
                 return null;
             }
@@ -3450,7 +3782,33 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private bool DirectoryHasAddonPayload(string directoryPath, string operationName)
+        private HashSet<string>? CaptureDisabledAddonIdsForScan()
+        {
+            if (gmodAddonStateStore == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var snapshot = gmodAddonStateStore.ReadSnapshot();
+                return snapshot.IsValidFormat
+                    ? new HashSet<string>(snapshot.DisabledIds, StringComparer.Ordinal)
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to read addonnomount.txt once for Workshop scan: {ex.Message}",
+                    "ScanWorkshopFolderSoftAsync");
+                return null;
+            }
+        }
+
+        private bool DirectoryHasAddonPayload(
+            string directoryPath,
+            string operationName,
+            bool logInvalidPayload = true)
         {
             var result = AddonPayloadValidator.Validate(directoryPath);
             if (result.IsValid)
@@ -3458,7 +3816,9 @@ namespace GmodAddonManager.Core.Services
                 return true;
             }
 
-            if (!string.IsNullOrWhiteSpace(directoryPath) && Directory.Exists(directoryPath))
+            if (logInvalidPayload &&
+                !string.IsNullOrWhiteSpace(directoryPath) &&
+                Directory.Exists(directoryPath))
             {
                 errorHandler.HandleInfo(
                     $"Skipping invalid addon payload at {directoryPath}: {string.Join("; ", result.Reasons)}",
@@ -3544,7 +3904,21 @@ namespace GmodAddonManager.Core.Services
 	            {
 	                InvalidateWorkshopScanCache();
 	            }
-	            modeStrategy.EnableAddon(this, addonId);
+	            if (IsBulkStateUpdate)
+	            {
+	                modeStrategy.EnableAddon(this, addonId);
+	                return;
+	            }
+
+	            _runtimeReconcileGate.Wait();
+	            try
+	            {
+	                modeStrategy.EnableAddon(this, addonId);
+	            }
+	            finally
+	            {
+	                _runtimeReconcileGate.Release();
+	            }
 	        }
 
 	        internal void EnableAddonHard(string addonId)
@@ -3552,7 +3926,11 @@ namespace GmodAddonManager.Core.Services
             // Exception: if we removed a disabled stub, fall through to restore workshop/cache presence.
             if (!IsBulkStateUpdate)
             {
-                TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon");
+                if (!TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon"))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist enabled state for addon {addonId}.");
+                }
             }
 
             // Remove any legacy stub directory first (for backward compatibility)
@@ -3674,7 +4052,11 @@ namespace GmodAddonManager.Core.Services
         {
             if (!IsBulkStateUpdate)
             {
-                TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon");
+                if (!TryPersistSingleAddonRuntimeState(addonId, true, "EnableAddon"))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist enabled state for addon {addonId}.");
+                }
             }
 
             if (Interlocked.Exchange(ref _softModeNoFileOpsNoticeLogged, 1) == 0)
@@ -3706,14 +4088,32 @@ namespace GmodAddonManager.Core.Services
             {
                 InvalidateWorkshopScanCache();
             }
-            modeStrategy.DisableAddon(this, addonId);
+            if (IsBulkStateUpdate)
+            {
+                modeStrategy.DisableAddon(this, addonId);
+                return;
+            }
+
+            _runtimeReconcileGate.Wait();
+            try
+            {
+                modeStrategy.DisableAddon(this, addonId);
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
         }
 
         internal void DisableAddonHard(string addonId)
         {
             if (!IsBulkStateUpdate)
             {
-                TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon");
+                if (!TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon"))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist disabled state for addon {addonId}.");
+                }
             }
 
 	            var runtimeIsGma = IsGmaAddonRuntime(addonId);
@@ -3772,7 +4172,11 @@ namespace GmodAddonManager.Core.Services
         {
             if (!IsBulkStateUpdate)
             {
-                TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon");
+                if (!TryPersistSingleAddonRuntimeState(addonId, false, "DisableAddon"))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist disabled state for addon {addonId}.");
+                }
             }
 
             var runtimeIsGma = IsGmaAddonRuntime(addonId);
@@ -3791,7 +4195,11 @@ namespace GmodAddonManager.Core.Services
 	        {
             if (!IsBulkStateUpdate)
             {
-                TryPersistSingleAddonRuntimeState(addonId, true, "EnableGmaAddon");
+                if (!TryPersistSingleAddonRuntimeState(addonId, true, "EnableGmaAddon"))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to persist enabled state for GMA addon {addonId}.");
+                }
             }
             
 		            // Remove any legacy stub directory first (for backward compatibility)
@@ -4708,6 +5116,43 @@ namespace GmodAddonManager.Core.Services
                 : (bool?)null;
         }
 
+        private bool TryCaptureCurrentSubscribedRuntimeStates(
+            out Dictionary<string, bool> states)
+        {
+            states = new Dictionary<string, bool>(StringComparer.Ordinal);
+            if (gmodAddonStateStore == null ||
+                !TryGetSubscribedAddonIdSet(
+                    "CaptureCurrentSubscribedRuntimeStates",
+                    out var subscribedIds))
+            {
+                return false;
+            }
+
+            AddonMountSnapshot snapshot;
+            try
+            {
+                snapshot = gmodAddonStateStore.ReadSnapshot();
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (!snapshot.IsValidFormat)
+            {
+                return false;
+            }
+
+            var disabledIds = new HashSet<string>(
+                snapshot.DisabledIds,
+                StringComparer.Ordinal);
+            states = subscribedIds.ToDictionary(
+                id => id,
+                id => !disabledIds.Contains(id),
+                StringComparer.Ordinal);
+            return true;
+        }
+
         public string ComputeStateHash(AddonStateSnapshot snapshot)
         {
             using var sha = SHA256.Create();
@@ -4842,14 +5287,25 @@ namespace GmodAddonManager.Core.Services
             return GetGmodRunning() ?? SteamProcessChecker.IsGmodRunning();
         }
 
-        private bool DeferRuntimeApplyIfGmodRunning()
+        private bool DeferRuntimeApplyIfGmodRunning(
+            bool allowConflictSupersede = false)
         {
             if (!IsGmodCurrentlyRunning())
             {
                 return false;
             }
 
-            QueueRuntimeApplyProvider?.Invoke();
+            var conflictedOperationId = allowConflictSupersede &&
+                                        configuration.PendingGamRuntimeWrite?.ConflictDetected == true
+                ? configuration.PendingGamRuntimeWrite.OperationId
+                : null;
+            var queue = QueueRuntimeApplyProvider;
+            queue?.Invoke();
+            if (queue != null && !string.IsNullOrWhiteSpace(conflictedOperationId))
+            {
+                FinalizeRuntimeAttributionConflictSynchronouslyCore(
+                    conflictedOperationId);
+            }
             return true;
         }
 
@@ -5086,7 +5542,8 @@ namespace GmodAddonManager.Core.Services
 
                     if (configurationMigrationService.RequiresMigration(jsonObj))
                     {
-                        var migrationBackupPath = configPath + ".pre-v2.bak";
+                        var migrationBackupPath =
+                            configPath + $".pre-schema-{Configuration.CurrentSchemaVersion}.bak";
                         if (!File.Exists(migrationBackupPath))
                         {
                             File.Copy(configPath, migrationBackupPath, overwrite: false);
@@ -5391,7 +5848,50 @@ namespace GmodAddonManager.Core.Services
                                         configuration.SubscriptionFirstSeenAtUtc,
                                         StringComparer.Ordinal)
                                     : new Dictionary<string, DateTime>(StringComparer.Ordinal),
-                            RetainMissingAssetReferences = configuration.RetainMissingAssetReferences
+                            RetainMissingAssetReferences = configuration.RetainMissingAssetReferences,
+                            GamAppliedRuntimeBaselineInitialized =
+                                configuration.GamAppliedRuntimeBaselineInitialized,
+                            LastGamAppliedAddonStates =
+                                new Dictionary<string, bool>(
+                                    configuration.LastGamAppliedAddonStates ??
+                                    new Dictionary<string, bool>(),
+                                    StringComparer.Ordinal),
+                            LastGamAppliedRuntimeAtUtc =
+                                configuration.LastGamAppliedRuntimeAtUtc,
+                            LastGamAppliedStateStorePath =
+                                configuration.LastGamAppliedStateStorePath,
+                            GmodObservationBaselineInitialized =
+                                configuration.GmodObservationBaselineInitialized,
+                            LastObservedGmodAddonStates =
+                                new Dictionary<string, bool>(
+                                    configuration.LastObservedGmodAddonStates ??
+                                    new Dictionary<string, bool>(),
+                                    StringComparer.Ordinal),
+                            LastObservedGmodRuntimeAtUtc =
+                                configuration.LastObservedGmodRuntimeAtUtc,
+                            LastObservedGmodStateStorePath =
+                                configuration.LastObservedGmodStateStorePath,
+                            PendingGamRuntimeWrite =
+                                configuration.PendingGamRuntimeWrite == null
+                                    ? null
+                                    : new PendingGamRuntimeWrite
+                                    {
+                                        OperationId = configuration.PendingGamRuntimeWrite.OperationId,
+                                        TargetStates = new Dictionary<string, bool>(
+                                            configuration.PendingGamRuntimeWrite.TargetStates ??
+                                            new Dictionary<string, bool>(),
+                                            StringComparer.Ordinal),
+                                        PreviousStates = new Dictionary<string, bool>(
+                                            configuration.PendingGamRuntimeWrite.PreviousStates ??
+                                            new Dictionary<string, bool>(),
+                                            StringComparer.Ordinal),
+                                        CreatedAtUtc = configuration.PendingGamRuntimeWrite.CreatedAtUtc,
+                                        StateStorePath = configuration.PendingGamRuntimeWrite.StateStorePath,
+                                        ConflictDetected =
+                                            configuration.PendingGamRuntimeWrite.ConflictDetected
+                                    },
+                            GmodAttributionMigrationPending =
+                                configuration.GmodAttributionMigrationPending
                         };
 
                         // Initialize WorkshopIconResolver
@@ -5562,8 +6062,18 @@ namespace GmodAddonManager.Core.Services
                 string.Equals(asset.Name, trimmedName, StringComparison.CurrentCultureIgnoreCase));
         }
 
+        private static void ThrowIfProtectedSystemAsset(string? assetId)
+        {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                throw new InvalidOperationException(
+                    $"Protected system asset cannot be edited: {assetId}");
+            }
+        }
+
         public void RenameAsset(string assetId, string newName)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             if (string.IsNullOrWhiteSpace(newName))
             {
                 throw new ArgumentException("Asset name cannot be empty.", nameof(newName));
@@ -5599,6 +6109,7 @@ namespace GmodAddonManager.Core.Services
 
         public async Task SetAssetFavoriteAsync(string assetId, bool isFavorite)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
@@ -5658,12 +6169,15 @@ namespace GmodAddonManager.Core.Services
 
         public string SetAssetImage(string assetId, byte[] pngBytes)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             if (pngBytes == null || pngBytes.Length == 0)
             {
                 throw new ArgumentException("Image data cannot be empty.", nameof(pngBytes));
             }
 
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && (!a.IsSystem || a.Id == "subscribe-system-asset"));
+            var asset = configuration.Assets.FirstOrDefault(a =>
+                a.Id == assetId &&
+                (!a.IsSystem || a.Id == SubscribeSystemAssetId));
             if (asset == null)
             {
                 throw new InvalidOperationException($"Asset not found or is system asset: {assetId}");
@@ -5772,6 +6286,7 @@ namespace GmodAddonManager.Core.Services
             AssetImageCrop? crop,
             bool removeImage)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             var asset = configuration.Assets.FirstOrDefault(a =>
                 a.Id == assetId &&
                 (!a.IsSystem || a.Id == SubscribeSystemAssetId));
@@ -5933,8 +6448,9 @@ namespace GmodAddonManager.Core.Services
 
         public void RemoveAssetImage(string assetId)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             var asset = configuration.Assets.FirstOrDefault(a =>
-                a.Id == assetId && (!a.IsSystem || a.Id == "subscribe-system-asset"));
+                a.Id == assetId && (!a.IsSystem || a.Id == SubscribeSystemAssetId));
             if (asset == null)
             {
                 throw new InvalidOperationException($"Asset not found or is system asset: {assetId}");
@@ -6092,6 +6608,11 @@ namespace GmodAddonManager.Core.Services
 
         public void DeleteAsset(string assetId)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset != null)
             {
@@ -6111,6 +6632,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<bool> DeleteAssetAsync(string assetId)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return false;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
@@ -6223,6 +6749,7 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<AssetVersion> CreateAssetVersionAsync(string assetId, string? note = null)
         {
+            ThrowIfProtectedSystemAsset(assetId);
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
@@ -6246,6 +6773,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<bool> RestoreAssetVersionAsync(string assetId, int version)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return false;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
@@ -6299,6 +6831,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<bool> DeleteAssetVersionAsync(string assetId, int version)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return false;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             var snapshot = asset?.VersionHistory
                 .FirstOrDefault(item => item.Version == version);
@@ -6331,6 +6868,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task<int> ClearAssetVersionHistoryAsync(string assetId)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return 0;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
@@ -6367,6 +6909,11 @@ namespace GmodAddonManager.Core.Services
 
         public void AddAddonToAsset(string assetId, string addonId, AddonState state = AddonState.Enabled)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             var normalizedAddonId = addonId?.Trim();
             if (asset != null &&
@@ -6484,6 +7031,11 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         public void AddAddonsToAssetBatch(string assetId, List<string> addonIds, AddonState state = AddonState.Enabled, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null ||
                 asset.ContainsAllAddons() ||
@@ -6595,6 +7147,11 @@ namespace GmodAddonManager.Core.Services
         // Batch removal to avoid per-addon full state updates
         public void RemoveAddonsFromAssetBatch(string assetId, List<string> addonIds, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null || asset.ContainsAllAddons() || addonIds == null || addonIds.Count == 0)
             {
@@ -6762,6 +7319,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task EnableAssetAsync(string assetId, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
 
@@ -6814,6 +7376,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task DisableAssetAsync(string assetId, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
 
@@ -6870,6 +7437,11 @@ namespace GmodAddonManager.Core.Services
             IProgress<(int current, int total)>? progress = null,
             bool updateAddonStates = true)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null || asset.Enabled == enabled)
             {
@@ -6909,6 +7481,11 @@ namespace GmodAddonManager.Core.Services
 
         public async Task ApplyAssetDefaultStateAsync(string assetId, AddonState newDefaultState, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
             if (!Enum.IsDefined(typeof(AddonState), newDefaultState))
@@ -7011,7 +7588,9 @@ namespace GmodAddonManager.Core.Services
             var beforeHashScope = beforeSnapshot.Source;
             result.BeforeHash = beforeHash;
 
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            var asset = configuration.Assets.FirstOrDefault(a =>
+                a.Id == assetId &&
+                !GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(a.Id));
             var fromAssets = configuration.Assets
                 .Where(a => !a.IsSystem && a.Enabled)
                 .ToList();
@@ -7183,23 +7762,93 @@ namespace GmodAddonManager.Core.Services
         /// </summary>
         public async Task<bool> UpdateAddonStatesAsync(IProgress<(int current, int total)>? progress = null)
         {
-            await SaveConfigurationImmediatelyAsync();
-
-            if (DeferRuntimeApplyIfGmodRunning())
-            {
-                return false;
-            }
-
-            var result = await UpdateAddonStatesInternalAsync(
-                logEvents: true,
-                parentOperationId: null,
-                progress: progress);
-            if (!result.Succeeded)
-            {
-                QueueRuntimeApplyProvider?.Invoke();
-            }
-
+            var result = await UpdateAddonStatesWithResultAsync(
+                progress,
+                allowConflictSupersede: true);
             return result.Succeeded;
+        }
+
+        internal async Task<RuntimeApplyAttemptResult> UpdateAddonStatesWithResultAsync(
+            IProgress<(int current, int total)>? progress = null,
+            bool allowConflictSupersede = false)
+        {
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+
+                if (DeferRuntimeApplyIfGmodRunning(allowConflictSupersede))
+                {
+                    return new RuntimeApplyAttemptResult(
+                        succeeded: false,
+                        failureCode: "gmod_running_deferred");
+                }
+
+                var result = await UpdateAddonStatesCoreAsync(
+                    logEvents: true,
+                    parentOperationId: null,
+                    progress: progress,
+                    observeExternalChanges: true,
+                    allowConflictSupersede: allowConflictSupersede);
+                if (!result.Succeeded)
+                {
+                    // A conflict is an intentional fail-closed stop. Re-queueing
+                    // it would replace the generation PendingChangeManager must
+                    // clear and could overwrite GMod on the next pass.
+                    if (!string.Equals(
+                            result.FailureCode,
+                            RuntimeAttributionConflictFailureCode,
+                            StringComparison.Ordinal))
+                    {
+                        QueueRuntimeApplyProvider?.Invoke();
+                        if (allowConflictSupersede &&
+                            !string.IsNullOrWhiteSpace(
+                                result.SupersededConflictOperationId))
+                        {
+                            await FinalizeRuntimeAttributionConflictCoreAsync(
+                                result.SupersededConflictOperationId);
+                        }
+                    }
+                }
+
+                // Empty target scopes and no-op writes do not replace the old
+                // journal. A successful explicit operation may still safely
+                // finalize that exact conflict while holding the runtime gate.
+                if (result.Succeeded &&
+                    allowConflictSupersede &&
+                    !string.IsNullOrWhiteSpace(
+                        result.SupersededConflictOperationId))
+                {
+                    await FinalizeRuntimeAttributionConflictCoreAsync(
+                        result.SupersededConflictOperationId);
+                }
+
+                return new RuntimeApplyAttemptResult(
+                    result.Succeeded,
+                    result.FailureCode,
+                    result.AttributionConflictOperationId);
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
+
+        internal sealed class RuntimeApplyAttemptResult
+        {
+            public RuntimeApplyAttemptResult(
+                bool succeeded,
+                string? failureCode,
+                string? attributionConflictOperationId = null)
+            {
+                Succeeded = succeeded;
+                FailureCode = failureCode;
+                AttributionConflictOperationId = attributionConflictOperationId;
+            }
+
+            public bool Succeeded { get; }
+            public string? FailureCode { get; }
+            public string? AttributionConflictOperationId { get; }
         }
 
         private sealed class AssetResolution
@@ -7749,6 +8398,8 @@ namespace GmodAddonManager.Core.Services
             public ExperimentEventMetrics? Metrics { get; }
             public bool RuntimeWriteSucceeded { get; set; } = true;
             public string? FailureCode { get; set; }
+            public string? AttributionConflictOperationId { get; set; }
+            public string? SupersededConflictOperationId { get; set; }
             public bool Succeeded =>
                 Matched &&
                 RuntimeWriteSucceeded &&
@@ -7803,7 +8454,8 @@ namespace GmodAddonManager.Core.Services
         }
 
         private bool ApplyAddonStateStoreBulk(
-            Dictionary<string, bool> expectedStates)
+            Dictionary<string, bool> expectedStates,
+            bool allowConflictSupersede)
         {
             if (expectedStates == null || expectedStates.Count == 0)
             {
@@ -7818,40 +8470,30 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
-            if (DeferRuntimeApplyIfGmodRunning())
+            if (DeferRuntimeApplyIfGmodRunning(allowConflictSupersede))
             {
                 return false;
             }
 
-            try
+            var filteredStates = expectedStates
+                .Where(kvp => IsWorkshopNumericId(kvp.Key))
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal);
+
+            if (filteredStates.Count == 0)
             {
-                var filteredStates = expectedStates
-                    .Where(kvp => IsWorkshopNumericId(kvp.Key))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal);
-
-                if (filteredStates.Count == 0)
-                {
-                    return true;
-                }
-
-                var persisted = gmodAddonStateStore.SetEnabledBulk(filteredStates);
-                if (!persisted)
-                {
-                    errorHandler.HandleWarning("Failed to persist addon states to addonnomount.txt.", "UpdateAddonStates");
-                }
-
-                return persisted;
+                return true;
             }
-            catch (Exception ex)
-            {
-                errorHandler.HandleWarning($"Failed to update addonnomount.txt state store: {ex.Message}", "UpdateAddonStates");
-                return false;
-            }
+
+            return ExecuteJournaledRuntimeWrite(
+                filteredStates,
+                () => gmodAddonStateStore.SetEnabledBulk(filteredStates),
+                "UpdateAddonStates");
         }
 
         private bool TryPersistSingleAddonRuntimeState(string addonId, bool enabled, string operationName)
         {
-            if (DeferRuntimeApplyIfGmodRunning())
+            if (DeferRuntimeApplyIfGmodRunning(
+                    allowConflictSupersede: true))
             {
                 return false;
             }
@@ -7862,25 +8504,128 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
+            var target = new Dictionary<string, bool>(StringComparer.Ordinal)
+            {
+                [addonId] = enabled
+            };
+            return ExecuteJournaledRuntimeWrite(
+                target,
+                () => gmodAddonStateStore.SetEnabled(addonId, enabled),
+                operationName);
+        }
+
+        private bool ExecuteJournaledRuntimeWrite(
+            IReadOnlyDictionary<string, bool> targetStates,
+            Func<bool> writeRuntimeState,
+            string operationName)
+        {
+            if (gmodAddonStateStore == null)
+            {
+                return false;
+            }
+
+            AddonMountSnapshot beforeSnapshot;
             try
             {
-                var persisted = gmodAddonStateStore.SetEnabled(addonId, enabled);
-                if (!persisted)
-                {
-                    errorHandler.HandleWarning($"Failed to persist addon state to addonnomount.txt for {addonId}.", operationName);
-                    return false;
-                }
+                beforeSnapshot = gmodAddonStateStore.ReadSnapshot();
+            }
+            catch (Exception ex)
+            {
+                errorHandler.HandleWarning(
+                    $"Failed to read addonnomount.txt before GAM runtime write: {ex.Message}",
+                    operationName);
+                return false;
+            }
 
+            if (!beforeSnapshot.IsValidFormat)
+            {
+                errorHandler.HandleWarning(
+                    "Refusing to write malformed addonnomount.txt; attribution baseline was not advanced.",
+                    operationName);
+                return false;
+            }
+
+            var disabledBefore = new HashSet<string>(
+                beforeSnapshot.DisabledIds,
+                StringComparer.Ordinal);
+            var previousStates = targetStates.Keys.ToDictionary(
+                id => id,
+                id => !disabledBefore.Contains(id),
+                StringComparer.Ordinal);
+            var configurationBeforeIntent = CloneConfiguration(configuration);
+            var pendingIntent = gmodDisabledAddonReconciliationService.CreatePendingWrite(
+                targetStates,
+                previousStates,
+                DateTime.UtcNow,
+                gmodAddonStateStore.NoMountFilePath);
+            configuration.PendingGamRuntimeWrite = pendingIntent;
+
+            try
+            {
+                SaveConfigurationImmediatelySynchronously();
+            }
+            catch (Exception ex)
+            {
+                configuration = configurationBeforeIntent;
+                errorHandler.HandleWarning(
+                    $"Could not journal GAM runtime write; addonnomount.txt was not changed: {ex.Message}",
+                    operationName);
+                return false;
+            }
+
+            bool persisted;
+            try
+            {
+                persisted = writeRuntimeState();
+            }
+            catch (Exception ex)
+            {
+                persisted = false;
+                errorHandler.HandleWarning(
+                    $"Failed to update addonnomount.txt: {ex.Message}",
+                    operationName);
+            }
+
+            if (!persisted)
+            {
+                // Keep the already-durable intent. Recovery can prove that the
+                // pre-write state survived, queue the still-durable desired state,
+                // and avoid misclassifying it as a GMod-originated transition.
+                errorHandler.HandleWarning(
+                    "Failed to persist addon states to addonnomount.txt; attribution baseline was not advanced.",
+                    operationName);
+                return false;
+            }
+
+            gmodDisabledAddonReconciliationService.RecordSuccessfulGamWrite(
+                configuration,
+                targetStates,
+                DateTime.UtcNow,
+                gmodAddonStateStore.NoMountFilePath);
+            try
+            {
+                SaveConfigurationImmediatelySynchronously();
                 return true;
             }
             catch (Exception ex)
             {
-                errorHandler.HandleWarning($"Failed to update addonnomount.txt for {addonId}: {ex.Message}", operationName);
+                // Runtime already changed. Restore the durable pending intent in
+                // memory; the next valid observation can complete attribution.
+                configuration = configurationBeforeIntent;
+                configuration.PendingGamRuntimeWrite = pendingIntent;
+                errorHandler.HandleWarning(
+                    $"GAM changed addonnomount.txt but could not finalize its attribution journal: {ex.Message}",
+                    operationName);
                 return false;
             }
         }
 
-        private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(bool logEvents, string? parentOperationId = null, IProgress<(int current, int total)>? progress = null)
+        private async Task<StateMatchResult> UpdateAddonStatesInternalAsync(
+            bool logEvents,
+            string? parentOperationId = null,
+            IProgress<(int current, int total)>? progress = null,
+            bool observeExternalChanges = true,
+            bool allowConflictSupersede = true)
         {
             await _runtimeReconcileGate.WaitAsync();
             try
@@ -7888,7 +8633,9 @@ namespace GmodAddonManager.Core.Services
                 return await UpdateAddonStatesCoreAsync(
                     logEvents,
                     parentOperationId,
-                    progress);
+                    progress,
+                    observeExternalChanges,
+                    allowConflictSupersede);
             }
             finally
             {
@@ -7899,7 +8646,9 @@ namespace GmodAddonManager.Core.Services
         private async Task<StateMatchResult> UpdateAddonStatesCoreAsync(
             bool logEvents,
             string? parentOperationId,
-            IProgress<(int current, int total)>? progress)
+            IProgress<(int current, int total)>? progress,
+            bool observeExternalChanges,
+            bool allowConflictSupersede = true)
         {
             if (!TryGetSubscribedAddonIdSet(
                     "UpdateAddonStates",
@@ -7922,6 +8671,48 @@ namespace GmodAddonManager.Core.Services
                     RuntimeWriteSucceeded = false,
                     FailureCode = "subscription_state_unavailable"
                 };
+            }
+
+            Guid? recoveredMarkerGeneration = null;
+            string? supersededConflictOperationId = null;
+            if (observeExternalChanges)
+            {
+                var observation = await TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+                    "UpdateAddonStates",
+                    subscribedAddonIds);
+                recoveredMarkerGeneration =
+                    observation?.QueuedRuntimeApplyGeneration;
+                if (observation?.PendingRecovery ==
+                    PendingGamRuntimeWriteRecovery.Conflicted)
+                {
+                    supersededConflictOperationId =
+                        observation.PendingOperationId;
+                    if (allowConflictSupersede)
+                    {
+                        errorHandler.HandleInfo(
+                            "An explicit GAM operation is superseding a previously latched runtime-attribution conflict.",
+                            "UpdateAddonStates");
+                    }
+                    else
+                    {
+                    var conflictedActual = CaptureState();
+                    var conflictedExpected = BuildSnapshot(
+                        new Dictionary<string, bool>(StringComparer.Ordinal),
+                        "expected:runtime-attribution-conflict");
+                    return new StateMatchResult(
+                        conflictedActual,
+                        conflictedExpected,
+                        matched: false,
+                        durationMs: 0,
+                        metrics: null)
+                    {
+                        RuntimeWriteSucceeded = false,
+                        FailureCode = RuntimeAttributionConflictFailureCode,
+                        AttributionConflictOperationId =
+                            observation.PendingOperationId
+                    };
+                    }
+                }
             }
 
             var expectedStates = BuildExpectedStatesForAssets(
@@ -7963,7 +8754,7 @@ namespace GmodAddonManager.Core.Services
             try
             {
                 var progressCurrent = 0;
-                Interlocked.Increment(ref _bulkStateUpdateDepth);
+                bulkStateUpdateDepth.Value++;
                 try
                 {
                     using var semaphore = new SemaphoreSlim(_maxParallelAddonStateUpdates, _maxParallelAddonStateUpdates);
@@ -8045,8 +8836,10 @@ namespace GmodAddonManager.Core.Services
                 }
                 finally
                 {
-                    runtimeWriteSucceeded = ApplyAddonStateStoreBulk(expectedStates);
-                    Interlocked.Decrement(ref _bulkStateUpdateDepth);
+                    runtimeWriteSucceeded = ApplyAddonStateStoreBulk(
+                        expectedStates,
+                        allowConflictSupersede);
+                    bulkStateUpdateDepth.Value--;
                     InvalidateWorkshopScanCache();
                 }
 
@@ -8060,6 +8853,8 @@ namespace GmodAddonManager.Core.Services
                     : runtimeWriteSucceeded
                         ? null
                         : "runtime_write_failed";
+                matchResult.SupersededConflictOperationId =
+                    supersededConflictOperationId;
                 stopwatch.Stop();
 
                 if (eventLogger.IsExperimentContextActive)
@@ -8090,6 +8885,25 @@ namespace GmodAddonManager.Core.Services
                         parentOperationId: parentOperationId,
                         stateHashScope: matchResult.Snapshot.Source,
                         expectedHashScope: matchResult.ExpectedSnapshot.Source);
+                }
+
+                if (matchResult.Succeeded &&
+                    recoveredMarkerGeneration.HasValue &&
+                    ClearRuntimeApplyIfGenerationProvider != null)
+                {
+                    try
+                    {
+                        _ = ClearRuntimeApplyIfGenerationProvider.Invoke(
+                            recoveredMarkerGeneration.Value);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The completed runtime state is already durable. Leaving
+                        // this exact marker behind is a safe redundant retry.
+                        errorHandler.HandleWarning(
+                            $"The recovered runtime apply marker could not be cleared: {ex.Message}",
+                            "UpdateAddonStates");
+                    }
                 }
 
                 return matchResult;
@@ -8172,6 +8986,14 @@ namespace GmodAddonManager.Core.Services
                 .GetAwaiter()
                 .GetResult();
         }
+
+        private static Configuration CloneConfiguration(Configuration source)
+        {
+            var json = JsonConvert.SerializeObject(source);
+            return JsonConvert.DeserializeObject<Configuration>(json)
+                ?? throw new InvalidOperationException(
+                    "Failed to clone configuration for transactional rollback.");
+        }
         
         /// <summary>
         // Initialize WorkshopIconResolver
@@ -8194,6 +9016,11 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         public void SetAddonState(string assetId, string addonId, AddonState state)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset != null && (asset.Addons.Contains(addonId) || asset.ContainsAllAddons()))
             {
@@ -8211,7 +9038,7 @@ namespace GmodAddonManager.Core.Services
                     : null;
                 var addonName = addonInfo?.Title ?? addonId;
                 
-                undoManager.RecordAction(new UndoAction(
+                var undoAction = new UndoAction(
                     UndoActionType.AddonStateChanged, 
                     $"Changed '{addonName}' state to {GetStateDisplayName(state)}")
                 {
@@ -8226,13 +9053,16 @@ namespace GmodAddonManager.Core.Services
                     {
                         [addonId] = previousState
                     }
-                });
+                };
+                undoManager.RecordAction(undoAction);
                 
                 asset.SetAddonState(addonId, state);
                 try
                 {
-                    // Initialize WorkshopIconResolver
-                    UpdateSingleAddonState(addonId);
+                    // This legacy synchronous API still uses the authoritative
+                    // full reconcile so external observation, journaling and
+                    // attribution share one serialized runtime transaction.
+                    UpdateAddonStates();
 
                     stopwatch.Stop();
                     var afterSnapshot = CaptureState();
@@ -8251,6 +9081,8 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch (Exception ex)
                 {
+                    asset.SetAddonState(addonId, previousState);
+                    undoManager.RemoveAction(undoAction);
                     stopwatch.Stop();
                     var afterSnapshot = CaptureState();
                     var afterHash = ComputeStateHash(afterSnapshot);
@@ -8277,6 +9109,11 @@ namespace GmodAddonManager.Core.Services
 
         public void SetAddonStatesBatch(string assetId, List<string> addonIds, AddonState state, IProgress<(int current, int total)>? progress = null)
         {
+            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
+            {
+                return;
+            }
+
             if (addonIds == null || addonIds.Count == 0)
             {
                 return;
@@ -8380,6 +9217,7 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 errorHandler.HandleError(ex, $"Failed to update addon state for {addonId}", ErrorSeverity.Warning);
+                throw;
             }
         }
         
@@ -9248,6 +10086,9 @@ namespace GmodAddonManager.Core.Services
         
         public async Task ResetManagerAsync()
         {
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
             errorHandler.HandleInfo("Starting GAM configuration reset", "ResetManager");
 
             var originalAssets = configuration.Assets;
@@ -9268,6 +10109,26 @@ namespace GmodAddonManager.Core.Services
                 configuration.InitialRuntimeImportCompleted;
             var originalInitialImportCompletedAtUtc =
                 configuration.InitialRuntimeImportCompletedAtUtc;
+            var originalGamAppliedBaselineInitialized =
+                configuration.GamAppliedRuntimeBaselineInitialized;
+            var originalGamAppliedStates = new Dictionary<string, bool>(
+                configuration.LastGamAppliedAddonStates,
+                StringComparer.Ordinal);
+            var originalGamAppliedAtUtc = configuration.LastGamAppliedRuntimeAtUtc;
+            var originalGamAppliedStateStorePath =
+                configuration.LastGamAppliedStateStorePath;
+            var originalObservationBaselineInitialized =
+                configuration.GmodObservationBaselineInitialized;
+            var originalObservedStates = new Dictionary<string, bool>(
+                configuration.LastObservedGmodAddonStates,
+                StringComparer.Ordinal);
+            var originalObservedAtUtc = configuration.LastObservedGmodRuntimeAtUtc;
+            var originalObservedStateStorePath =
+                configuration.LastObservedGmodStateStorePath;
+            var originalPendingGamRuntimeWrite =
+                configuration.PendingGamRuntimeWrite;
+            var originalAttributionMigrationPending =
+                configuration.GmodAttributionMigrationPending;
             var originalAddonFavorites = configuration.AddonMetadata.ToDictionary(
                 entry => entry.Key,
                 entry => entry.Value.IsFavorite,
@@ -9290,9 +10151,46 @@ namespace GmodAddonManager.Core.Services
             subscribeAsset.SetAllAddons();
             subscribeAsset.SetWholeState(AddonState.Enabled);
 
-            configuration.Assets = new List<Asset> { subscribeAsset };
+            var gmodDisabledAsset = new Asset(
+                SystemAssetDefinitions.GmodDisabledName,
+                isSystem: true)
+            {
+                Id = SystemAssetDefinitions.GmodDisabledId
+            };
+            gmodDisabledAsset.SetWholeState(AddonState.Excluded);
+
+            configuration.Assets = new List<Asset>
+            {
+                subscribeAsset,
+                gmodDisabledAsset
+            };
             configuration.InitialRuntimeImportCompleted = true;
             configuration.InitialRuntimeImportCompletedAtUtc = DateTime.UtcNow;
+            configuration.GamAppliedRuntimeBaselineInitialized = false;
+            configuration.LastGamAppliedAddonStates.Clear();
+            configuration.LastGamAppliedRuntimeAtUtc = null;
+            configuration.LastGamAppliedStateStorePath = null;
+            configuration.PendingGamRuntimeWrite = null;
+            configuration.GmodAttributionMigrationPending = false;
+
+            // Reset intentionally discards prior external deltas. A valid current
+            // snapshot is acknowledged before a possible GMod-running defer, so
+            // the old OFF state cannot be re-imported into the freshly empty Asset.
+            if (TryCaptureCurrentSubscribedRuntimeStates(out var resetActualStates))
+            {
+                configuration.GmodObservationBaselineInitialized = true;
+                configuration.LastObservedGmodAddonStates = resetActualStates;
+                configuration.LastObservedGmodRuntimeAtUtc = DateTime.UtcNow;
+                configuration.LastObservedGmodStateStorePath =
+                    gmodAddonStateStore?.NoMountFilePath;
+            }
+            else
+            {
+                configuration.GmodObservationBaselineInitialized = false;
+                configuration.LastObservedGmodAddonStates.Clear();
+                configuration.LastObservedGmodRuntimeAtUtc = null;
+                configuration.LastObservedGmodStateStorePath = null;
+            }
 
             foreach (var addon in configuration.AddonMetadata.Values)
             {
@@ -9324,6 +10222,21 @@ namespace GmodAddonManager.Core.Services
                     originalInitialImportCompleted;
                 configuration.InitialRuntimeImportCompletedAtUtc =
                     originalInitialImportCompletedAtUtc;
+                configuration.GamAppliedRuntimeBaselineInitialized =
+                    originalGamAppliedBaselineInitialized;
+                configuration.LastGamAppliedAddonStates = originalGamAppliedStates;
+                configuration.LastGamAppliedRuntimeAtUtc = originalGamAppliedAtUtc;
+                configuration.LastGamAppliedStateStorePath =
+                    originalGamAppliedStateStorePath;
+                configuration.GmodObservationBaselineInitialized =
+                    originalObservationBaselineInitialized;
+                configuration.LastObservedGmodAddonStates = originalObservedStates;
+                configuration.LastObservedGmodRuntimeAtUtc = originalObservedAtUtc;
+                configuration.LastObservedGmodStateStorePath =
+                    originalObservedStateStorePath;
+                configuration.PendingGamRuntimeWrite = originalPendingGamRuntimeWrite;
+                configuration.GmodAttributionMigrationPending =
+                    originalAttributionMigrationPending;
                 foreach (var favorite in originalAddonFavorites)
                 {
                     if (configuration.AddonMetadata.TryGetValue(
@@ -9339,7 +10252,18 @@ namespace GmodAddonManager.Core.Services
             undoManager.Clear();
             try
             {
-                await UpdateAddonStatesAsync();
+                if (!DeferRuntimeApplyIfGmodRunning())
+                {
+                    var resetResult = await UpdateAddonStatesCoreAsync(
+                        logEvents: true,
+                        parentOperationId: null,
+                        progress: null,
+                        observeExternalChanges: false);
+                    if (!resetResult.Succeeded)
+                    {
+                        QueueRuntimeApplyProvider?.Invoke();
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -9350,6 +10274,11 @@ namespace GmodAddonManager.Core.Services
                     ErrorSeverity.Warning);
             }
             errorHandler.HandleInfo("GAM configuration reset completed", "ResetManager");
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
         }
         
         public async Task RestoreOriginalStateAsync()
@@ -10463,6 +11392,9 @@ namespace GmodAddonManager.Core.Services
                 var subscriptionTruthAvailable = TryGetSubscribedAddonIdSet(
                     "CleanupDeletedWorkshopAddons",
                     out var subscribedAddonIds);
+                var currentAddonIds = new HashSet<string>(
+                    currentAddons.Where(addon => !addon.IsLocal).Select(addon => addon.Id),
+                    StringComparer.Ordinal);
 
                 if (!PathOverrideResolver.IsDirectoryUsable(workshopPath))
                 {
@@ -10487,6 +11419,14 @@ namespace GmodAddonManager.Core.Services
                     var addon = kvp.Value;
 
                     if (addon.IsLocal)
+                    {
+                        continue;
+                    }
+
+                    // The caller has already validated every item in the current inventory.
+                    // Re-validating those directories here doubled the filesystem walk and
+                    // duplicate-log volume on every startup.
+                    if (currentAddonIds.Contains(addonId))
                     {
                         continue;
                     }

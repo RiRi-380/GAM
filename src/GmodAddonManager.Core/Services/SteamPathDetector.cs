@@ -81,13 +81,31 @@ namespace GmodAddonManager.Core.Services
                 issues.Add("Garry's Mod appmanifest_4000.acf was not found in any Steam library.");
             }
 
-            var workshopRoots = libraries.Select(BuildWorkshopRootCandidate).ToList();
-            var activeWorkshopRoot = workshopRoots
-                .Where(candidate => candidate.Confidence != PathCandidateConfidence.Rejected)
-                .OrderByDescending(candidate => candidate.Confidence)
-                .ThenByDescending(candidate => candidate.ValidPayloadCount)
-                .ThenByDescending(candidate => candidate.HasAppWorkshopManifest)
-                .ThenBy(candidate => candidate.LibraryPath, StringComparer.OrdinalIgnoreCase)
+            var workshopCandidates = libraries
+                .Select(library =>
+                {
+                    var candidate = BuildWorkshopRootCandidate(
+                        library,
+                        out var manifestMatchedFolderCount);
+                    return new
+                    {
+                        Library = library,
+                        Candidate = candidate,
+                        ManifestMatchedFolderCount = manifestMatchedFolderCount
+                    };
+                })
+                .ToList();
+            var workshopRoots = workshopCandidates
+                .Select(item => item.Candidate)
+                .ToList();
+            var activeWorkshopRoot = workshopCandidates
+                .Where(item => item.Candidate.Confidence != PathCandidateConfidence.Rejected)
+                .OrderByDescending(item => item.Candidate.Confidence)
+                .ThenByDescending(item => item.ManifestMatchedFolderCount)
+                .ThenByDescending(item => item.Candidate.HasAppWorkshopManifest)
+                .ThenByDescending(item => item.Library.HasGmodAppManifest)
+                .ThenBy(item => item.Candidate.LibraryPath, StringComparer.OrdinalIgnoreCase)
+                .Select(item => item.Candidate)
                 .FirstOrDefault();
 
             if (activeWorkshopRoot == null)
@@ -358,72 +376,65 @@ namespace GmodAddonManager.Core.Services
             };
         }
 
-        private static WorkshopRootCandidate BuildWorkshopRootCandidate(SteamLibraryCandidate library)
+        private static WorkshopRootCandidate BuildWorkshopRootCandidate(
+            SteamLibraryCandidate library,
+            out int manifestMatchedFolderCount)
         {
             var root = Path.Combine(library.Path, WORKSHOP_RELATIVE_PATH);
             var manifest = Path.Combine(library.Path, "steamapps", "workshop", GMOD_WORKSHOP_MANIFEST);
             var reasons = new List<string>();
-            var contentRootExists = Directory.Exists(root);
-            var contentRootReadable = false;
-            var validPayloadCount = 0;
-            var invalidFolderCount = 0;
-
-            if (contentRootExists)
-            {
-                try
-                {
-                    foreach (var dir in Directory.EnumerateDirectories(root))
-                    {
-                        var id = Path.GetFileName(dir);
-                        if (string.IsNullOrWhiteSpace(id) ||
-                            id.StartsWith(".", StringComparison.Ordinal) ||
-                            !long.TryParse(id, out _))
-                        {
-                            continue;
-                        }
-
-                        if (AddonPayloadValidator.HasValidAddonPayload(dir))
-                        {
-                            validPayloadCount++;
-                        }
-                        else
-                        {
-                            invalidFolderCount++;
-                        }
-                    }
-
-                    contentRootReadable = true;
-                }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-                {
-                    reasons.Add($"Failed to inspect workshop content root: {ex.Message}");
-                }
-            }
-            else
-            {
-                reasons.Add("workshop content root is missing.");
-            }
-
             var hasManifest = File.Exists(manifest);
+            var contentRootReadable = WorkshopRootInspector.TryCheckDirectoryReadable(root, out var readError);
+            var manifestIsAuthoritative = false;
+            manifestMatchedFolderCount = 0;
+            var hasValidPayload = false;
+
+            if (!contentRootReadable)
+            {
+                reasons.Add(Directory.Exists(root)
+                    ? $"Failed to inspect workshop content root: {readError ?? "unknown error"}"
+                    : "workshop content root is missing.");
+            }
+            else if (hasManifest)
+            {
+                manifestMatchedFolderCount = WorkshopRootInspector.CountManifestMatchedFolders(
+                    root,
+                    manifest,
+                    out manifestIsAuthoritative);
+                if (!manifestIsAuthoritative)
+                {
+                    reasons.Add("appworkshop_4000.acf could not be read as an authoritative manifest.");
+                }
+            }
+
+            if (contentRootReadable && !manifestIsAuthoritative)
+            {
+                hasValidPayload = WorkshopRootInspector.HasValidPayloadFallback(root);
+            }
+
             var confidence = PathCandidateConfidence.Rejected;
-            if (contentRootReadable && hasManifest && validPayloadCount > 0)
+            if (contentRootReadable && manifestIsAuthoritative && manifestMatchedFolderCount > 0)
             {
                 confidence = PathCandidateConfidence.High;
             }
-            else if (contentRootReadable && validPayloadCount > 0)
-            {
-                confidence = PathCandidateConfidence.Medium;
-                reasons.Add("appworkshop_4000.acf is missing.");
-            }
-            else if (contentRootReadable && hasManifest)
+            else if (contentRootReadable && manifestIsAuthoritative)
             {
                 confidence = PathCandidateConfidence.Low;
-                reasons.Add("workshop root exists but has no valid payload.");
+                reasons.Add("appworkshop_4000.acf has no installed or subscribed item matching this root.");
+            }
+            else if (contentRootReadable && hasValidPayload)
+            {
+                confidence = PathCandidateConfidence.Medium;
+                reasons.Add(hasManifest
+                    ? "appworkshop_4000.acf is not authoritative; using bounded payload fallback."
+                    : "appworkshop_4000.acf is missing.");
             }
             else if (contentRootReadable)
             {
                 confidence = PathCandidateConfidence.Low;
-                reasons.Add("workshop root exists without appworkshop manifest or valid payload.");
+                reasons.Add(hasManifest
+                    ? "workshop root has no matching authoritative manifest data or shallow payload evidence."
+                    : "workshop root exists without appworkshop manifest or valid payload.");
             }
 
             return new WorkshopRootCandidate
@@ -433,8 +444,9 @@ namespace GmodAddonManager.Core.Services
                 AppWorkshopManifestPath = manifest,
                 HasAppWorkshopManifest = hasManifest,
                 ContentRootExists = contentRootReadable,
-                ValidPayloadCount = validPayloadCount,
-                EmptyOrInvalidFolderCount = invalidFolderCount,
+                // Path discovery deliberately does not perform exhaustive payload validation.
+                ValidPayloadCount = 0,
+                EmptyOrInvalidFolderCount = 0,
                 Confidence = confidence,
                 RejectReasons = reasons
             };
@@ -468,6 +480,205 @@ namespace GmodAddonManager.Core.Services
                 {
                     yield return new KeyValuePair<string, string>(parts[0], parts[1].Replace(@"\\", @"\"));
                 }
+            }
+        }
+    }
+
+    internal static class WorkshopRootInspector
+    {
+        private const int MaxFallbackRootEntries = 64;
+        private const int MaxFallbackPayloadEntries = 64;
+        private const int MaxFallbackPayloadDepth = 2;
+
+        private static readonly HashSet<string> ContentDirectoryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "lua",
+            "materials",
+            "models",
+            "maps",
+            "gamemodes",
+            "sound",
+            "scripts",
+            "particles",
+            "resource",
+            "cfg",
+            "data"
+        };
+
+        internal static bool TryCheckDirectoryReadable(string? path, out string? error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var enumerator = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+                _ = enumerator.MoveNext();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        internal static bool HasValidPayloadFallback(string rootPath)
+        {
+            try
+            {
+                var rootEntriesInspected = 0;
+                foreach (var directory in Directory.EnumerateDirectories(rootPath))
+                {
+                    if (rootEntriesInspected >= MaxFallbackRootEntries)
+                    {
+                        return false;
+                    }
+
+                    rootEntriesInspected++;
+                    var id = Path.GetFileName(directory);
+                    if (string.IsNullOrWhiteSpace(id) ||
+                        id.StartsWith(".", StringComparison.Ordinal) ||
+                        !long.TryParse(id, out _))
+                    {
+                        continue;
+                    }
+
+                    if (HasValidAddonPayloadShallow(directory))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        internal static int CountManifestMatchedFolders(
+            string rootPath,
+            string manifestPath,
+            out bool manifestIsAuthoritative)
+        {
+            var manifestSnapshot = SteamWorkshopCacheReader.GetWorkshopSnapshot(new[] { manifestPath });
+            manifestIsAuthoritative = manifestSnapshot.IsAuthoritative;
+            if (!manifestIsAuthoritative)
+            {
+                return 0;
+            }
+
+            var manifestIds = new HashSet<string>(
+                manifestSnapshot.InstalledIds.Concat(manifestSnapshot.SubscribedIds),
+                StringComparer.Ordinal);
+            if (manifestIds.Count == 0)
+            {
+                return 0;
+            }
+
+            var matchedFolderCount = 0;
+            try
+            {
+                foreach (var directory in Directory.EnumerateDirectories(rootPath))
+                {
+                    var id = Path.GetFileName(directory);
+                    if (manifestIds.Contains(id))
+                    {
+                        matchedFolderCount++;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                manifestIsAuthoritative = false;
+                return 0;
+            }
+
+            return matchedFolderCount;
+        }
+
+        private static bool HasValidAddonPayloadShallow(string addonPath)
+        {
+            var contentDirectories = new List<string>();
+            var entriesInspected = 0;
+
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(addonPath))
+                {
+                    if (entriesInspected++ >= MaxFallbackPayloadEntries)
+                    {
+                        break;
+                    }
+
+                    if (File.Exists(entry))
+                    {
+                        var extension = Path.GetExtension(entry);
+                        if ((string.Equals(extension, ".gma", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(extension, ".cache", StringComparison.OrdinalIgnoreCase)) &&
+                            IsNonZeroFile(entry))
+                        {
+                            return true;
+                        }
+
+                        continue;
+                    }
+
+                    if (Directory.Exists(entry) && ContentDirectoryNames.Contains(Path.GetFileName(entry)))
+                    {
+                        contentDirectories.Add(entry);
+                    }
+                }
+
+                var pending = new Queue<KeyValuePair<string, int>>(
+                    contentDirectories.Select(path => new KeyValuePair<string, int>(path, 0)));
+                entriesInspected = 0;
+                while (pending.Count > 0 && entriesInspected < MaxFallbackPayloadEntries)
+                {
+                    var current = pending.Dequeue();
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(current.Key))
+                    {
+                        if (entriesInspected++ >= MaxFallbackPayloadEntries)
+                        {
+                            return false;
+                        }
+
+                        if (File.Exists(entry) &&
+                            !AddonPayloadValidator.IsIgnoredMarker(entry) &&
+                            IsNonZeroFile(entry))
+                        {
+                            return true;
+                        }
+
+                        if (current.Value < MaxFallbackPayloadDepth && Directory.Exists(entry))
+                        {
+                            pending.Enqueue(new KeyValuePair<string, int>(entry, current.Value + 1));
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool IsNonZeroFile(string path)
+        {
+            try
+            {
+                return new FileInfo(path).Length > 0;
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
     }

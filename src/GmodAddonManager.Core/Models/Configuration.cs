@@ -7,7 +7,7 @@ namespace GmodAddonManager.Core.Models
 {
     public class Configuration
     {
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 3;
 
         [JsonProperty("schemaVersion")]
         public int SchemaVersion { get; set; }
@@ -48,6 +48,56 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("retainMissingAssetReferences")]
         public bool RetainMissingAssetReferences { get; set; }
 
+        /// <summary>
+        /// True once GAM has successfully persisted at least one runtime state.
+        /// The dictionary is intentionally allowed to be partial because a legacy
+        /// single-addon operation can predate the next full reconcile.
+        /// </summary>
+        [JsonProperty("gamAppliedRuntimeBaselineInitialized")]
+        public bool GamAppliedRuntimeBaselineInitialized { get; set; }
+
+        [JsonProperty("lastGamAppliedAddonStates")]
+        public Dictionary<string, bool> LastGamAppliedAddonStates { get; set; }
+
+        [JsonProperty("lastGamAppliedRuntimeAtUtc")]
+        public DateTime? LastGamAppliedRuntimeAtUtc { get; set; }
+
+        [JsonProperty("lastGamAppliedStateStorePath")]
+        public string? LastGamAppliedStateStorePath { get; set; }
+
+        /// <summary>
+        /// The last valid GMod state acknowledged by GAM. External transitions are
+        /// detected against this baseline; GAM writes advance it only after the
+        /// runtime store confirms success.
+        /// </summary>
+        [JsonProperty("gmodObservationBaselineInitialized")]
+        public bool GmodObservationBaselineInitialized { get; set; }
+
+        [JsonProperty("lastObservedGmodAddonStates")]
+        public Dictionary<string, bool> LastObservedGmodAddonStates { get; set; }
+
+        [JsonProperty("lastObservedGmodRuntimeAtUtc")]
+        public DateTime? LastObservedGmodRuntimeAtUtc { get; set; }
+
+        [JsonProperty("lastObservedGmodStateStorePath")]
+        public string? LastObservedGmodStateStorePath { get; set; }
+
+        /// <summary>
+        /// Durable cross-file intent written before addonnomount.txt. If GAM exits
+        /// between the runtime write and config save, the next valid observation
+        /// can attribute a matching state to GAM instead of importing it as an
+        /// external disable.
+        /// </summary>
+        [JsonProperty("pendingGamRuntimeWrite")]
+        public PendingGamRuntimeWrite? PendingGamRuntimeWrite { get; set; }
+
+        /// <summary>
+        /// One valid post-upgrade observation must classify only runtime OFF
+        /// states that the pre-attribution Asset model expected to be ON.
+        /// </summary>
+        [JsonProperty("gmodAttributionMigrationPending")]
+        public bool GmodAttributionMigrationPending { get; set; }
+
         public Configuration()
         {
             SchemaVersion = CurrentSchemaVersion;
@@ -63,6 +113,16 @@ namespace GmodAddonManager.Core.Models
             KnownSubscribedAddonIds = new List<string>();
             SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>();
             RetainMissingAssetReferences = false;
+            GamAppliedRuntimeBaselineInitialized = false;
+            LastGamAppliedAddonStates = new Dictionary<string, bool>();
+            LastGamAppliedRuntimeAtUtc = null;
+            LastGamAppliedStateStorePath = null;
+            GmodObservationBaselineInitialized = false;
+            LastObservedGmodAddonStates = new Dictionary<string, bool>();
+            LastObservedGmodRuntimeAtUtc = null;
+            LastObservedGmodStateStorePath = null;
+            PendingGamRuntimeWrite = null;
+            GmodAttributionMigrationPending = false;
         }
 
         public void CreateDefaultAssets()
@@ -72,20 +132,53 @@ namespace GmodAddonManager.Core.Models
 
         public void CreateDefaultAssets(bool includeJunction)
         {
-            var subscribeAsset = new Asset("Subscribe Asset", true);
-            subscribeAsset.Id = "subscribe-system-asset";
+            var subscribeAsset = new Asset(SystemAssetDefinitions.SubscribeName, true);
+            subscribeAsset.Id = SystemAssetDefinitions.SubscribeId;
             subscribeAsset.SetWholeState(AddonState.Enabled);
             subscribeAsset.SetAllAddons();
             Assets.Add(subscribeAsset);
 
+            var gmodDisabledAsset = new Asset(SystemAssetDefinitions.GmodDisabledName, true);
+            gmodDisabledAsset.Id = SystemAssetDefinitions.GmodDisabledId;
+            gmodDisabledAsset.SetWholeState(AddonState.Excluded);
+            Assets.Add(gmodDisabledAsset);
+
             if (includeJunction)
             {
-                var junctionAsset = new Asset("Junction", true);
-                junctionAsset.Id = "junction-system-asset";
+                var junctionAsset = new Asset(SystemAssetDefinitions.JunctionName, true);
+                junctionAsset.Id = SystemAssetDefinitions.JunctionId;
                 junctionAsset.SetWholeState(AddonState.Disabled);
                 Assets.Add(junctionAsset);
             }
         }
+    }
+
+    public sealed class PendingGamRuntimeWrite
+    {
+        [JsonProperty("operationId")]
+        public string OperationId { get; set; } = string.Empty;
+
+        [JsonProperty("targetStates")]
+        public Dictionary<string, bool> TargetStates { get; set; } =
+            new Dictionary<string, bool>();
+
+        [JsonProperty("previousStates")]
+        public Dictionary<string, bool> PreviousStates { get; set; } =
+            new Dictionary<string, bool>();
+
+        [JsonProperty("createdAtUtc")]
+        public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+
+        [JsonProperty("stateStorePath")]
+        public string StateStorePath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Durable fail-closed latch. Once an unresolved GAM write and the
+        /// observed runtime state diverge, automatic apply remains blocked until
+        /// its pending apply marker has been durably removed.
+        /// </summary>
+        [JsonProperty("conflictDetected")]
+        public bool ConflictDetected { get; set; }
     }
 
     public class PathState

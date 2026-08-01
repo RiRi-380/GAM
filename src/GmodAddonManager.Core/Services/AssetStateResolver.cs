@@ -15,7 +15,7 @@ namespace GmodAddonManager.Core.Services
     /// </summary>
     public sealed class AssetStateResolver
     {
-        public const string SubscribeSystemAssetId = "subscribe-system-asset";
+        public const string SubscribeSystemAssetId = SystemAssetDefinitions.SubscribeId;
 
         public ResolvedAddonState Resolve(
             string addonId,
@@ -55,6 +55,19 @@ namespace GmodAddonManager.Core.Services
                     enabledBySubscribe =
                         isSubscribed &&
                         state == AddonState.Enabled;
+                    continue;
+                }
+
+                if (string.Equals(
+                        asset.Id,
+                        SystemAssetDefinitions.GmodDisabledId,
+                        StringComparison.Ordinal))
+                {
+                    if (state == AddonState.Excluded &&
+                        ContainsAddon(asset, normalizedAddonId))
+                    {
+                        excludedByAssets.Add(CreateSource(asset));
+                    }
                     continue;
                 }
 

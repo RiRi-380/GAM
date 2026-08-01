@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
@@ -53,6 +54,7 @@ public sealed partial class App : Application, IDisposable
 
     public override async void OnFrameworkInitializationCompleted()
     {
+        SafeFileLogger.TryLogStartupMilestone("FrameworkInitializationStarted");
 #if DEBUG
         try
         {
@@ -167,6 +169,7 @@ public sealed partial class App : Application, IDisposable
             }
 
             var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
+            SafeFileLogger.TryLogStartupMilestone("PathRecoveryCompleted");
 
             try
             {
@@ -186,6 +189,7 @@ public sealed partial class App : Application, IDisposable
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");
 #endif
                 await addonManager.InitializeAsync();
+                SafeFileLogger.TryLogStartupMilestone("AddonManagerInitialized");
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager InitializeAsync completed at: {DateTime.Now}\n");
 #endif
@@ -421,6 +425,7 @@ public sealed partial class App : Application, IDisposable
                     
                     // 繧ｦ繧｣繝ｳ繝峨え繧呈・遉ｺ逧・↓陦ｨ遉ｺ
                     desktop.MainWindow.Show();
+                    SafeFileLogger.TryLogStartupMilestone("MainWindowShown");
                     if (originalShutdownMode.HasValue)
                     {
                         desktop.ShutdownMode = originalShutdownMode.Value;
@@ -488,19 +493,38 @@ public sealed partial class App : Application, IDisposable
 
     private async Task ApplyPendingChangesAfterGmodStoppedAsync()
     {
-        if (pendingChangeManager == null)
+        if (addonManager == null)
         {
             return;
         }
 
         try
         {
-            await pendingChangeManager.ApplyPendingChangesAsync();
+            if (pendingChangeManager?.HasPendingChanges() == true)
+            {
+                // PendingChangeManager owns the atomic pre-apply observation and
+                // conflict decision. Reading here first could consume its journal conflict.
+                await pendingChangeManager.ApplyPendingChangesAsync();
+            }
+            else
+            {
+                await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop &&
+                    desktop.MainWindow?.IsVisible == true &&
+                    desktop.MainWindow.DataContext is MainWindowViewModel mainViewModel)
+                {
+                    mainViewModel.RefreshGmodDisabledAssetPresentation();
+                }
+            });
         }
         catch (Exception ex)
         {
             // Best-effort; avoid crashing shutdown.
-            SafeFileLogger.TryLogException("App.PendingChangeManager.ApplyPendingChangesAsync", ex);
+            SafeFileLogger.TryLogException("App.GmodStoppedRuntimeSync", ex);
         }
     }
 

@@ -1,6 +1,6 @@
 # Build script for GAM - Same as GitHub Actions
 param(
-    [string]$Version = "v2.0.0",
+    [string]$Version = "v2.0.1",
     [ValidateSet("prompt", "run", "skip")]
     [string]$RunMode = "prompt"
 )
@@ -34,15 +34,15 @@ if (Test-Path "dist") {
 Write-Host "Restoring dependencies..." -ForegroundColor Yellow
 dotnet restore
 
-# Build self-contained executable
-Write-Host "Building self-contained executable..." -ForegroundColor Yellow
+# Build a self-contained, multi-file application. Do not switch this back to a
+# single-file bundle: native libraries are extracted to %TEMP%\.net before startup.
+Write-Host "Building self-contained application..." -ForegroundColor Yellow
 dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
     -c Release `
     -r win-x64 `
     --self-contained true `
-    -p:PublishSingleFile=true `
+    -p:PublishSingleFile=false `
     -p:PublishTrimmed=false `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
     @versionProps `
     -o publish
 

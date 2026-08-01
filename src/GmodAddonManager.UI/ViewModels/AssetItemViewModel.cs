@@ -52,6 +52,14 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
 {
 
+    public const string GmodDisabledSystemAssetId =
+
+        GmodDisabledAddonReconciliationService.SystemAssetId;
+
+    public const string GmodDisabledSystemAssetName =
+
+        GmodDisabledAddonReconciliationService.SystemAssetName;
+
     private Asset asset;
 
     private readonly AddonManager addonManager;
@@ -96,9 +104,15 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = asset.Name;
 
-        IsEnabled = asset.State == AddonState.Enabled;
+        var displayState = IsGmodDisabledAsset
 
-        IsSystem = asset.IsSystem;
+            ? AddonState.Excluded
+
+            : asset.State;
+
+        IsEnabled = displayState == AddonState.Enabled;
+
+        IsSystem = asset.IsSystem || IsGmodDisabledAsset;
 
         UpdateAddonCount();
 
@@ -106,7 +120,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         // 繧｢繧ｻ繝・ヨ縺ｮ迥ｶ諷九ｒ險ｭ螳夲ｼ・efaultAddonState縺九ｉ・・
 
-        assetState = (AssetState)asset.State;
+        assetState = (AssetState)displayState;
         isFavorite = asset.IsFavorite;
 
 
@@ -115,7 +129,11 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         // Commands
 
-        ToggleEnabledCommand = ReactiveCommand.CreateFromTask(ToggleEnabledAsync);
+        ToggleEnabledCommand = ReactiveCommand.CreateFromTask(
+
+            ToggleEnabledAsync,
+
+            this.WhenAnyValue(x => x.CanToggleAssetActive));
 
         DeleteCommand = ReactiveCommand.CreateFromTask(
 
@@ -124,13 +142,29 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             this.WhenAnyValue(x => x.IsSystem, isSystem => !isSystem));
 
         ShowDetailsCommand = ReactiveCommand.CreateFromTask(ShowDetailsDialogAsync);
-        SetEnabledCommand = ReactiveCommand.CreateFromTask(SetEnabledAsync);
+        SetEnabledCommand = ReactiveCommand.CreateFromTask(
 
-        SetDisabledCommand = ReactiveCommand.CreateFromTask(SetDisabledAsync);
+            SetEnabledAsync,
 
-        SetExcludedCommand = ReactiveCommand.CreateFromTask(SetExcludedAsync);
+            this.WhenAnyValue(x => x.CanEditAddonDefaultState));
 
-        ToggleFavoriteCommand = ReactiveCommand.CreateFromTask(ToggleFavoriteAsync);
+        SetDisabledCommand = ReactiveCommand.CreateFromTask(
+
+            SetDisabledAsync,
+
+            this.WhenAnyValue(x => x.CanEditAddonDefaultState));
+
+        SetExcludedCommand = ReactiveCommand.CreateFromTask(
+
+            SetExcludedAsync,
+
+            this.WhenAnyValue(x => x.CanSetExcluded));
+
+        ToggleFavoriteCommand = ReactiveCommand.CreateFromTask(
+
+            ToggleFavoriteAsync,
+
+            this.WhenAnyValue(x => x.CanFavorite));
 
         VersionManageCommand = ReactiveCommand.CreateFromTask(
             VersionManageAsync,
@@ -211,9 +245,13 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             {
 
-                if (Id == "subscribe-system-asset")
+                if (Id == SystemAssetDefinitions.SubscribeId)
 
                     return L.Get("Asset.SubscribeAsset");
+
+                if (Id == GmodDisabledSystemAssetId)
+
+                    return GmodDisabledSystemAssetName;
 
             }
 
@@ -276,7 +314,11 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
 
 
-    public string AddonCountDisplay => L.Format("AssetList.AddonCount", AddonCount);
+    public string AddonCountDisplay => IsGmodDisabledAsset
+
+        ? DisabledAddonCountDisplay
+
+        : L.Format("AssetList.AddonCount", AddonCount);
 
 
 
@@ -306,7 +348,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
     
 
-    public bool CanEditImage => !IsSystem || Id == "subscribe-system-asset";
+    public bool CanEditImage => !IsSystem || IsSubscribeAsset;
 
     public bool CanEditName => !IsSystem;
 
@@ -317,8 +359,9 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public bool CanDelete => !IsSystem;
     public bool CanManageVersions => !IsSystem;
     public bool CanToggleAssetActive => IsSubscribeAsset || !IsSystem;
-    public bool CanEditAddonDefaultState => true;
-    public bool IsSubscribeAsset => Id == "subscribe-system-asset";
+    public bool CanEditAddonDefaultState => IsSubscribeAsset || !IsSystem;
+    public bool IsSubscribeAsset => Id == SystemAssetDefinitions.SubscribeId;
+    public bool IsGmodDisabledAsset => Id == GmodDisabledSystemAssetId;
     public bool CanSetExcluded => !IsSystem;
     public bool CanFavorite => !IsSystem;
     public string EnabledStateLabel => IsSubscribeAsset ? "ON" : L.Get("AssetList.Enabled");
@@ -805,9 +848,15 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = updatedAsset.Name;
 
-        IsEnabled = updatedAsset.State == AddonState.Enabled;
+        var displayState = IsGmodDisabledAsset
 
-        assetState = (AssetState)updatedAsset.State;
+            ? AddonState.Excluded
+
+            : updatedAsset.State;
+
+        IsEnabled = displayState == AddonState.Enabled;
+
+        assetState = (AssetState)displayState;
         IsFavorite = updatedAsset.IsFavorite;
 
         UpdateAddonCount();
@@ -948,6 +997,14 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     private async Task SetAssetStateAsync(AddonState targetState)
 
     {
+
+        if (!CanEditAddonDefaultState)
+
+        {
+
+            return;
+
+        }
 
         if (IsSubscribeAsset && targetState == AddonState.Excluded)
 
