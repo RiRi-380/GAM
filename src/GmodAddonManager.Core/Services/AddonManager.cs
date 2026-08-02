@@ -7481,11 +7481,6 @@ namespace GmodAddonManager.Core.Services
 
         public async Task ApplyAssetDefaultStateAsync(string assetId, AddonState newDefaultState, IProgress<(int current, int total)>? progress = null)
         {
-            if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
-            {
-                return;
-            }
-
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
             if (asset == null) return;
             if (!Enum.IsDefined(typeof(AddonState), newDefaultState))

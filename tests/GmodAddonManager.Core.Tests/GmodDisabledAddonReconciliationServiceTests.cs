@@ -29,6 +29,38 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
         Assert.Empty(disabled.Addons);
     }
 
+    [Theory]
+    [InlineData(AddonState.Enabled)]
+    [InlineData(AddonState.Disabled)]
+    [InlineData(AddonState.Excluded)]
+    public void Reconcile_PreservesEveryValidWholeAssetState(AddonState state)
+    {
+        var configuration = CreateConfiguration();
+        DisabledAsset(configuration).SetWholeState(state);
+
+        Reconcile(
+            configuration,
+            subscribed: ["100"],
+            disabled: [],
+            allowInitialSeed: false);
+
+        Assert.Equal(state, DisabledAsset(configuration).GetWholeState());
+    }
+
+    [Fact]
+    public void EnsureSystemAsset_RepairsUnknownWholeAssetStateToExcluded()
+    {
+        var configuration = CreateConfiguration();
+        DisabledAsset(configuration).State = (AddonState)999;
+
+        var result = service.EnsureSystemAsset(
+            configuration,
+            absorbUntouchedLegacyImport: false);
+
+        Assert.True(result.Changed);
+        Assert.Equal(AddonState.Excluded, result.Asset.GetWholeState());
+    }
+
     [Fact]
     public void Reconcile_BrandNewProfileSeedsOnlySubscribedDisabledIds()
     {
@@ -100,7 +132,7 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
     }
 
     [Fact]
-    public void Reconcile_SuccessfulGamEnableDoesNotRemoveExistingBlacklistMember()
+    public void Reconcile_SuccessfulGamEnableDoesNotRemoveExistingGmodOriginMember()
     {
         var configuration = CreateConfiguration(initialImportCompleted: false);
         Reconcile(

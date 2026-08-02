@@ -235,12 +235,6 @@
                                             </RadioButton.Styles>
                                         </RadioButton>
                                     </StackPanel>
-                                    <TextBlock Grid.Column="0"
-                                               Text="{loc:Localize AssetList.Excluded}"
-                                               Foreground="#F44336"
-                                               FontSize="11"
-                                               FontWeight="SemiBold"
-                                               IsVisible="{Binding IsGmodDisabledAsset}"/>
                                 </Grid>
                                     
                                 <!-- バージョン + 共有ボタン -->

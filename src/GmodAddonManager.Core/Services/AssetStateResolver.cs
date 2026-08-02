@@ -67,8 +67,16 @@ namespace GmodAddonManager.Core.Services
                         SystemAssetDefinitions.GmodDisabledId,
                         StringComparison.Ordinal))
                 {
-                    if (state == AddonState.Excluded &&
-                        ContainsAddon(asset, normalizedAddonId))
+                    if (!ContainsAddon(asset, normalizedAddonId))
+                    {
+                        continue;
+                    }
+
+                    if (state == AddonState.Enabled)
+                    {
+                        enabledByAssets.Add(CreateSource(asset));
+                    }
+                    else if (state == AddonState.Excluded)
                     {
                         excludedByAssets.Add(CreateSource(asset));
                     }

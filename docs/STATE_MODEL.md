@@ -18,10 +18,9 @@ GAMはSteamの購読状態、GAM上の希望状態、GModに現在適用され�
 現在購読中のAddonについて、希望ONは次の規則で決まります。
 
 ```text
-ON = Subscribeが「すべて除外」ではない
-     かつ (SubscribeがON または Enabled Custom Assetのいずれかに所属)
-     かつ Excluded Custom Assetのどれにも所属しない
-     かつ GMod Disabled Addonsに所属しない
+ON = 適用されるExcluded Assetが一つもない
+     かつ Subscribe ON、Enabled Custom Asset、
+          またはEnabled GMod Disabled Addonsのいずれかが有効化元になる
 ```
 
 - Subscribe Assetは固定で、ON / OFF / すべて除外のいずれか一つです。
@@ -32,17 +31,19 @@ ON = Subscribeが「すべて除外」ではない
 - 複数のEnabled Assetを同時に重ねられます。
 - Disabled Assetは計算に寄与しません。
 - Excluded Assetは常に優先してOFFにします。
-- `GMod Disabled Addons`は固定System Assetで、常にExcludedとして計算へ参加します。
-- この固定Assetの名称、状態、メンバー、画像、お気に入り、Version、削除はユーザー操作では変更できません。
+- `GMod Disabled Addons`は固定System Assetですが、通常のAssetと同じくEnabled / Disabled / Excludedを選べます。初期値はExcludedです。
+- Enabledはメンバーの有効化元、Disabledは中立、Excludedは優先OFFとして計算へ参加します。
+- この固定Assetの名称、メンバー、画像、お気に入り、Version、削除はユーザー操作では変更できません。状態だけを変更できます。
 - Addon単位の状態はAsset内に保存しません。AssetはメンバーID一覧だけを持ちます。
 - toolbarの「すべて無効」はSubscribeとEnabled Custom AssetをDisabledへ変更する別操作です。Subscribeの「すべて除外」は他のAsset状態を保持したまま全件を拒否します。
 
 ## GMod Disabled Addons
 
 - IDは`gmod-disabled-system-asset`、表示名は`GMod Disabled Addons`です。Subscribe Assetの直下に常時表示し、0件でも消しません。
+- 状態は0件でも3択を表示し、GAMによる状態適用ではメンバーを増減しません。
 - 現在購読中のAddonだけをメンバーにできます。購読解除されたIDは固定Assetと観測baselineの対象外にしますが、`addonnomount.txt`の古いIDやWorkshop本体は削除しません。
 - validなactualが前回受理時のONからOFFへ変わった場合、GMod側の無効化として追加します。OFFからONへ変わった場合は削除します。
-- GAMがSubscribe OFF、Custom Excluded、または有効元なしを適用してOFFにした場合は、成功したGAM書込みとしてbaselineを進めるため追加しません。
+- GAMがAsset計算の結果をON/OFFとして適用した場合は、成功したGAM書込みとしてbaselineを進めるため、その変化だけでは固定Assetのメンバーを増減しません。
 - 他のExcluded Assetと重なっていても、GMod側でONへ戻された事実だけを反映して固定Assetから外します。他のExcluded Assetはそのまま残るため、次回の明示的なGAM適用では引き続きOFFになります。
 - baselineに存在しない新規・再購読IDは、最初の観測を基準として受理します。購読解除中に残った古いOFFを新しいゲーム内操作とはみなしません。
 
@@ -78,5 +79,5 @@ ON = Subscribeが「すべて除外」ではない
 - Asset Versionは、その時点のメンバーID一覧だけを保存します。
 - 復元はメンバーだけを変更し、Asset全体状態やSteam購読は変更しません。
 - Versionの削除・履歴クリアは現在のメンバーを変更しません。
-- 「GAMを初期化」はCustom Asset、お気に入り、Version、共通除外、`GMod Disabled Addons`のメンバーを消してSubscribeをONへ戻します。Steam購読とWorkshop本体は削除しません。
+- 「GAMを初期化」はCustom Asset、お気に入り、Version、共通除外、`GMod Disabled Addons`のメンバーを消し、同Assetを初期値のExcluded、SubscribeをONへ戻します。Steam購読とWorkshop本体は削除しません。
 - GMod実行中に初期化した場合も、初期化前actualを観測済みとしてから適用を保留するため、消した固定Assetのメンバーが終了時に再取込みされることはありません。

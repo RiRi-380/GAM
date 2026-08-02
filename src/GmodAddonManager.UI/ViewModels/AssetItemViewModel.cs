@@ -104,11 +104,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = asset.Name;
 
-        var displayState = IsGmodDisabledAsset
-
-            ? AddonState.Excluded
-
-            : asset.State;
+        var displayState = asset.State;
 
         IsEnabled = displayState == AddonState.Enabled;
 
@@ -365,11 +361,13 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public bool CanDelete => !IsSystem;
     public bool CanManageVersions => !IsSystem;
     public bool CanToggleAssetActive => IsSubscribeAsset || !IsSystem;
-    public bool CanEditAddonDefaultState => IsSubscribeAsset || !IsSystem;
+    public bool CanEditAddonDefaultState =>
+        IsSubscribeAsset || IsGmodDisabledAsset || !IsSystem;
     public bool IsSubscribeAsset => Id == SystemAssetDefinitions.SubscribeId;
     public bool IsGmodDisabledAsset => Id == GmodDisabledSystemAssetId;
-    public int StateColumnSpan => IsSubscribeAsset ? 2 : 1;
-    public bool CanSetExcluded => !IsSystem || IsSubscribeAsset;
+    public int StateColumnSpan => IsSubscribeAsset || IsGmodDisabledAsset ? 2 : 1;
+    public bool CanSetExcluded =>
+        !IsSystem || IsSubscribeAsset || IsGmodDisabledAsset;
     public bool CanFavorite => !IsSystem;
     public string EnabledStateLabel => IsSubscribeAsset ? "ON" : L.Get("AssetList.Enabled");
     public string DisabledStateLabel => IsSubscribeAsset ? "OFF" : L.Get("AssetList.Disabled");
@@ -867,11 +865,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = updatedAsset.Name;
 
-        var displayState = IsGmodDisabledAsset
-
-            ? AddonState.Excluded
-
-            : updatedAsset.State;
+        var displayState = updatedAsset.State;
 
         IsEnabled = displayState == AddonState.Enabled;
 
