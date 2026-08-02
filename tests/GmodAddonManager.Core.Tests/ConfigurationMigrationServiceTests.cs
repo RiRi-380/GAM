@@ -54,6 +54,37 @@ public sealed class ConfigurationMigrationServiceTests
     }
 
     [Fact]
+    public void Migrate_FailsClosedForInvalidLegacySubscribeState()
+    {
+        var raw = JObject.Parse(
+            """
+            {
+              "schemaVersion": 2,
+              "assets": [
+                {
+                  "id": "subscribe-system-asset",
+                  "name": "Subscribe Asset",
+                  "isSystem": true,
+                  "state": 99,
+                  "addons": ["*"]
+                }
+              ]
+            }
+            """);
+        var config = raw.ToObject<Configuration>()!;
+
+        new ConfigurationMigrationService().Migrate(
+            raw,
+            config,
+            removeLegacyJunctionAsset: true);
+
+        var subscribe = Assert.Single(
+            config.Assets,
+            asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        Assert.Equal(AddonState.Disabled, subscribe.GetWholeState());
+    }
+
+    [Fact]
     public void Migrate_MixedCustomAssetBecomesDisabledAndNeedsReviewWithoutSplitting()
     {
         var raw = JObject.Parse(
@@ -237,7 +268,7 @@ public sealed class ConfigurationMigrationServiceTests
         Assert.DoesNotContain(config.Assets, a => a.Id == "junction-system-asset");
         subscribe = Assert.Single(config.Assets, a => a.Id == "subscribe-system-asset");
         Assert.Equal("Subscribe Asset", subscribe.Name);
-        Assert.Equal(AddonState.Enabled, subscribe.GetWholeState());
+        Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
         Assert.False(subscribe.IsFavorite);
         Assert.Equal(["*"], subscribe.Addons);
         Assert.Equal(["100", "200"], config.Assets.Single(a => !a.IsSystem).Addons);
@@ -245,6 +276,19 @@ public sealed class ConfigurationMigrationServiceTests
         Assert.Equal(
             ["custom", "missing-source-asset"],
             config.JunctionHistory["100"]);
+    }
+
+    [Fact]
+    public void NormalizeCurrentSchema_FailsClosedForInvalidSubscribeState()
+    {
+        var config = new Configuration();
+        config.CreateDefaultAssets();
+        var subscribe = config.Assets.Single(a => a.Id == "subscribe-system-asset");
+        subscribe.State = (AddonState)99;
+
+        new ConfigurationMigrationService().NormalizeCurrentSchema(config);
+
+        Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
     }
 
     [Fact]
@@ -267,16 +311,124 @@ public sealed class ConfigurationMigrationServiceTests
     }
 
     [Fact]
+    public void Migrate_Schema3To4PreservesSubscriptionAttributionAndPendingJournal()
+    {
+        var firstSeenAt = new DateTime(2026, 7, 31, 1, 2, 3, DateTimeKind.Utc);
+        var gamAppliedAt = new DateTime(2026, 7, 31, 2, 3, 4, DateTimeKind.Utc);
+        var observedAt = new DateTime(2026, 7, 31, 3, 4, 5, DateTimeKind.Utc);
+        var pendingAt = new DateTime(2026, 7, 31, 4, 5, 6, DateTimeKind.Utc);
+        var configuration = new Configuration
+        {
+            SchemaVersion = 3,
+            InitialRuntimeImportCompleted = true,
+            InitialRuntimeImportCompletedAtUtc = firstSeenAt,
+            SubscriptionBaselineInitialized = true,
+            KnownSubscribedAddonIds = ["100", "200"],
+            SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>
+            {
+                ["100"] = firstSeenAt
+            },
+            RetainMissingAssetReferences = true,
+            GamAppliedRuntimeBaselineInitialized = true,
+            LastGamAppliedAddonStates = new Dictionary<string, bool>
+            {
+                ["100"] = false,
+                ["200"] = true
+            },
+            LastGamAppliedRuntimeAtUtc = gamAppliedAt,
+            LastGamAppliedStateStorePath = @"C:\GMod\garrysmod\cfg\addonnomount.txt",
+            GmodObservationBaselineInitialized = true,
+            LastObservedGmodAddonStates = new Dictionary<string, bool>
+            {
+                ["100"] = false,
+                ["200"] = true
+            },
+            LastObservedGmodRuntimeAtUtc = observedAt,
+            LastObservedGmodStateStorePath = @"C:\GMod\garrysmod\cfg\addonnomount.txt",
+            PendingGamRuntimeWrite = new PendingGamRuntimeWrite
+            {
+                OperationId = "pending-op",
+                TargetStates = new Dictionary<string, bool> { ["100"] = false },
+                PreviousStates = new Dictionary<string, bool> { ["100"] = true },
+                CreatedAtUtc = pendingAt,
+                StateStorePath = @"C:\GMod\garrysmod\cfg\addonnomount.txt",
+                ConflictDetected = true
+            },
+            GmodAttributionMigrationPending = true,
+            PathState = new PathState
+            {
+                LastManagerPath = @"C:\Manager",
+                LastAddonsPath = @"C:\Workshop"
+            }
+        };
+        configuration.CreateDefaultAssets();
+        configuration.Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons = ["100"];
+        configuration.Assets.Add(new Asset("FPS")
+        {
+            Id = "fps",
+            State = AddonState.Enabled,
+            Addons = ["200"]
+        });
+        var raw = JObject.FromObject(configuration);
+
+        var result = new ConfigurationMigrationService().Migrate(
+            raw,
+            configuration,
+            removeLegacyJunctionAsset: true);
+
+        Assert.True(result.Changed);
+        Assert.Equal(4, configuration.SchemaVersion);
+        Assert.True(configuration.InitialRuntimeImportCompleted);
+        Assert.Equal(firstSeenAt, configuration.InitialRuntimeImportCompletedAtUtc);
+        Assert.True(configuration.SubscriptionBaselineInitialized);
+        Assert.Equal(["100", "200"], configuration.KnownSubscribedAddonIds);
+        Assert.Equal(firstSeenAt, configuration.SubscriptionFirstSeenAtUtc["100"]);
+        Assert.True(configuration.RetainMissingAssetReferences);
+        Assert.True(configuration.GamAppliedRuntimeBaselineInitialized);
+        Assert.False(configuration.LastGamAppliedAddonStates["100"]);
+        Assert.True(configuration.LastGamAppliedAddonStates["200"]);
+        Assert.Equal(gamAppliedAt, configuration.LastGamAppliedRuntimeAtUtc);
+        Assert.Equal(
+            @"C:\GMod\garrysmod\cfg\addonnomount.txt",
+            configuration.LastGamAppliedStateStorePath);
+        Assert.True(configuration.GmodObservationBaselineInitialized);
+        Assert.False(configuration.LastObservedGmodAddonStates["100"]);
+        Assert.True(configuration.LastObservedGmodAddonStates["200"]);
+        Assert.Equal(observedAt, configuration.LastObservedGmodRuntimeAtUtc);
+        Assert.Equal(
+            @"C:\GMod\garrysmod\cfg\addonnomount.txt",
+            configuration.LastObservedGmodStateStorePath);
+        var pending = Assert.IsType<PendingGamRuntimeWrite>(configuration.PendingGamRuntimeWrite);
+        Assert.Equal("pending-op", pending.OperationId);
+        Assert.False(pending.TargetStates["100"]);
+        Assert.True(pending.PreviousStates["100"]);
+        Assert.Equal(pendingAt, pending.CreatedAtUtc);
+        Assert.True(pending.ConflictDetected);
+        Assert.True(configuration.GmodAttributionMigrationPending);
+        Assert.Equal(@"C:\Manager", configuration.PathState.LastManagerPath);
+        Assert.Equal(@"C:\Workshop", configuration.PathState.LastAddonsPath);
+        Assert.Equal(
+            ["100"],
+            configuration.Assets.Single(
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
+        Assert.Equal(
+            AddonState.Enabled,
+            configuration.Assets.Single(asset => asset.Id == "fps").GetWholeState());
+    }
+
+    [Fact]
     public void RequiresMigration_RejectsFutureSchemaInsteadOfDowngradingIt()
     {
         var service = new ConfigurationMigrationService();
 
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":1}")));
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":2}")));
-        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":3}")));
+        Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":3}")));
+        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":4}")));
         var exception = Assert.Throws<UnsupportedConfigurationSchemaException>(
-            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":4}")));
-        Assert.Equal(4, exception.FoundVersion);
+            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":5}")));
+        Assert.Equal(5, exception.FoundVersion);
         Assert.Equal(Configuration.CurrentSchemaVersion, exception.SupportedVersion);
     }
 

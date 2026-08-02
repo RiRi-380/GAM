@@ -55,6 +55,10 @@ namespace GmodAddonManager.Core.Services
                     enabledBySubscribe =
                         isSubscribed &&
                         state == AddonState.Enabled;
+                    if (isSubscribed && state == AddonState.Excluded)
+                    {
+                        excludedByAssets.Add(CreateSource(asset));
+                    }
                     continue;
                 }
 

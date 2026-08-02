@@ -218,6 +218,10 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             this.RaisePropertyChanged(nameof(EnabledStateLabel));
             this.RaisePropertyChanged(nameof(DisabledStateLabel));
+            this.RaisePropertyChanged(nameof(ExcludedStateLabel));
+            this.RaisePropertyChanged(nameof(EnabledStateTooltip));
+            this.RaisePropertyChanged(nameof(DisabledStateTooltip));
+            this.RaisePropertyChanged(nameof(ExcludedStateTooltip));
             this.RaisePropertyChanged(nameof(FavoriteButtonText));
         }
 
@@ -342,6 +346,8 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             this.RaisePropertyChanged(nameof(CanEditName));
 
+            this.RaisePropertyChanged(nameof(CanSetExcluded));
+
         }
 
     }
@@ -362,10 +368,23 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public bool CanEditAddonDefaultState => IsSubscribeAsset || !IsSystem;
     public bool IsSubscribeAsset => Id == SystemAssetDefinitions.SubscribeId;
     public bool IsGmodDisabledAsset => Id == GmodDisabledSystemAssetId;
-    public bool CanSetExcluded => !IsSystem;
+    public int StateColumnSpan => IsSubscribeAsset ? 2 : 1;
+    public bool CanSetExcluded => !IsSystem || IsSubscribeAsset;
     public bool CanFavorite => !IsSystem;
     public string EnabledStateLabel => IsSubscribeAsset ? "ON" : L.Get("AssetList.Enabled");
     public string DisabledStateLabel => IsSubscribeAsset ? "OFF" : L.Get("AssetList.Disabled");
+    public string ExcludedStateLabel => IsSubscribeAsset
+        ? L.Get("AssetList.ExcludeAll")
+        : L.Get("AssetList.Excluded");
+    public string EnabledStateTooltip => IsSubscribeAsset
+        ? L.Get("AssetList.SubscribeEnabledTooltip")
+        : L.Get("AssetList.EnabledTooltip");
+    public string DisabledStateTooltip => IsSubscribeAsset
+        ? L.Get("AssetList.SubscribeDisabledTooltip")
+        : L.Get("AssetList.DisabledTooltip");
+    public string ExcludedStateTooltip => IsSubscribeAsset
+        ? L.Get("AssetList.SubscribeExcludedTooltip")
+        : L.Get("AssetList.ExcludedTooltip");
     public string AssetActiveLabel => IsEnabled
         ? L.Get("AssetList.AssetActiveOn")
         : L.Get("AssetList.AssetActiveOff");
@@ -1005,16 +1024,6 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             return;
 
         }
-
-        if (IsSubscribeAsset && targetState == AddonState.Excluded)
-
-        {
-
-            return;
-
-        }
-
-
 
         if ((AddonState)assetState == targetState)
 

@@ -7,6 +7,7 @@
 - [ ] Steamworks 関連ファイルが含まれていない（steam_api64.dll / steam_appid.txt）。
 - [ ] README.md が UTF-8 として正しく表示される。
 - [ ] LICENSE がルートに存在する。
+- [ ] THIRD-PARTY-NOTICES.txt と Microsoft .NET のlicense/noticeがルートに存在する。
 - [ ] docs/dependencies.md が最新（NuGet 依存が全て記載）。
 - [ ] 更新チェックの既定リポジトリが正しい（UpdateService の DefaultGithubRepo）。
 - [ ] 公開対象ブランチが想定通り（例: main）。
@@ -18,6 +19,7 @@
 ## バージョンとメタデータ
 - [ ] Directory.Build.props の Version / FileVersion / AssemblyVersion を更新（必要なら）。
 - [ ] CHANGELOG/Release notes を用意（GitHub の自動生成 or 手動）。
+- [ ] `docs/releases/vX.Y.Z.md` にschema移行・downgrade注意・主要変更を記載する。
 - [ ] タグ名は vX.Y.Z 形式。
 
 ## ビルド（ローカル）
@@ -29,14 +31,16 @@
 
 ## 配布物の内容確認
 - [ ] ZIP に LICENSE が含まれている。
+- [ ] ZIP に THIRD-PARTY-NOTICES.txt、MICROSOFT-DOTNET-LIBRARY-LICENSE.txt、MICROSOFT-DOTNET-THIRD-PARTY-NOTICES.txt、DISTRIBUTION-LICENSES.txt が含まれている。
+- [ ] `scripts/verify-release-notices.ps1` がproduction UIのexact package inventoryとpublish内容を検証して成功する。
 - [ ] publish/ZIP/インストーラはself-containedの複数ファイル構成で、`GmodAddonManager.UI.exe` と同階層のDLLを欠落させていない。
 - [ ] Release publishで `PublishSingleFile=false` を指定し、`IncludeNativeLibrariesForSelfExtract` を使用していない（起動前の `%TEMP%\.net` 展開を避ける）。
-- [ ] インストーラに LICENSE 画面が表示される。
+- [ ] インストーラにGAM GPLとMicrosoft .NET Library Licenseを含むDISTRIBUTION-LICENSES画面が表示される。
 - [ ] ZIP/インストーラに steam_api64.dll / steam_appid.txt が含まれていない。
 - [ ] GmodAddonManager.UI.exe が起動する（必要なら管理者実行）。
 
 ## GitHub Actions / Release
-- [ ] `.github/workflows/release.yml` が LICENSE を publish にコピーしている。
+- [ ] `.github/workflows/release.yml` が全license/noticeをpublishへコピーして検証している。
 - [ ] Actions が成功している。
 - [ ] Release の assets に ZIP と EXE が揃っている。
 

@@ -7495,12 +7495,6 @@ namespace GmodAddonManager.Core.Services
                     newDefaultState,
                     "Unknown Asset state.");
             }
-            if (asset.Id == SubscribeSystemAssetId &&
-                newDefaultState == AddonState.Excluded)
-            {
-                throw new InvalidOperationException(
-                    "Subscribe Asset supports only Enabled and Disabled.");
-            }
             if (asset.GetWholeState() == newDefaultState)
             {
                 return;

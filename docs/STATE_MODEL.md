@@ -18,12 +18,16 @@ GAMはSteamの購読状態、GAM上の希望状態、GModに現在適用され�
 現在購読中のAddonについて、希望ONは次の規則で決まります。
 
 ```text
-ON = (SubscribeがON または Enabled Custom Assetのいずれかに所属)
+ON = Subscribeが「すべて除外」ではない
+     かつ (SubscribeがON または Enabled Custom Assetのいずれかに所属)
      かつ Excluded Custom Assetのどれにも所属しない
      かつ GMod Disabled Addonsに所属しない
 ```
 
-- Subscribe Assetは固定で、ON/OFFだけを持ちます。
+- Subscribe Assetは固定で、ON / OFF / すべて除外のいずれか一つです。
+- Subscribe ONは現在購読中の全Addonを有効化元にします。
+- Subscribe OFFは中立で、Enabled Custom Assetによる有効化を妨げません。
+- Subscribeの「すべて除外」は現在購読中の全Addonへ動的に適用され、他のAssetより優先してOFFにします。Custom Assetの状態自体は変更しません。
 - Custom AssetはEnabled / Disabled / Excludedのいずれか一つです。
 - 複数のEnabled Assetを同時に重ねられます。
 - Disabled Assetは計算に寄与しません。
@@ -31,6 +35,7 @@ ON = (SubscribeがON または Enabled Custom Assetのいずれかに所属)
 - `GMod Disabled Addons`は固定System Assetで、常にExcludedとして計算へ参加します。
 - この固定Assetの名称、状態、メンバー、画像、お気に入り、Version、削除はユーザー操作では変更できません。
 - Addon単位の状態はAsset内に保存しません。AssetはメンバーID一覧だけを持ちます。
+- toolbarの「すべて無効」はSubscribeとEnabled Custom AssetをDisabledへ変更する別操作です。Subscribeの「すべて除外」は他のAsset状態を保持したまま全件を拒否します。
 
 ## GMod Disabled Addons
 
@@ -56,6 +61,7 @@ ON = (SubscribeがON または Enabled Custom Assetのいずれかに所属)
 - 未購読の古いIDは取り込まず、元の`addonnomount.txt`からも削除しません。
 - schema 2の未編集な旧Asset「GModで無効化されていたAddon」は固定Assetへ変換します。名前、状態、画像、Versionなどが編集されていて判別が曖昧なAssetはCustom Assetのまま残します。
 - schema 2から最初に読み込むactualでは、旧desiredがONなのにactualがOFFのIDだけを追加候補にします。旧GAMのSubscribe OFFやCustom ExcludedによるOFFは混ぜません。
+- schema 3からschema 4への移行では、購読履歴、`GMod Disabled Addons`、GAM/GModの観測baseline、および保留中の書込みjournalを維持します。schema 4を理解しない旧版はprofileを開かずfail-closedします。
 - 旧構成の一様なCustom Assetは一つの全体状態へ移行します。
 - 旧構成内でAddonごとの状態が混在していたAssetは、メンバーを維持したままDisabledにし、確認対象として残します。
 - 移行処理だけではGModのactualを書き換えません。

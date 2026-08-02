@@ -185,6 +185,7 @@
                                 <!-- アセット状態 -->
                                 <Grid Grid.Column="1"
                                       Grid.Row="1"
+                                      Grid.ColumnSpan="{Binding StateColumnSpan}"
                                       ColumnDefinitions="Auto,*"
                                       VerticalAlignment="Center">
                                     <StackPanel Grid.Column="0"
@@ -194,6 +195,8 @@
                                                     Content="{Binding EnabledStateLabel}"
                                                     IsChecked="{Binding IsEnabledState}"
                                                     Command="{Binding SetEnabledCommand}"
+                                                    ToolTip.Tip="{Binding EnabledStateTooltip}"
+                                                    AutomationProperties.HelpText="{Binding EnabledStateTooltip}"
                                                     Margin="0,0,8,0"
                                                     FontSize="11">
                                             <RadioButton.Styles>
@@ -206,6 +209,8 @@
                                                     Content="{Binding DisabledStateLabel}"
                                                     IsChecked="{Binding IsDisabledState}"
                                                     Command="{Binding SetDisabledCommand}"
+                                                    ToolTip.Tip="{Binding DisabledStateTooltip}"
+                                                    AutomationProperties.HelpText="{Binding DisabledStateTooltip}"
                                                     Margin="0,0,8,0"
                                                     FontSize="11">
                                             <RadioButton.Styles>
@@ -215,10 +220,12 @@
                                             </RadioButton.Styles>
                                         </RadioButton>
                                         <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{loc:Localize AssetList.Excluded}"
+                                                    Content="{Binding ExcludedStateLabel}"
                                                     IsChecked="{Binding IsExcludedState}"
                                                     Command="{Binding SetExcludedCommand}"
                                                     IsVisible="{Binding CanSetExcluded}"
+                                                    ToolTip.Tip="{Binding ExcludedStateTooltip}"
+                                                    AutomationProperties.HelpText="{Binding ExcludedStateTooltip}"
                                                     Margin="0,0,8,0"
                                                     FontSize="11">
                                             <RadioButton.Styles>

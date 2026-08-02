@@ -107,6 +107,34 @@ public sealed class UiPolishContractTests
     }
 
     [Fact]
+    public void SubscribeExcludeAllStateIsWiredAndCanUseTheEmptyActionColumn()
+    {
+        var assetList = LoadXaml("AssetListView.axaml");
+        var excludedState = assetList
+            .Descendants(AvaloniaNamespace + "RadioButton")
+            .Single(element =>
+                (string?)element.Attribute("Command") ==
+                "{Binding SetExcludedCommand}");
+        var stateGrid = excludedState.Ancestors(AvaloniaNamespace + "Grid").First();
+
+        Assert.Equal(
+            "{Binding ExcludedStateLabel}",
+            (string?)excludedState.Attribute("Content"));
+        Assert.Equal(
+            "{Binding CanSetExcluded}",
+            (string?)excludedState.Attribute("IsVisible"));
+        Assert.Equal(
+            "{Binding ExcludedStateTooltip}",
+            (string?)excludedState.Attribute("ToolTip.Tip"));
+        Assert.Equal(
+            "{Binding ExcludedStateTooltip}",
+            (string?)excludedState.Attribute("AutomationProperties.HelpText"));
+        Assert.Equal(
+            "{Binding StateColumnSpan}",
+            (string?)stateGrid.Attribute("Grid.ColumnSpan"));
+    }
+
+    [Fact]
     public void SortControlsCanGrowWithoutClippingTheirContent()
     {
         var document = LoadXaml("AddonGridView.axaml");

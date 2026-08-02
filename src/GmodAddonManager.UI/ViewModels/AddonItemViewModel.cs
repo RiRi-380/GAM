@@ -611,6 +611,12 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             {
                 AddonStateResolutionReason.NotSubscribed =>
                     japanese ? "Steamで購読されていません" : "Not subscribed on Steam",
+                AddonStateResolutionReason.Excluded when
+                    resolvedState.ExcludedByAssets.Any(source =>
+                        source.AssetId == SystemAssetDefinitions.SubscribeId) =>
+                    FormatSourceReason(
+                        japanese ? "すべて除外" : "All subscribed addons excluded",
+                        resolvedState.ExcludedByAssets),
                 AddonStateResolutionReason.Excluded =>
                     FormatSourceReason(
                         japanese ? "共通除外" : "Globally excluded",

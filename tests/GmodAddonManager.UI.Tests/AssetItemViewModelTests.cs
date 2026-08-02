@@ -2,6 +2,8 @@ using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
+using System.Reactive.Linq;
+using System.Windows.Input;
 
 namespace GmodAddonManager.UI.Tests;
 
@@ -24,6 +26,7 @@ public sealed class AssetItemViewModelTests : IDisposable
 
         Assert.True(viewModel.CanEditAddonDefaultState);
         Assert.True(viewModel.IsExcludedState);
+        Assert.Equal(1, viewModel.StateColumnSpan);
     }
 
     [Fact]
@@ -87,6 +90,52 @@ public sealed class AssetItemViewModelTests : IDisposable
         Assert.Equal(1, viewModel.AddonCount);
     }
 
+    [Fact]
+    public async Task SubscribeAsset_ExposesLocalizedExcludeAllStateAndExplainsItsPrecedence()
+    {
+        using var manager = await CreateManagerAsync();
+        var subscribe = manager.GetConfiguration().Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        using var viewModel = new AssetItemViewModel(
+            subscribe,
+            manager,
+            null!,
+            null!);
+        var previousLanguage = LocalizationManager.Instance.CurrentLanguage;
+
+        try
+        {
+            Assert.True(viewModel.CanSetExcluded);
+            Assert.True(((ICommand)viewModel.SetExcludedCommand).CanExecute(null));
+            Assert.Equal(2, viewModel.StateColumnSpan);
+
+            LocalizationManager.Instance.ChangeLanguage("ja-JP");
+            Assert.Equal("すべて除外", viewModel.ExcludedStateLabel);
+            Assert.Contains("強制的に無効", viewModel.ExcludedStateTooltip);
+            Assert.Contains("有効なCustom Asset", viewModel.DisabledStateTooltip);
+
+            LocalizationManager.Instance.ChangeLanguage("en-US");
+            Assert.Equal("Exclude All", viewModel.ExcludedStateLabel);
+            Assert.Contains("Force all subscribed addons off", viewModel.ExcludedStateTooltip);
+            Assert.Contains("can still enable", viewModel.DisabledStateTooltip);
+
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var execution = viewModel.SetExcludedCommand.Execute().Subscribe(
+                _ => { },
+                completion.SetException,
+                () => completion.SetResult(true));
+            await completion.Task;
+
+            Assert.True(viewModel.IsExcludedState);
+            Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
+        }
+        finally
+        {
+            LocalizationManager.Instance.ChangeLanguage(previousLanguage);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(rootPath))
@@ -120,9 +169,11 @@ public sealed class AssetItemViewModelTests : IDisposable
     {
         var workshopPath = Path.Combine(rootPath, "workshop", "content", "4000");
         var appDataPath = Path.Combine(rootPath, "appdata");
+        var gmodPath = Path.Combine(rootPath, "gmod");
         var workshopManifestPath = Path.Combine(rootPath, "appworkshop_4000.acf");
         Directory.CreateDirectory(workshopPath);
         Directory.CreateDirectory(appDataPath);
+        Directory.CreateDirectory(Path.Combine(gmodPath, "garrysmod", "cfg"));
         File.WriteAllText(
             workshopManifestPath,
             """
@@ -148,6 +199,7 @@ public sealed class AssetItemViewModelTests : IDisposable
         var manager = new AddonManager(new AddonManagerOptions
         {
             CustomWorkshopPath = workshopPath,
+            CustomGmodInstallPath = gmodPath,
             CustomAppDataPath = appDataPath,
             CustomWorkshopCacheFilePaths = [workshopManifestPath],
             DisableMode = DisableMode.Soft,

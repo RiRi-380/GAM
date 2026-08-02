@@ -55,6 +55,31 @@ public sealed class AddonManagerWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task AllOff_FromSubscribeExcludedRemainsDistinctAndUndoRestoresTheVeto()
+    {
+        using var manager = await CreateInitializedManager();
+        AddKnownAddon(manager, "100");
+        var enabled = AddAsset(manager, "Enabled", AddonState.Enabled, "100");
+        var subscribe = manager.GetConfiguration().Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Excluded);
+        manager.GetUndoManager().Clear();
+
+        await manager.SetAllOffAsync();
+
+        Assert.Equal(AddonState.Disabled, subscribe.GetWholeState());
+        Assert.Equal(AddonState.Disabled, enabled.GetWholeState());
+        Assert.Equal(
+            UndoActionType.AllOff,
+            manager.GetUndoManager().PeekLastAction()!.Type);
+
+        Assert.True(await manager.UndoLastActionAsync());
+        Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
+        Assert.Equal(AddonState.Enabled, enabled.GetWholeState());
+        Assert.False(manager.GetFinalAddonStates()["100"]);
+    }
+
+    [Fact]
     public async Task DeleteAsset_RecomputesWithoutDeletingAddonAndUndoRestoresDefinition()
     {
         using var manager = await CreateInitializedManager();

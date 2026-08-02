@@ -92,7 +92,7 @@
                     </Button>
 
                     <Button Command="{Binding AllOffCommand}"
-                            ToolTip.Tip="{loc:Localize MainWindow.AllOff}"
+                            ToolTip.Tip="{loc:Localize MainWindow.AllOffTooltip}"
                             Width="32" Height="32"
                             Classes="danger">
                         <PathIcon Data="{StaticResource DisabledIcon}" Width="16" Height="16"/>
