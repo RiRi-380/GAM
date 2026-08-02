@@ -6,12 +6,14 @@ using ReactiveUI;
 using System;
 using System.IO;
 using System.Reactive;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Globalization;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
@@ -40,6 +42,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private bool? actualEnabled;
     private bool isRuntimeApplyPending;
     private bool isFileSizeCalculated;
+    private AddonSortMode sortPresentationMode = AddonSortMode.RecentlySubscribed;
+    private readonly SemaphoreSlim detailsLoadGate = new(1, 1);
     private bool disposed;
 
     private static readonly IReadOnlyDictionary<string, string> TypeKeyMap =
@@ -106,6 +110,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 if (!isFileSizeCalculated)
                 {
                     FileSize = fileInfo.Length;
+                    addon.Size = fileInfo.Length;
                     isFileSizeCalculated = true;
                 }
             }
@@ -124,6 +129,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
         LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
     }
+
+    public event EventHandler? SortSourceChanged;
 
     public string AddonId { get; }
     public string Title 
@@ -168,6 +175,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // タイトルを外部から更新するためのメソッド
     public void UpdateTitle(string? newTitle)
     {
+        var previousDisplayTitle = Title;
+        var previousSortTitle = addon.Title;
+
         Title = ResolveDisplayTitle(AddonId, newTitle);
         if (!string.IsNullOrWhiteSpace(newTitle))
         {
@@ -178,12 +188,24 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             addon.NeedsTitleUpdate = false;
         }
+
+        if (!string.Equals(previousDisplayTitle, Title, StringComparison.Ordinal) ||
+            !string.Equals(previousSortTitle, addon.Title, StringComparison.Ordinal))
+        {
+            NotifySortSourceChanged();
+        }
     }
 
     // WorkshopAddonから情報を更新するメソッド
     public void UpdateFromWorkshopAddon(WorkshopAddon workshopAddon)
     {
         var previousThumbnailUrl = addon.ThumbnailUrl;
+        var sortSourceChanged =
+            !string.Equals(addon.Title, workshopAddon.Title, StringComparison.Ordinal) ||
+            addon.Size != workshopAddon.Size ||
+            addon.LastUpdated != workshopAddon.LastUpdated ||
+            addon.FirstSeenSubscribedAtUtc != workshopAddon.FirstSeenSubscribedAtUtc ||
+            addon.WorkshopUpdatedAtUtc != workshopAddon.WorkshopUpdatedAtUtc;
 
         // タイトルの更新
         if (!string.IsNullOrEmpty(workshopAddon.Title))
@@ -195,11 +217,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         
         // 内部のaddonオブジェクトを更新
         addon.Size = workshopAddon.Size;
-        if (!isFileSizeCalculated && workshopAddon.Size > 0)
+        if (FileSize != workshopAddon.Size)
         {
             FileSize = workshopAddon.Size;
-            isFileSizeCalculated = true;
         }
+        isFileSizeCalculated = workshopAddon.Size > 0;
         addon.LastUpdated = workshopAddon.LastUpdated;
         addon.FirstSeenSubscribedAtUtc = workshopAddon.FirstSeenSubscribedAtUtc;
         addon.WorkshopUpdatedAtUtc = workshopAddon.WorkshopUpdatedAtUtc;
@@ -209,6 +231,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         addon.Author = workshopAddon.Author;
         addon.ThumbnailUrl = workshopAddon.ThumbnailUrl;
         addon.Tags = workshopAddon.Tags;
+        FolderPath = workshopAddon.FolderPath;
         if (!string.IsNullOrWhiteSpace(workshopAddon.Type))
         {
             addon.Type = workshopAddon.Type;
@@ -226,6 +249,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(IsAvailable));
         this.RaisePropertyChanged(nameof(IsMissing));
         this.RaisePropertyChanged(nameof(CardOpacity));
+
+        if (sortSourceChanged)
+        {
+            NotifySortSourceChanged();
+        }
         
         // サムネイルURLが変更された場合は再読み込み
         if (!string.IsNullOrEmpty(workshopAddon.ThumbnailUrl) &&
@@ -254,7 +282,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public string? FolderPath { get; }
+    public string? FolderPath { get; private set; }
     
     public bool IsGmaFile => addon.IsGmaFile;
     public bool IsLocal => addon.IsLocal;
@@ -341,6 +369,52 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     public string FileSizeText => FormatFileSize(FileSize);
     public string LastModifiedText => LastModified.ToString("yyyy/MM/dd HH:mm");
+
+    public string SortValueText
+    {
+        get
+        {
+            if (sortPresentationMode == AddonSortMode.RecentlySubscribed)
+            {
+                var firstSeenUtc = AddonSortService.GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.RecentlySubscribed);
+                return firstSeenUtc.HasValue
+                    ? FormatSortTimestamp(firstSeenUtc.Value)
+                    : L.Get("AddonGrid.SubscriptionTimeUnknown");
+            }
+
+            if (sortPresentationMode == AddonSortMode.WorkshopUpdated)
+            {
+                var updatedUtc = AddonSortService.GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.WorkshopUpdated);
+                return updatedUtc.HasValue
+                    ? FormatSortTimestamp(updatedUtc.Value)
+                    : string.Empty;
+            }
+
+            // The title and size are already visible elsewhere on the card.
+            // Do not show an unrelated file timestamp as if it were the active key.
+            return string.Empty;
+        }
+    }
+
+    public void SetSortPresentationMode(AddonSortMode mode)
+    {
+        if (!Enum.IsDefined(mode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown addon sort mode.");
+        }
+
+        if (sortPresentationMode == mode)
+        {
+            return;
+        }
+
+        sortPresentationMode = mode;
+        this.RaisePropertyChanged(nameof(SortValueText));
+    }
 
     public ReactiveCommand<Unit, Unit> LoadDetailsCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenFolderCommand { get; }
@@ -456,6 +530,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(PendingStateText));
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
+            this.RaisePropertyChanged(nameof(SortValueText));
 
             if (addon.NeedsTitleUpdate || AddonTitleHelper.IsPlaceholderTitle(Title) || IsLoadingTitle(Title))
             {
@@ -696,13 +771,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     private async Task LoadDetailsAsyncInternal(bool treatAsHot)
     {
-        if (disposed || IsDetailsLoaded)
-        {
-            return;
-        }
-
+        await detailsLoadGate.WaitAsync();
         try
         {
+            if (disposed || IsDetailsLoaded)
+            {
+                return;
+            }
+
             if (!isNotesLoaded)
             {
                 LoadNotes();
@@ -727,9 +803,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 {
                     if (!string.IsNullOrWhiteSpace(details.Title))
                     {
-                        Title = ResolveDisplayTitle(AddonId, details.Title);
-                        addon.Title = details.Title;
-                        addon.NeedsTitleUpdate = !IsConcreteTitle(details.Title);
+                        UpdateTitle(details.Title);
                     }
                     addon.Author = details.Author;
                     addon.Description = details.Description;
@@ -764,9 +838,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
                     if (workshopDetails != null && !string.IsNullOrWhiteSpace(workshopDetails.Title))
                     {
-                        Title = ResolveDisplayTitle(AddonId, workshopDetails.Title);
-                        addon.Title = workshopDetails.Title;
-                        addon.NeedsTitleUpdate = !IsConcreteTitle(workshopDetails.Title);
+                        UpdateTitle(workshopDetails.Title);
                         if (!string.IsNullOrWhiteSpace(workshopDetails.Description))
                         {
                             addon.Description = workshopDetails.Description;
@@ -810,6 +882,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             SafeFileLogger.TryLogException($"AddonItemViewModel.LoadDetailsAsyncInternal(AddonId={AddonId})", ex);
         }
+        finally
+        {
+            detailsLoadGate.Release();
+        }
     }
     
     private async Task LoadWorkshopDetailsAsync(bool treatAsHot)
@@ -828,6 +904,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             {
                 TimeCreated = DateTimeOffset.FromUnixTimeSeconds(details.TimeCreated).DateTime;
                 TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(details.TimeUpdated).DateTime;
+                if (details.TimeUpdated > 0)
+                {
+                    var updatedAtUtc = DateTimeOffset
+                        .FromUnixTimeSeconds(details.TimeUpdated)
+                        .UtcDateTime;
+                    if (addon.WorkshopUpdatedAtUtc != updatedAtUtc)
+                    {
+                        addon.WorkshopUpdatedAtUtc = updatedAtUtc;
+                        NotifySortSourceChanged();
+                    }
+                }
                 this.RaisePropertyChanged(nameof(TimeCreated));
                 this.RaisePropertyChanged(nameof(TimeUpdated));
                 this.RaisePropertyChanged(nameof(TimeCreatedText));
@@ -976,6 +1063,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = addon.Size > 0 ? addon.Size : 0;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -983,6 +1071,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = new FileInfo(FolderPath).Length;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -990,6 +1079,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = addon.Size > 0 ? addon.Size : 0;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -1013,7 +1103,19 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         finally
         {
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
         }
+    }
+
+    private void CommitCalculatedFileSize()
+    {
+        if (addon.Size == FileSize)
+        {
+            return;
+        }
+
+        addon.Size = FileSize;
+        NotifySortSourceChanged();
     }
 
     private void OpenFolder()
@@ -1048,6 +1150,19 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
 
         return $"{len:0.##} {sizes[order]}";
+    }
+
+    private static string FormatSortTimestamp(DateTime timestampUtc)
+    {
+        return timestampUtc.ToLocalTime().ToString(
+            "yyyy/MM/dd HH:mm:ss",
+            CultureInfo.InvariantCulture);
+    }
+
+    private void NotifySortSourceChanged()
+    {
+        this.RaisePropertyChanged(nameof(SortValueText));
+        SortSourceChanged?.Invoke(this, EventArgs.Empty);
     }
 
     internal Task LoadThumbnailAsync(bool allowRemote)

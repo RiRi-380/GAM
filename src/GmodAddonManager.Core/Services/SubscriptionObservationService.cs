@@ -72,6 +72,10 @@ namespace GmodAddonManager.Core.Services
             foreach (var addonId in unsubscribed)
             {
                 configuration.SubscriptionFirstSeenAtUtc.Remove(addonId);
+                if (configuration.AddonMetadata.TryGetValue(addonId, out var metadata))
+                {
+                    metadata.FirstSeenSubscribedAtUtc = null;
+                }
             }
 
             foreach (var addonId in current)

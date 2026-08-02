@@ -20,11 +20,48 @@ public partial class MainWindow : Window, IDisposable
     private int _resourcesDisposed;
     private int _startupStarted;
     private bool _isClosed;
+    private ResponsiveLayoutKind? _responsiveLayoutKind;
     
     public MainWindow()
     {
         InitializeComponent();
         Activated += OnWindowActivated;
+        SizeChanged += OnWindowSizeChanged;
+    }
+
+    private void OnWindowSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        ApplyResponsiveLayout(e.NewSize.Width);
+    }
+
+    private void ApplyResponsiveLayout(double viewportWidth)
+    {
+        var layout = ResponsiveLayoutPolicy.Resolve(viewportWidth);
+        var transitionedFromWide = _responsiveLayoutKind == ResponsiveLayoutKind.Wide;
+
+        AssetSplitView.DisplayMode = layout.UseOverlayPanes
+            ? SplitViewDisplayMode.Overlay
+            : SplitViewDisplayMode.Inline;
+        AssetSplitView.OpenPaneLength = layout.AssetPaneWidth;
+        AssetPaneToggleButton.IsVisible = layout.UseOverlayPanes;
+        AddonGridControl.ApplyResponsiveLayout(layout);
+        AddonDetailsPanel.ApplyResponsiveLayout(layout);
+
+        if (!layout.UseOverlayPanes)
+        {
+            AssetSplitView.IsPaneOpen = true;
+        }
+        else if (_responsiveLayoutKind is null || transitionedFromWide)
+        {
+            AssetSplitView.IsPaneOpen = false;
+        }
+
+        _responsiveLayoutKind = layout.Kind;
+    }
+
+    private void OnAssetPaneToggleClick(object? sender, RoutedEventArgs e)
+    {
+        AssetSplitView.IsPaneOpen = !AssetSplitView.IsPaneOpen;
     }
 
     private void OnWindowActivated(object? sender, EventArgs e)
@@ -64,6 +101,7 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             base.OnOpened(e);
+            ApplyResponsiveLayout(Bounds.Width);
 
             if (Interlocked.Exchange(ref _startupStarted, 1) != 0)
             {
@@ -141,6 +179,7 @@ public partial class MainWindow : Window, IDisposable
         Dispose();
         Interlocked.Increment(ref _activationRefreshGeneration);
         Activated -= OnWindowActivated;
+        SizeChanged -= OnWindowSizeChanged;
         base.OnClosed(e);
     }
 

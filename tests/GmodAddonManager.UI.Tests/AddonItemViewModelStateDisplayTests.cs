@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Globalization;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
@@ -236,6 +237,126 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
             settingsPath);
         Assert.Equal((int)AddonSortMode.Size, restoredGrid.SelectedSortModeIndex);
         Assert.Equal("Ascending ↑", restoredGrid.SortDirectionLabel);
+    }
+
+    [Fact]
+    public async Task SortPresentationDisplaysTheExactActiveTimestampKey()
+    {
+        using var manager = await CreateManagerAsync();
+        var firstSeenUtc = new DateTime(
+            2025,
+            12,
+            31,
+            23,
+            59,
+            58,
+            987,
+            DateTimeKind.Utc).AddTicks(6);
+        var workshopUpdatedUtc = new DateTime(
+            2026,
+            1,
+            1,
+            0,
+            0,
+            1,
+            123,
+            DateTimeKind.Utc).AddTicks(4);
+        using var addon = new AddonItemViewModel(
+            new WorkshopAddon
+            {
+                Id = "123456789",
+                Title = "Timestamped",
+                FolderPath = string.Empty,
+                LastUpdated = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                FirstSeenSubscribedAtUtc = firstSeenUtc,
+                WorkshopUpdatedAtUtc = workshopUpdatedUtc,
+                NeedsTitleUpdate = false
+            },
+            manager);
+
+        addon.SetSortPresentationMode(AddonSortMode.RecentlySubscribed);
+        Assert.Equal(
+            firstSeenUtc.ToLocalTime().ToString(
+                "yyyy/MM/dd HH:mm:ss",
+                CultureInfo.InvariantCulture),
+            addon.SortValueText);
+
+        addon.SetSortPresentationMode(AddonSortMode.WorkshopUpdated);
+        Assert.Equal(
+            workshopUpdatedUtc.ToLocalTime().ToString(
+                "yyyy/MM/dd HH:mm:ss",
+                CultureInfo.InvariantCulture),
+            addon.SortValueText);
+
+        addon.SetSortPresentationMode(AddonSortMode.Name);
+        Assert.Equal(string.Empty, addon.SortValueText);
+
+        addon.SetSortPresentationMode(AddonSortMode.Size);
+        Assert.Equal(string.Empty, addon.SortValueText);
+    }
+
+    [Fact]
+    public async Task RecentSortPresentationDoesNotInventBaselineSubscriptionTime()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+
+        addon.SetSortPresentationMode(AddonSortMode.RecentlySubscribed);
+
+        Assert.Equal("Subscription time unknown", addon.SortValueText);
+    }
+
+    [Fact]
+    public async Task MetadataRefreshUpdatesSortPresentationSizeAndNotifiesGrid()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = new AddonItemViewModel(
+            new WorkshopAddon
+            {
+                Id = "123456789",
+                Title = "Before",
+                FolderPath = string.Empty,
+                Size = 10,
+                LastUpdated = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                WorkshopUpdatedAtUtc = new DateTime(2025, 1, 1, 1, 0, 0, DateTimeKind.Utc),
+                NeedsTitleUpdate = false
+            },
+            manager);
+        addon.SetSortPresentationMode(AddonSortMode.WorkshopUpdated);
+        var notificationCount = 0;
+        addon.SortSourceChanged += (_, _) => notificationCount++;
+        var refreshedWorkshopTime = new DateTime(
+            2026,
+            2,
+            3,
+            4,
+            5,
+            6,
+            DateTimeKind.Utc);
+
+        addon.UpdateFromWorkshopAddon(new WorkshopAddon
+        {
+            Id = addon.AddonId,
+            Title = "After",
+            FolderPath = string.Empty,
+            Size = 2048,
+            LastUpdated = refreshedWorkshopTime.AddMinutes(-1),
+            WorkshopUpdatedAtUtc = refreshedWorkshopTime,
+            NeedsTitleUpdate = false
+        });
+
+        Assert.Equal(1, notificationCount);
+        Assert.Equal("After", addon.Title);
+        Assert.Equal("2 KB", addon.FileSizeText);
+        Assert.Equal(
+            refreshedWorkshopTime.ToLocalTime().ToString(
+                "yyyy/MM/dd HH:mm:ss",
+                CultureInfo.InvariantCulture),
+            addon.SortValueText);
+
+        addon.UpdateTitle("Later title");
+
+        Assert.Equal(2, notificationCount);
     }
 
     private async Task<AddonManager> CreateManagerAsync()

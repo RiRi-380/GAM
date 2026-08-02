@@ -65,4 +65,31 @@ public sealed class SubscriptionObservationServiceTests
         Assert.False(result.IsAuthoritative);
         Assert.Equal(["100"], configuration.KnownSubscribedAddonIds);
     }
+
+    [Fact]
+    public void Observe_UnsubscribeClearsConfigurationAndMetadataFirstSeenTimestamps()
+    {
+        var firstSeen = new DateTime(2026, 7, 31, 1, 2, 3, DateTimeKind.Utc);
+        var configuration = new Configuration
+        {
+            SubscriptionBaselineInitialized = true,
+            KnownSubscribedAddonIds = ["100", "200"],
+            SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>
+            {
+                ["200"] = firstSeen
+            }
+        };
+        configuration.AddonMetadata["200"] = new WorkshopAddon("200", string.Empty)
+        {
+            FirstSeenSubscribedAtUtc = firstSeen
+        };
+
+        var result = new SubscriptionObservationService().Observe(
+            configuration,
+            new SteamWorkshopSnapshot(["100"], ["100"], true, firstSeen.AddHours(1)));
+
+        Assert.Equal(["200"], result.UnsubscribedIds);
+        Assert.DoesNotContain("200", configuration.SubscriptionFirstSeenAtUtc.Keys);
+        Assert.Null(configuration.AddonMetadata["200"].FirstSeenSubscribedAtUtc);
+    }
 }

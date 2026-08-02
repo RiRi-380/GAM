@@ -11,7 +11,7 @@
         x:DataType="vm:MainWindowViewModel"
         Title="{loc:Localize MainWindow.Title}"
         Width="1400" Height="800"
-        MinWidth="1000" MinHeight="600"
+        MinWidth="640" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized"
         Icon="/Assets/logo.ico">
@@ -33,7 +33,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="*" MinWidth="120" MaxWidth="300"/>
                 </Grid.ColumnDefinitions>
                 
                 <!-- ロゴ/タイトル -->
@@ -78,6 +78,14 @@
                 
                 <!-- 左側のボタン -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                    <Button Name="AssetPaneToggleButton"
+                            Click="OnAssetPaneToggleClick"
+                            ToolTip.Tip="{loc:Localize AssetList.Header}"
+                            Width="32" Height="32"
+                            IsVisible="False">
+                        <TextBlock Text="☰" FontSize="16"/>
+                    </Button>
+
                     <Button Command="{Binding RefreshCommand}" 
                             ToolTip.Tip="{loc:Localize MainWindow.RescanAddons}"
                             Width="32" Height="32">
@@ -104,6 +112,9 @@
                          Name="SearchTextBox"
                          Text="{Binding SearchText}"
                          Watermark="{loc:Localize MainWindow.SearchPlaceholder}"
+                         MinWidth="120"
+                         MaxWidth="300"
+                         HorizontalAlignment="Stretch"
                          VerticalAlignment="Center"/>
             </Grid>
         </Border>
@@ -140,6 +151,7 @@
                           Text="{Binding StatusMessage}" 
                           VerticalAlignment="Center"
                           HorizontalAlignment="Center"
+                          TextTrimming="CharacterEllipsis"
                           Foreground="{Binding StatusMessageColor}"/>
                 
                 <!-- 保留中の変更 -->
@@ -167,21 +179,22 @@
         
         <!-- メインコンテンツ -->
         <Grid Background="Transparent">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="340" MinWidth="200"/>
-                <ColumnDefinition Width="*" MinWidth="400"/>
-            </Grid.ColumnDefinitions>
-            
-            <!-- アセットリスト -->
-            <views:AssetListView Grid.Column="0" 
-                                DataContext="{Binding AssetListViewModel}"/>
-            
-            <!-- アドオングリッド -->
-            <views:AddonGridView Grid.Column="1"
-                               DataContext="{Binding AddonGridViewModel}"/>
-            
+            <SplitView Name="AssetSplitView"
+                       DisplayMode="Inline"
+                       PanePlacement="Left"
+                       OpenPaneLength="340"
+                       CompactPaneLength="0"
+                       IsPaneOpen="True">
+                <SplitView.Pane>
+                    <views:AssetListView DataContext="{Binding AssetListViewModel}"/>
+                </SplitView.Pane>
+
+                <views:AddonGridView Name="AddonGridControl"
+                                     DataContext="{Binding AddonGridViewModel}"/>
+            </SplitView>
+
             <!-- フローティング詳細パネル -->
-            <controls:AddonDetailsFloatingPanel Grid.ColumnSpan="2"/>
+            <controls:AddonDetailsFloatingPanel Name="AddonDetailsPanel"/>
         </Grid>
     </DockPanel>
 

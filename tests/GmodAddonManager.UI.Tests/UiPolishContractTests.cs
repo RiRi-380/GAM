@@ -148,6 +148,11 @@ public sealed class UiPolishContractTests
             .Single(element =>
                 (string?)element.Attribute("Command") ==
                 "{Binding ToggleSortDirectionCommand}");
+        var displayedSortValue = document
+            .Descendants(AvaloniaNamespace + "TextBlock")
+            .Single(element =>
+                (string?)element.Attribute("Text") ==
+                "{Binding SortValueText}");
 
         Assert.Null(sortMode.Attribute("Height"));
         Assert.Equal("32", (string?)sortMode.Attribute("MinHeight"));
@@ -157,6 +162,7 @@ public sealed class UiPolishContractTests
         Assert.Equal(
             "Center",
             (string?)sortDirection.Attribute("VerticalContentAlignment"));
+        Assert.NotNull(displayedSortValue);
     }
 
     [Fact]

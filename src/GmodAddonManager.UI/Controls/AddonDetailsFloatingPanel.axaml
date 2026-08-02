@@ -25,6 +25,7 @@
         <!-- フローティングパネル -->
         <Border Name="FloatingPanel"
                 Width="400"
+                MaxWidth="400"
                 HorizontalAlignment="Right"
                 Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                 BoxShadow="-4 0 20 0 #40000000"

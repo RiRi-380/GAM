@@ -134,7 +134,7 @@
                     <!-- 更新日時（左） + サイズ（右） -->
                     <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
                         <TextBlock Grid.Column="0"
-                                  Text="{Binding LastModifiedText}"
+                                  Text="{Binding SortValueText}"
                                   FontSize="11"
                                   Opacity="0.7"/>
                         <TextBlock Grid.Column="1"
@@ -166,7 +166,7 @@
             <Grid RowDefinitions="Auto,Auto"
                   RowSpacing="10">
                 <Grid Grid.Row="0"
-                      ColumnDefinitions="Auto,*">
+                      ColumnDefinitions="Auto,*,Auto">
                     <TextBlock Grid.Column="0"
                                Text="{loc:Localize AddonGrid.Header}"
                                FontSize="16"
@@ -178,6 +178,15 @@
                                Opacity="0.7"
                                Text="{Binding AddonCountDisplay}"
                                TextWrapping="Wrap"/>
+                    <Button Grid.Column="2"
+                            Name="FilterPaneToggleButton"
+                            Click="OnFilterPaneToggleClick"
+                            ToolTip.Tip="{loc:Localize VersionManagement.SortOrderLabel}"
+                            Width="32"
+                            Height="32"
+                            IsVisible="False">
+                        <TextBlock Text="☷" FontSize="16"/>
+                    </Button>
                 </Grid>
 
                 <WrapPanel Grid.Row="1"
@@ -301,14 +310,106 @@
                     Height="3"
                     IsVisible="{Binding IsLoading}"/>
         
-        <Grid ColumnDefinitions="*,250">
+        <SplitView Name="FilterSplitView"
+                   DisplayMode="Inline"
+                   PanePlacement="Right"
+                   OpenPaneLength="250"
+                   CompactPaneLength="0"
+                   IsPaneOpen="True">
+            <SplitView.Pane>
+                <!-- 並び替え・フィルターサイドバー -->
+                <Border Background="#1B1B1B"
+                        BorderBrush="#2C2C2C"
+                        BorderThickness="1,0,0,0"
+                        Padding="12">
+                    <Grid RowDefinitions="Auto,*">
+                        <Button Grid.Row="0"
+                                Name="FilterPaneCloseButton"
+                                Click="OnFilterPaneToggleClick"
+                                ToolTip.Tip="{loc:Localize VersionManagement.SortOrderLabel}"
+                                HorizontalAlignment="Right"
+                                Width="32"
+                                Height="32"
+                                Margin="0,0,0,8"
+                                IsVisible="False">
+                            <TextBlock Text="×" FontSize="18"/>
+                        </Button>
+
+                        <ScrollViewer Grid.Row="1"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                        <StackPanel Spacing="16">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Localize VersionManagement.SortOrderLabel}"
+                                           FontSize="12"
+                                           FontWeight="Bold"
+                                           Opacity="0.8"/>
+                                <ComboBox ItemsSource="{Binding SortModeOptions}"
+                                          SelectedIndex="{Binding SelectedSortModeIndex}"
+                                          MinHeight="32"
+                                          HorizontalAlignment="Stretch"
+                                          VerticalContentAlignment="Center"/>
+                                <Button Command="{Binding ToggleSortDirectionCommand}"
+                                        Content="{Binding SortDirectionLabel}"
+                                        MinHeight="32"
+                                        Padding="10,4"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        VerticalContentAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Localize AddonGrid.FilterTypeHeader}"
+                                           FontSize="12"
+                                           FontWeight="Bold"
+                                           Opacity="0.8"/>
+                                <ItemsControl ItemsSource="{Binding AddonTypeFilters}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="4"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:FilterOptionViewModel">
+                                            <CheckBox Content="{Binding Label}"
+                                                      IsChecked="{Binding IsSelected}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Localize AddonGrid.FilterTagHeader}"
+                                           FontSize="12"
+                                           FontWeight="Bold"
+                                           Opacity="0.8"/>
+                                <ItemsControl ItemsSource="{Binding AddonTagFilters}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="4"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:FilterOptionViewModel">
+                                            <CheckBox Content="{Binding Label}"
+                                                      IsChecked="{Binding IsSelected}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </SplitView.Pane>
+
             <!-- アドオングリッド（仮想化） -->
-            <Grid Grid.Column="0">
-        <ScrollViewer Name="AddonScrollViewer"
-                     HorizontalScrollBarVisibility="Disabled"
-                     VerticalScrollBarVisibility="Auto"
-                     ClipToBounds="True"
-                     Padding="6,6,0,6">
+            <Grid>
+                <ScrollViewer Name="AddonScrollViewer"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              ClipToBounds="True"
+                              Padding="6,6,0,6">
                     <ScrollViewer.Styles>
                         <Style Selector="ScrollViewer">
                             <Setter Property="AllowAutoHide" Value="False"/>
@@ -316,11 +417,11 @@
                             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
                         </Style>
                     </ScrollViewer.Styles>
-            <ItemsRepeater Name="AddonItemsRepeater"
-                          ItemsSource="{Binding FilteredAddons}"
-                          Layout="{StaticResource UniformGridLayout}"
-                          ItemTemplate="{StaticResource AddonItemTemplate}"
-                          Margin="5,5,0,5">
+                    <ItemsRepeater Name="AddonItemsRepeater"
+                                   ItemsSource="{Binding FilteredAddons}"
+                                   Layout="{StaticResource UniformGridLayout}"
+                                   ItemTemplate="{StaticResource AddonItemTemplate}"
+                                   Margin="5,5,0,5">
                         <ItemsRepeater.Styles>
                             <Style Selector="ItemsRepeater">
                                 <Setter Property="Background" Value="Transparent"/>
@@ -342,73 +443,6 @@
                     </TextBlock.IsVisible>
                 </TextBlock>
             </Grid>
-            
-            <!-- サイドバー -->
-            <Border Grid.Column="1"
-                    Background="#1B1B1B"
-                    BorderBrush="#2C2C2C"
-                    BorderThickness="1,0,0,0"
-                    Padding="12"
-                    Width="250">
-                <ScrollViewer HorizontalScrollBarVisibility="Disabled"
-                             VerticalScrollBarVisibility="Auto">
-                    <StackPanel Spacing="16">
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="{loc:Localize VersionManagement.SortOrderLabel}"
-                                       FontSize="12"
-                                       FontWeight="Bold"
-                                       Opacity="0.8"/>
-                            <ComboBox ItemsSource="{Binding SortModeOptions}"
-                                      SelectedIndex="{Binding SelectedSortModeIndex}"
-                                      MinHeight="32"
-                                      HorizontalAlignment="Stretch"
-                                      VerticalContentAlignment="Center"/>
-                            <Button Command="{Binding ToggleSortDirectionCommand}"
-                                    Content="{Binding SortDirectionLabel}"
-                                    MinHeight="32"
-                                    Padding="10,4"
-                                    HorizontalAlignment="Stretch"
-                                    HorizontalContentAlignment="Center"
-                                    VerticalContentAlignment="Center"/>
-                        </StackPanel>
-
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="{loc:Localize AddonGrid.FilterTypeHeader}" FontSize="12" FontWeight="Bold" Opacity="0.8"/>
-                            <ItemsControl ItemsSource="{Binding AddonTypeFilters}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="4"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:FilterOptionViewModel">
-                                        <CheckBox Content="{Binding Label}"
-                                                  IsChecked="{Binding IsSelected}"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                        
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="{loc:Localize AddonGrid.FilterTagHeader}" FontSize="12" FontWeight="Bold" Opacity="0.8"/>
-                            <ItemsControl ItemsSource="{Binding AddonTagFilters}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="4"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:FilterOptionViewModel">
-                                        <CheckBox Content="{Binding Label}"
-                                                  IsChecked="{Binding IsSelected}"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                        
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-        </Grid>
+        </SplitView>
     </DockPanel>
 </UserControl>

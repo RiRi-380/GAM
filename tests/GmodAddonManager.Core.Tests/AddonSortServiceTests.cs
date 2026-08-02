@@ -7,6 +7,85 @@ public sealed class AddonSortServiceTests
 {
     private readonly AddonSortService service = new();
 
+    public static TheoryData<AddonSortMode, AddonSortDirection, string[]> AllModeCases =>
+        new()
+        {
+            {
+                AddonSortMode.RecentlySubscribed,
+                AddonSortDirection.Ascending,
+                new[] { "Bravo", "Charlie", "Alpha" }
+            },
+            {
+                AddonSortMode.RecentlySubscribed,
+                AddonSortDirection.Descending,
+                new[] { "Alpha", "Charlie", "Bravo" }
+            },
+            {
+                AddonSortMode.Name,
+                AddonSortDirection.Ascending,
+                new[] { "Alpha", "Bravo", "Charlie" }
+            },
+            {
+                AddonSortMode.Name,
+                AddonSortDirection.Descending,
+                new[] { "Charlie", "Bravo", "Alpha" }
+            },
+            {
+                AddonSortMode.Size,
+                AddonSortDirection.Ascending,
+                new[] { "Bravo", "Charlie", "Alpha" }
+            },
+            {
+                AddonSortMode.Size,
+                AddonSortDirection.Descending,
+                new[] { "Alpha", "Charlie", "Bravo" }
+            },
+            {
+                AddonSortMode.WorkshopUpdated,
+                AddonSortDirection.Ascending,
+                new[] { "Alpha", "Bravo", "Charlie" }
+            },
+            {
+                AddonSortMode.WorkshopUpdated,
+                AddonSortDirection.Descending,
+                new[] { "Charlie", "Bravo", "Alpha" }
+            }
+        };
+
+    [Theory]
+    [MemberData(nameof(AllModeCases))]
+    public void Sort_AllModesAndDirections_UseTheCompletePrimaryKey(
+        AddonSortMode mode,
+        AddonSortDirection direction,
+        string[] expected)
+    {
+        var addons = new[]
+        {
+            Addon(
+                "3",
+                "Alpha",
+                size: 300,
+                firstSeen: Utc(2026, 1, 1, 10, 0, 0, 900).AddTicks(9),
+                workshopUpdated: Utc(2025, 12, 31, 23, 59, 59, 999).AddTicks(9)),
+            Addon(
+                "2",
+                "Bravo",
+                size: 100,
+                firstSeen: Utc(2025, 12, 31, 23, 59, 59, 999).AddTicks(8),
+                workshopUpdated: Utc(2026, 1, 1, 10, 0, 0, 100).AddTicks(1)),
+            Addon(
+                "1",
+                "Charlie",
+                size: 200,
+                firstSeen: Utc(2026, 1, 1, 10, 0, 0, 100).AddTicks(1),
+                workshopUpdated: Utc(2026, 1, 1, 10, 0, 0, 900).AddTicks(9))
+        };
+
+        var result = Sort(addons.Reverse(), mode, direction);
+
+        Assert.Equal(expected, result.Select(addon => addon.Title));
+    }
+
     [Fact]
     public void Sort_DefaultsToRecentlySubscribedDescending_WithBaselineLastByName()
     {
@@ -144,6 +223,58 @@ public sealed class AddonSortServiceTests
         Assert.Equal(new[] { "Alpha", "Zulu" }, descending.Select(addon => addon.Title));
     }
 
+    [Theory]
+    [InlineData(AddonSortMode.RecentlySubscribed, AddonSortDirection.Ascending)]
+    [InlineData(AddonSortMode.RecentlySubscribed, AddonSortDirection.Descending)]
+    [InlineData(AddonSortMode.Name, AddonSortDirection.Ascending)]
+    [InlineData(AddonSortMode.Name, AddonSortDirection.Descending)]
+    [InlineData(AddonSortMode.Size, AddonSortDirection.Ascending)]
+    [InlineData(AddonSortMode.Size, AddonSortDirection.Descending)]
+    [InlineData(AddonSortMode.WorkshopUpdated, AddonSortDirection.Ascending)]
+    [InlineData(AddonSortMode.WorkshopUpdated, AddonSortDirection.Descending)]
+    public void Sort_AllModesAndDirections_UseStableIdForExactTies(
+        AddonSortMode mode,
+        AddonSortDirection direction)
+    {
+        var timestamp = Utc(2026, 1, 1, 12, 34, 56, 789);
+        var addons = new[]
+        {
+            Addon("3", "Same", 42, timestamp, timestamp, timestamp),
+            Addon("1", "Same", 42, timestamp, timestamp, timestamp),
+            Addon("2", "Same", 42, timestamp, timestamp, timestamp)
+        };
+
+        var result = Sort(addons, mode, direction);
+
+        Assert.Equal(new[] { "1", "2", "3" }, result.Select(addon => addon.Id));
+    }
+
+    [Fact]
+    public void GetSortTimestampUtc_NormalizesObservedAndFallbackValues()
+    {
+        var local = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Local);
+        var unspecified = new DateTime(2025, 12, 31, 23, 59, 58, DateTimeKind.Unspecified);
+        var addon = Addon(
+            "1",
+            "Timestamp",
+            firstSeen: local,
+            lastUpdated: unspecified);
+
+        var observed = AddonSortService.GetSortTimestampUtc(
+            addon,
+            AddonSortMode.RecentlySubscribed);
+        var fallback = AddonSortService.GetSortTimestampUtc(
+            addon,
+            AddonSortMode.WorkshopUpdated);
+
+        Assert.Equal(local.ToUniversalTime(), observed);
+        Assert.Equal(DateTimeKind.Utc, observed?.Kind);
+        Assert.Equal(DateTime.SpecifyKind(unspecified, DateTimeKind.Utc), fallback);
+        Assert.Equal(DateTimeKind.Utc, fallback?.Kind);
+        Assert.Null(AddonSortService.GetSortTimestampUtc(addon, AddonSortMode.Name));
+        Assert.Null(AddonSortService.GetSortTimestampUtc(addon, AddonSortMode.Size));
+    }
+
     [Fact]
     public void Sort_DoesNotMutateInputOrder()
     {
@@ -193,8 +324,23 @@ public sealed class AddonSortServiceTests
         };
     }
 
-    private static DateTime Utc(int year, int month, int day)
+    private static DateTime Utc(
+        int year,
+        int month,
+        int day,
+        int hour = 0,
+        int minute = 0,
+        int second = 0,
+        int millisecond = 0)
     {
-        return new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc);
+        return new DateTime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            millisecond,
+            DateTimeKind.Utc);
     }
 }

@@ -46,12 +46,50 @@ public sealed class ReleasePackagingContractTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void InstallerHasOneLaunchActionAndAnExplicitStableUninstallContract()
+    {
+        var installer = ReadRepositoryFile2("installer", "setup.iss");
+        var runSection = ReadSection(installer, "Run");
+
+        Assert.Equal(
+            1,
+            runSection.Split(
+                    "Filename: \"{app}\\GmodAddonManager.UI.exe\"",
+                    StringSplitOptions.None)
+                .Length - 1);
+        Assert.Contains(
+            "Flags: nowait postinstall skipifsilent shellexec",
+            runSection,
+            StringComparison.Ordinal);
+        Assert.Contains("AppId=Gmod Addon Manager", installer, StringComparison.Ordinal);
+        Assert.Contains("Uninstallable=yes", installer, StringComparison.Ordinal);
+        Assert.Contains("CreateUninstallRegKey=yes", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "Filename: \"{uninstallexe}\"",
+            installer,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("[UninstallDelete]", installer, StringComparison.Ordinal);
+    }
+
     private static void AssertSelfContainedMultiFilePublish(string source)
     {
         Assert.Contains("--self-contained true", source, StringComparison.Ordinal);
         Assert.Contains("-p:PublishSingleFile=false", source, StringComparison.Ordinal);
         Assert.DoesNotContain("-p:PublishSingleFile=true", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IncludeNativeLibrariesForSelfExtract", source, StringComparison.Ordinal);
+    }
+
+    private static string ReadSection(string source, string sectionName)
+    {
+        var marker = $"[{sectionName}]";
+        var start = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not find installer section {marker}.");
+
+        var nextSection = source.IndexOf("\n[", start + marker.Length, StringComparison.Ordinal);
+        return nextSection >= 0
+            ? source[start..nextSection]
+            : source[start..];
     }
 
     private static string ReadRepositoryFile(

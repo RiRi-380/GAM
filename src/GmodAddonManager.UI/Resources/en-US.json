@@ -68,6 +68,7 @@
   "AddonGrid.SaveTagHeader": "Save Tags",
   "AddonGrid.SelectionMode": "Selection Mode",
   "AddonGrid.ShowCurrentAssetOnly": "Only current asset",
+  "AddonGrid.SubscriptionTimeUnknown": "Subscription time unknown",
   "AddonGrid.StateChangePlaceholder": "Change State",
   "AddonState.Disabled": "Disabled",
   "AddonState.Enabled": "Enabled",

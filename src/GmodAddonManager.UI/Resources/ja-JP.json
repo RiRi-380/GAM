@@ -68,6 +68,7 @@
   "AddonGrid.SaveTagHeader": "保存タグ",
   "AddonGrid.SelectionMode": "選択モード",
   "AddonGrid.ShowCurrentAssetOnly": "現在のアセットのみ表示",
+  "AddonGrid.SubscriptionTimeUnknown": "購読日時不明",
   "AddonGrid.StateChangePlaceholder": "状態を変更",
   "AddonState.Disabled": "無効",
   "AddonState.Enabled": "有効",

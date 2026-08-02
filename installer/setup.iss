@@ -1,11 +1,14 @@
 [Setup]
 AppName=Gmod Addon Manager
+AppId=Gmod Addon Manager
 AppVersion={#MyAppVersion}
 AppPublisher=RiRi-380
 AppPublisherURL=https://github.com/RiRi-380/GAM
 DefaultDirName={autopf}\GmodAddonManager
 DefaultGroupName=Gmod Addon Manager
 UninstallDisplayIcon={app}\GmodAddonManager.UI.exe
+Uninstallable=yes
+CreateUninstallRegKey=yes
 Compression=lzma2
 SolidCompression=yes
 OutputDir=..\dist
@@ -35,7 +38,6 @@ Name: "{userdesktop}\Gmod Addon Manager"; Filename: "{app}\GmodAddonManager.UI.e
 
 [Run]
 Filename: "{app}\GmodAddonManager.UI.exe"; Description: "{cm:LaunchProgram,Gmod Addon Manager}"; Flags: nowait postinstall skipifsilent shellexec
-Filename: "{app}\GmodAddonManager.UI.exe"; Flags: nowait skipifnotsilent shellexec
 
 [Code]
 var

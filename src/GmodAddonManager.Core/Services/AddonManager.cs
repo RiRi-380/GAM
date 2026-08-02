@@ -113,32 +113,39 @@ namespace GmodAddonManager.Core.Services
             set
             {
                 queueRuntimeApplyProvider = value;
-                if (value != null && runtimeReapplyRequiredFromRecovery)
+                var queueRecoveredWrite = runtimeReapplyRequiredFromRecovery;
+                var queueNewSubscriptions = runtimeApplyRequiredForNewSubscriptions;
+                if (value != null && (queueRecoveredWrite || queueNewSubscriptions))
                 {
                     try
                     {
                         value.Invoke();
-                        var pendingIntent = configuration.PendingGamRuntimeWrite;
-                        if (pendingIntent != null && !pendingIntent.ConflictDetected)
+                        if (queueRecoveredWrite)
                         {
-                            configuration.PendingGamRuntimeWrite = null;
-                            try
+                            var pendingIntent = configuration.PendingGamRuntimeWrite;
+                            if (pendingIntent != null && !pendingIntent.ConflictDetected)
                             {
-                                SaveConfigurationImmediatelySynchronously();
-                            }
-                            catch
-                            {
-                                configuration.PendingGamRuntimeWrite = pendingIntent;
-                                throw;
+                                configuration.PendingGamRuntimeWrite = null;
+                                try
+                                {
+                                    SaveConfigurationImmediatelySynchronously();
+                                }
+                                catch
+                                {
+                                    configuration.PendingGamRuntimeWrite = pendingIntent;
+                                    throw;
+                                }
                             }
                         }
                         runtimeReapplyRequiredFromRecovery = false;
+                        runtimeApplyRequiredForNewSubscriptions = false;
                     }
                     catch (Exception ex)
                     {
-                        runtimeReapplyRequiredFromRecovery = true;
+                        runtimeReapplyRequiredFromRecovery = queueRecoveredWrite;
+                        runtimeApplyRequiredForNewSubscriptions = queueNewSubscriptions;
                         errorHandler.HandleWarning(
-                            $"Failed to queue recovered runtime apply: {ex.Message}",
+                            $"Failed to queue deferred runtime apply: {ex.Message}",
                             "QueueRuntimeApplyProvider");
                     }
                 }
@@ -162,6 +169,7 @@ namespace GmodAddonManager.Core.Services
         private bool enableLocalAddonManagement;
         private Action? queueRuntimeApplyProvider;
         private bool runtimeReapplyRequiredFromRecovery;
+        private bool runtimeApplyRequiredForNewSubscriptions;
         private bool IsBulkStateUpdate => bulkStateUpdateDepth.Value > 0;
 
         private const int ERROR_NOT_SAME_DEVICE = 17;
@@ -882,6 +890,11 @@ namespace GmodAddonManager.Core.Services
             {
                 await SaveConfigurationAsync();
             }
+
+            await ApplyPendingNewSubscriptionStatesAsync(
+                snapshot,
+                observation,
+                "EnsureAllAddonsInSubscribeAsset");
         }
 
         public async Task<bool> RefreshGmodDisabledAddonsFromRuntimeAsync()
@@ -1064,6 +1077,169 @@ namespace GmodAddonManager.Core.Services
                     $"Failed to durably queue recovered runtime apply: {ex.Message}",
                     operationName);
                 return null;
+            }
+        }
+
+        private async Task ApplyPendingNewSubscriptionStatesAsync(
+            SteamWorkshopSnapshot snapshot,
+            SubscriptionObservationResult observation,
+            string operationName)
+        {
+            if (snapshot == null ||
+                observation == null ||
+                !snapshot.IsAuthoritative ||
+                !observation.IsAuthoritative)
+            {
+                return;
+            }
+
+            var subscribedIds = new HashSet<string>(
+                snapshot.SubscribedIds.Where(IsWorkshopNumericId),
+                StringComparer.Ordinal);
+            var newlyObservedIds = new HashSet<string>(
+                observation.NewlySubscribedIds
+                    .Where(IsWorkshopNumericId)
+                    .Where(subscribedIds.Contains),
+                StringComparer.Ordinal);
+            if (GetPendingNewSubscriptionIds(subscribedIds, newlyObservedIds).Count == 0)
+            {
+                return;
+            }
+
+            await _runtimeReconcileGate.WaitAsync();
+            try
+            {
+                var pendingIds = GetPendingNewSubscriptionIds(
+                    subscribedIds,
+                    newlyObservedIds);
+                if (pendingIds.Count == 0)
+                {
+                    return;
+                }
+
+                // GMod remains authoritative for external transitions. Import
+                // those transitions before calculating the new IDs' desired state,
+                // then write only the newly subscribed scope below.
+                var reconciliation =
+                    await TryReconcileGmodDisabledAddonsFromRuntimeAsync(
+                        operationName + ".ReconcileGmodState",
+                        subscribedIds);
+                if (reconciliation == null ||
+                    reconciliation.PendingRecovery ==
+                        PendingGamRuntimeWriteRecovery.NotApplied ||
+                    reconciliation.PendingRecovery ==
+                        PendingGamRuntimeWriteRecovery.Conflicted)
+                {
+                    return;
+                }
+
+                pendingIds = GetPendingNewSubscriptionIds(
+                    subscribedIds,
+                    newlyObservedIds);
+                if (pendingIds.Count == 0)
+                {
+                    return;
+                }
+
+                var targetStates = pendingIds.ToDictionary(
+                    addonId => addonId,
+                    addonId => assetStateResolver.Resolve(
+                        addonId,
+                        configuration.Assets,
+                        subscribedIds).DesiredEnabled,
+                    StringComparer.Ordinal);
+
+                if (IsGmodCurrentlyRunning())
+                {
+                    QueueNewSubscriptionRuntimeApply(operationName);
+                    return;
+                }
+
+                if (ApplyAddonStateStoreBulk(
+                        targetStates,
+                        allowConflictSupersede: false))
+                {
+                    foreach (var targetState in targetStates)
+                    {
+                        if (configuration.AddonMetadata.TryGetValue(
+                                targetState.Key,
+                                out var metadata))
+                        {
+                            metadata.IsEnabled = targetState.Value;
+                        }
+                    }
+
+                    // ApplyAddonStateStoreBulk durably saves the runtime
+                    // attribution before returning. Persist the metadata cache
+                    // changed above as a separate step so a restart does not
+                    // reload stale enabled values for the new subscription.
+                    await SaveConfigurationImmediatelyAsync();
+                    runtimeApplyRequiredForNewSubscriptions = false;
+                    return;
+                }
+
+                if (configuration.PendingGamRuntimeWrite != null)
+                {
+                    await TryQueueRecoveredRuntimeApplyAsync(operationName);
+                }
+                else
+                {
+                    QueueNewSubscriptionRuntimeApply(operationName);
+                }
+            }
+            finally
+            {
+                _runtimeReconcileGate.Release();
+            }
+        }
+
+        private List<string> GetPendingNewSubscriptionIds(
+            ISet<string> subscribedIds,
+            IEnumerable<string> newlyObservedIds)
+        {
+            var pendingIds = new HashSet<string>(
+                newlyObservedIds ?? Enumerable.Empty<string>(),
+                StringComparer.Ordinal);
+            var appliedStates = configuration.LastGamAppliedAddonStates ??
+                new Dictionary<string, bool>(StringComparer.Ordinal);
+            foreach (var addonId in
+                     (configuration.SubscriptionFirstSeenAtUtc ??
+                      new Dictionary<string, DateTime>()).Keys)
+            {
+                if (subscribedIds.Contains(addonId) &&
+                    !appliedStates.ContainsKey(addonId))
+                {
+                    pendingIds.Add(addonId);
+                }
+            }
+
+            pendingIds.IntersectWith(subscribedIds);
+            return pendingIds
+                .Where(IsWorkshopNumericId)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private void QueueNewSubscriptionRuntimeApply(string operationName)
+        {
+            var queue = QueueRuntimeApplyProvider;
+            if (queue == null)
+            {
+                runtimeApplyRequiredForNewSubscriptions = true;
+                return;
+            }
+
+            try
+            {
+                queue.Invoke();
+                runtimeApplyRequiredForNewSubscriptions = false;
+            }
+            catch (Exception ex)
+            {
+                runtimeApplyRequiredForNewSubscriptions = true;
+                errorHandler.HandleWarning(
+                    $"Failed to queue new-subscription runtime apply: {ex.Message}",
+                    operationName);
             }
         }
 
@@ -1734,6 +1910,11 @@ namespace GmodAddonManager.Core.Services
             {
                 await SaveConfigurationImmediatelyAsync();
             }
+
+            await ApplyPendingNewSubscriptionStatesAsync(
+                snapshot,
+                observation,
+                "FinalizeWorkshopInventory");
 
             return visibleAddons;
         }
@@ -3313,6 +3494,11 @@ namespace GmodAddonManager.Core.Services
             {
                 await SaveConfigurationAsync();
             }
+
+            await ApplyPendingNewSubscriptionStatesAsync(
+                workshopSnapshot,
+                observation,
+                "ScanForNewAddons");
 
             return newAddons;
         }

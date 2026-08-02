@@ -25,10 +25,39 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
     private CancellationTokenSource? _scrollIdleCts;
     private ItemsRepeater? _itemsRepeater;
+    private ResponsiveLayoutKind? _responsiveLayoutKind;
 
     public AddonGridView()
     {
         InitializeComponent();
+    }
+
+    public void ApplyResponsiveLayout(ResponsiveLayoutState layout)
+    {
+        var transitionedFromWide = _responsiveLayoutKind == ResponsiveLayoutKind.Wide;
+
+        FilterSplitView.DisplayMode = layout.UseOverlayPanes
+            ? SplitViewDisplayMode.Overlay
+            : SplitViewDisplayMode.Inline;
+        FilterSplitView.OpenPaneLength = layout.FilterPaneWidth;
+        FilterPaneToggleButton.IsVisible = layout.UseOverlayPanes;
+        FilterPaneCloseButton.IsVisible = layout.UseOverlayPanes;
+
+        if (!layout.UseOverlayPanes)
+        {
+            FilterSplitView.IsPaneOpen = true;
+        }
+        else if (_responsiveLayoutKind is null || transitionedFromWide)
+        {
+            FilterSplitView.IsPaneOpen = false;
+        }
+
+        _responsiveLayoutKind = layout.Kind;
+    }
+
+    private void OnFilterPaneToggleClick(object? sender, RoutedEventArgs e)
+    {
+        FilterSplitView.IsPaneOpen = !FilterSplitView.IsPaneOpen;
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)

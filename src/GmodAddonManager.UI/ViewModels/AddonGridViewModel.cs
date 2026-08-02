@@ -64,6 +64,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private readonly System.Threading.SemaphoreSlim visibleLoadSemaphore = new System.Threading.SemaphoreSlim(3, 3);
     private readonly object visibleRangeLock = new object();
     private CancellationTokenSource? visibleRangeCts;
+    private int sortRefreshQueued;
     private bool disposed;
     private bool metadataSupplementUiSnapshotErrorLogged;
     private bool metadataSupplementCacheReadErrorLogged;
@@ -213,6 +214,25 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private void OnGmodRuntimeStateChanged(object? sender, ProcessEventArgs e)
     {
         Dispatcher.UIThread.Post(ApplyFilter, DispatcherPriority.Background);
+    }
+
+    private void OnAddonSortSourceChanged(object? sender, EventArgs e)
+    {
+        if (disposed || Interlocked.Exchange(ref sortRefreshQueued, 1) != 0)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                Interlocked.Exchange(ref sortRefreshQueued, 0);
+                if (!disposed)
+                {
+                    ApplyFilter();
+                }
+            },
+            DispatcherPriority.Background);
     }
 
     private AddonSortOptions CurrentSortOptions => new()
@@ -1222,7 +1242,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             }
             else
             {
-                newAllAddons.Add(new AddonItemViewModel(addon, addonManager, null));
+                var newViewModel = new AddonItemViewModel(addon, addonManager, null);
+                newViewModel.SortSourceChanged += OnAddonSortSourceChanged;
+                newAllAddons.Add(newViewModel);
             }
         }
 
@@ -1230,6 +1252,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         {
             if (!reusedAddonIds.Contains(kvp.Key))
             {
+                kvp.Value.SortSourceChanged -= OnAddonSortSourceChanged;
                 kvp.Value.Dispose();
             }
         }
@@ -1333,8 +1356,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var viewModelsById = results.ToDictionary(
                 addon => addon.AddonId,
                 StringComparer.Ordinal);
+            var sortOptions = CurrentSortOptions;
+            foreach (var addon in results)
+            {
+                addon.SetSortPresentationMode(sortOptions.Mode);
+            }
             results = addonSortService
-                .Sort(results.Select(addon => addon.SortSource), CurrentSortOptions)
+                .Sort(results.Select(addon => addon.SortSource), sortOptions)
                 .Select(addon => viewModelsById[addon.Id])
                 .ToList();
             
@@ -1370,7 +1398,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            // logger.LogError("Failed to apply filter", ex); // Removed logging
+            SafeFileLogger.TryLogException("AddonGridViewModel.ApplyFilter", ex);
         }
     }
 
@@ -2614,6 +2642,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         foreach (var addon in allAddons)
         {
+            addon.SortSourceChanged -= OnAddonSortSourceChanged;
             addon.Dispose();
         }
 

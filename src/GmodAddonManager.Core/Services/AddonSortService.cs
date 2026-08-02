@@ -51,11 +51,17 @@ namespace GmodAddonManager.Core.Services
             // Migrated baseline entries have no observation timestamp. They
             // remain behind observed subscriptions in both directions.
             var withObservedFirst = addons.OrderBy(
-                addon => !addon.FirstSeenSubscribedAtUtc.HasValue);
+                addon => !GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.RecentlySubscribed).HasValue);
 
             var ordered = direction == AddonSortDirection.Ascending
-                ? withObservedFirst.ThenBy(addon => addon.FirstSeenSubscribedAtUtc)
-                : withObservedFirst.ThenByDescending(addon => addon.FirstSeenSubscribedAtUtc);
+                ? withObservedFirst.ThenBy(addon => GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.RecentlySubscribed))
+                : withObservedFirst.ThenByDescending(addon => GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.RecentlySubscribed));
 
             return ThenByName(ordered);
         }
@@ -89,8 +95,12 @@ namespace GmodAddonManager.Core.Services
             AddonSortDirection direction)
         {
             var ordered = direction == AddonSortDirection.Ascending
-                ? addons.OrderBy(GetWorkshopUpdatedAtUtc)
-                : addons.OrderByDescending(GetWorkshopUpdatedAtUtc);
+                ? addons.OrderBy(addon => GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.WorkshopUpdated))
+                : addons.OrderByDescending(addon => GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.WorkshopUpdated));
 
             return ThenByName(ordered);
         }
@@ -104,9 +114,47 @@ namespace GmodAddonManager.Core.Services
                 .ThenBy(GetId, StableTextComparer);
         }
 
-        private static DateTime GetWorkshopUpdatedAtUtc(WorkshopAddon addon)
+        /// <summary>
+        /// Returns the normalized UTC timestamp used by a timestamp-based sort mode.
+        /// Name and size modes do not have a timestamp key and return <see langword="null"/>.
+        /// Keeping this projection public lets the UI display the exact value used for ordering.
+        /// </summary>
+        public static DateTime? GetSortTimestampUtc(
+            WorkshopAddon addon,
+            AddonSortMode mode)
         {
-            return addon.WorkshopUpdatedAtUtc ?? addon.LastUpdated;
+            if (addon == null)
+            {
+                throw new ArgumentNullException(nameof(addon));
+            }
+
+            return mode switch
+            {
+                AddonSortMode.RecentlySubscribed =>
+                    NormalizeNullableUtc(addon.FirstSeenSubscribedAtUtc),
+                AddonSortMode.WorkshopUpdated =>
+                    NormalizeUtc(addon.WorkshopUpdatedAtUtc ?? addon.LastUpdated),
+                AddonSortMode.Name or AddonSortMode.Size => null,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(mode),
+                    mode,
+                    "Unknown addon sort mode.")
+            };
+        }
+
+        private static DateTime? NormalizeNullableUtc(DateTime? value)
+        {
+            return value.HasValue ? NormalizeUtc(value.Value) : null;
+        }
+
+        private static DateTime NormalizeUtc(DateTime value)
+        {
+            return value.Kind switch
+            {
+                DateTimeKind.Utc => value,
+                DateTimeKind.Local => value.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            };
         }
 
         private static string GetName(WorkshopAddon addon)

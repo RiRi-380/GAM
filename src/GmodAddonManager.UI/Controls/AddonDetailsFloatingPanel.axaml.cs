@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media.Transformation;
+using GmodAddonManager.UI.Services;
 using ReactiveUI;
 using System;
 
@@ -11,6 +12,8 @@ namespace GmodAddonManager.UI.Controls
     public partial class AddonDetailsFloatingPanel : UserControl
     {
         private Action? _disposeSelectedAddonSubscription;
+        private double _panelWidth = 400;
+        private bool _isPanelOpen;
 
         public AddonDetailsFloatingPanel()
         {
@@ -18,12 +21,22 @@ namespace GmodAddonManager.UI.Controls
             Loaded += OnLoaded;
         }
 
+        public void ApplyResponsiveLayout(ResponsiveLayoutState layout)
+        {
+            _panelWidth = layout.DetailsPaneWidth;
+            FloatingPanel.Width = _panelWidth;
+
+            if (!_isPanelOpen)
+            {
+                FloatingPanel.RenderTransform = CreateHorizontalTranslation(_panelWidth);
+            }
+        }
+
         private void OnLoaded(object? sender, RoutedEventArgs e)
         {
             if (FloatingPanel != null)
             {
-                var transform = TransformOperations.Parse("translateX(400px)");
-                FloatingPanel.RenderTransform = transform;
+                FloatingPanel.RenderTransform = CreateHorizontalTranslation(_panelWidth);
             }
 
             if (DataContext is ViewModels.MainWindowViewModel vm)
@@ -55,10 +68,10 @@ namespace GmodAddonManager.UI.Controls
 
         private void ShowPanel()
         {
+            _isPanelOpen = true;
             if (FloatingPanel != null)
             {
-                var transform = TransformOperations.Parse("translateX(0px)");
-                FloatingPanel.RenderTransform = transform;
+                FloatingPanel.RenderTransform = CreateHorizontalTranslation(0);
             }
 
             if (BackgroundOverlay != null)
@@ -70,10 +83,10 @@ namespace GmodAddonManager.UI.Controls
 
         private void HidePanel()
         {
+            _isPanelOpen = false;
             if (FloatingPanel != null)
             {
-                var transform = TransformOperations.Parse("translateX(400px)");
-                FloatingPanel.RenderTransform = transform;
+                FloatingPanel.RenderTransform = CreateHorizontalTranslation(_panelWidth);
             }
 
             if (BackgroundOverlay != null)
@@ -81,6 +94,10 @@ namespace GmodAddonManager.UI.Controls
                 BackgroundOverlay.Opacity = 0;
             }
         }
+
+        private static TransformOperations CreateHorizontalTranslation(double pixels) =>
+            TransformOperations.Parse(
+                FormattableString.Invariant($"translateX({pixels}px)"));
 
         private void OnBackgroundOverlayPressed(object? sender, PointerPressedEventArgs e)
         {
