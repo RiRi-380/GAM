@@ -19,7 +19,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: '10.0.x'
+        dotnet-version: '10.0.302'
         
     - name: Restore dependencies
       run: |
@@ -53,9 +53,11 @@ jobs:
         dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false @versionProps -o publish
       shell: pwsh
       
-    - name: Copy LICENSE
+    - name: Package and verify distribution licenses
       run: |
-        Copy-Item "LICENSE" -Destination "publish/LICENSE" -Force
+        ./scripts/prepare-release-notices.ps1 `
+          -PublishDirectory publish `
+          -ProjectAssetsPath src/GmodAddonManager.UI/obj/project.assets.json
       shell: pwsh
       
     - name: Create portable archive
@@ -124,8 +126,11 @@ jobs:
           ./GAM-Setup.exe
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
+        body_path: ./docs/releases/${{ github.ref_name }}.md
         draft: false
         prerelease: false
         generate_release_notes: true
+        fail_on_unmatched_files: true
+        make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

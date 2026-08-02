@@ -5,7 +5,7 @@
 - SQLitePCLRaw.bundle_e_sqlite3 (2.1.12): Native SQLite bundle pinned above the versions affected by GHSA-2m69-gcr7-jv3q.
 - Newtonsoft.Json (13.0.4): JSON serialization/deserialization for metadata, settings, and cache payloads.
 - Polly (8.6.5): Transient-fault handling (retry/backoff) for network and IO operations.
-- SkiaSharp (2.88.8): Image decode/resize/crop for Workshop thumbnails and previews.
+- SkiaSharp (requested 2.88.8; resolved 2.88.9): Image decode/resize/crop for Workshop thumbnails and previews.
 - Microsoft.Win32.Registry (5.0.0): Registry access for Steam path detection on Windows.
 - System.Management (5.0.0): WMI queries for system/process/drive discovery.
 
@@ -32,8 +32,13 @@
 - Patch/minor updates: apply in small batches, prioritizing `Newtonsoft.Json`, `System.Reactive`, and Avalonia ecosystem packages.
 - Major updates and framework migration: execute in dedicated hardening branch with UI smoke/regression passes.
 
+## Release runtime
+- SDK: 10.0.302 (pinned by `global.json` and GitHub Actions).
+- Self-contained Windows runtime: 10.0.10 security patch.
+- Exact production package inventory and redistributed notices are validated by `scripts/verify-release-notices.ps1`.
+
 ## Dependency audit snapshot
-- Snapshot date: 2026-07-31
+- Snapshot date: 2026-08-02
 - Command:
   - `dotnet list GmodAddonManager.sln package --include-transitive --vulnerable`
 - Status:

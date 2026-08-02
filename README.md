@@ -13,7 +13,7 @@ GAM は Garry's Mod のアドオンを「アセット（プロファイル）」
 
 - 複数のアセットを同時に重ねて、遊び方ごとのアドオン構成を整理
 - アセット単位の有効・無効・除外（除外はすべての構成に共通）
-- Subscribe AssetでSteamの現在の購読全体をON/OFF
+- Subscribe AssetでSteamの現在の購読全体をON/OFF/すべて除外
 - 現在の実状態と、GAMが次に適用する希望状態・理由を分けて表示
 - 最近購読、名前、容量、Workshop更新日時による並び替え
 - よく使うアセットをお気に入りとして上部へ固定
@@ -28,6 +28,7 @@ GAM は Garry's Mod のアドオンを「アセット（プロファイル）」
 - 現行リリースは **ソフト無効化のみ** です。
 - Garry's Mod の `garrysmod/cfg/addonnomount.txt` を更新して無効化します。
 - Custom Assetはそれぞれ有効・無効・除外のいずれか一つです。
+- Subscribe AssetのOFFは中立で、有効なCustom Assetは引き続きAddonを有効にできます。「すべて除外」は全購読Addonを強制的にOFFにし、Custom Assetでは上書きできません。
 - 無効なAssetは最終状態に影響せず、除外Assetに含まれるAddonは常にOFFになります。
 - 複数の有効Assetは同時に利用できます。どれか一つだけを選ぶプリセット方式ではありません。
 - GMod実行中の変更は希望状態だけを保存し、GMod終了後に最新構成を一度だけ適用します。
@@ -52,7 +53,7 @@ Steamの購読・購読解除はSteamクライアント側で行います。GAM�
 - Setup版はVisual C++ 2015-2022 x64を必要に応じて導入（Portable版では別途必要な場合があります）
 
 ## インストール
-- 初期リリース後は GitHub Releases から入手予定
+- [GitHub Releases](https://github.com/RiRi-380/GAM/releases) からSetup版またはPortable版を入手できます
 - 例: `GAM-Setup-X.Y.Z.exe` / `GAM-Portable-X.Y.Z.zip`
 
 ## データ保存場所

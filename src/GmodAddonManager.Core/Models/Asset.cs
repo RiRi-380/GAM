@@ -20,8 +20,9 @@ namespace GmodAddonManager.Core.Models
         public bool IsSystem { get; set; }
 
         /// <summary>
-        /// Asset全体の状態。Custom AssetはEnabled/Disabled/Excluded、
-        /// Subscribe AssetはEnabled/Disabledだけを使用する。
+        /// Asset全体の状態。Custom AssetとSubscribe Assetは
+        /// Enabled/Disabled/Excludedを使用する。Subscribe AssetのExcludedは
+        /// 現在購読中の全Addonに対する強制除外を表す。
         /// </summary>
         [JsonProperty("state")]
         public AddonState State { get; set; }

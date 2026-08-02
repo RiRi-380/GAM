@@ -7,7 +7,7 @@ namespace GmodAddonManager.Core.Models
 {
     public class Configuration
     {
-        public const int CurrentSchemaVersion = 3;
+        public const int CurrentSchemaVersion = 4;
 
         [JsonProperty("schemaVersion")]
         public int SchemaVersion { get; set; }

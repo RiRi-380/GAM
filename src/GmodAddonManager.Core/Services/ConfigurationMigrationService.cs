@@ -30,6 +30,7 @@ namespace GmodAddonManager.Core.Services
     {
         private const string SubscribeSystemAssetId = SystemAssetDefinitions.SubscribeId;
         private const string JunctionSystemAssetId = SystemAssetDefinitions.JunctionId;
+        private const int GmodAttributionSchemaVersion = 3;
         private readonly GmodDisabledAddonReconciliationService gmodDisabledService =
             new GmodDisabledAddonReconciliationService();
 
@@ -73,6 +74,17 @@ namespace GmodAddonManager.Core.Services
             EnsureSupportedSchema(rawConfiguration);
 
             var result = new ConfigurationMigrationResult();
+            var sourceSchemaVersion = GetSchemaVersion(rawConfiguration);
+            if (sourceSchemaVersion == GmodAttributionSchemaVersion)
+            {
+                // Schema 3 already owns the subscription and GMod attribution
+                // truth. Schema 4 only adds a valid Subscribe state, so reusing
+                // the legacy migration would destructively reset those baselines.
+                NormalizeCurrentSchema(configuration, removeLegacyJunctionAsset);
+                result.Changed = true;
+                return result;
+            }
+
             var rawAssets = (rawConfiguration["assets"] as JArray)?
                 .OfType<JObject>()
                 .ToList() ?? new List<JObject>();
@@ -240,14 +252,36 @@ namespace GmodAddonManager.Core.Services
 
         private static void NormalizeSubscribeAsset(Asset asset, JObject? rawAsset)
         {
-            var wasEnabled = rawAsset?.Value<bool?>("enabled") ?? asset.GetWholeState() != AddonState.Disabled;
+            AddonState normalizedState;
+            if (rawAsset != null)
+            {
+                // Schemas before the state-model migration only had an ON/OFF
+                // Subscribe contract. Do not promote legacy compatibility fields
+                // to the new all-excluded state.
+                var rawEnabled = rawAsset.Value<bool?>("enabled");
+                var legacyState = asset.GetWholeState();
+                var wasEnabled = rawEnabled ??
+                    (Enum.IsDefined(typeof(AddonState), legacyState) &&
+                     legacyState != AddonState.Disabled);
+                normalizedState = wasEnabled
+                    ? AddonState.Enabled
+                    : AddonState.Disabled;
+            }
+            else
+            {
+                // Current-schema normalization must preserve the explicit
+                // Subscribe Excluded state across every startup.
+                normalizedState = Enum.IsDefined(typeof(AddonState), asset.GetWholeState())
+                    ? asset.GetWholeState()
+                    : AddonState.Excluded;
+            }
 
             asset.Id = SubscribeSystemAssetId;
             asset.Name = "Subscribe Asset";
             asset.IsSystem = true;
             asset.IsFavorite = false;
             asset.NeedsMigrationReview = false;
-            asset.SetWholeState(wasEnabled ? AddonState.Enabled : AddonState.Disabled);
+            asset.SetWholeState(normalizedState);
             asset.SetAllAddons();
         }
 

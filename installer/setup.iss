@@ -14,7 +14,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=..\src\GmodAddonManager.UI\Assets\app.ico
-LicenseFile=..\LICENSE
+LicenseFile=..\publish\DISTRIBUTION-LICENSES.txt
 
 [Languages]
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"

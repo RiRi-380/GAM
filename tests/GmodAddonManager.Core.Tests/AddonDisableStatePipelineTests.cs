@@ -60,21 +60,73 @@ public sealed class AddonDisableStatePipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task SubscribeAsset_RejectsExcludedState()
+    public async Task SubscribeAsset_ExcludedVetoesCustomSourcesAndUndoRestoresThem()
     {
         using var manager = CreateManager();
         await manager.InitializeAsync();
+        AddKnownAddon(manager, AddonId);
+        AddCustomAsset(manager, "FPS", AddonState.Enabled);
+        WriteNoMountFile("999999999");
         var subscribe = manager.GetConfiguration().Assets
-            .Single(asset => asset.Id == "subscribe-system-asset");
-        var historyCount = manager.GetUndoManager().GetHistory(50).Count;
+            .Single(asset => asset.Id == SystemAssetDefinitions.SubscribeId);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => manager.ApplyAssetDefaultStateAsync(
-                subscribe.Id,
-                AddonState.Excluded));
+        await manager.ApplyAssetDefaultStateAsync(
+            subscribe.Id,
+            AddonState.Excluded);
+
+        Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
+        Assert.False(manager.GetFinalAddonStates()[AddonId]);
+        var excludedContent = File.ReadAllText(NoMountPath);
+        Assert.Contains(AddonId, excludedContent, StringComparison.Ordinal);
+        Assert.Contains("999999999", excludedContent, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            AddonId,
+            manager.GetConfiguration().Assets.Single(
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
+        Assert.Equal(
+            UndoActionType.AssetExcluded,
+            manager.GetUndoManager().PeekLastAction()!.Type);
+
+        Assert.True(await manager.UndoLastActionAsync());
 
         Assert.Equal(AddonState.Enabled, subscribe.GetWholeState());
-        Assert.Equal(historyCount, manager.GetUndoManager().GetHistory(50).Count);
+        Assert.True(manager.GetFinalAddonStates()[AddonId]);
+        var restoredContent = File.ReadAllText(NoMountPath);
+        Assert.DoesNotContain(AddonId, restoredContent, StringComparison.Ordinal);
+        Assert.Contains("999999999", restoredContent, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            AddonId,
+            manager.GetConfiguration().Assets.Single(
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
+    }
+
+    [Fact]
+    public async Task SubscribeAsset_ExcludedAppliesToNewSubscriptionOnNextExplicitReconcile()
+    {
+        const string newlySubscribedId = "2084096447";
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        AddKnownAddon(manager, AddonId);
+        var subscribe = manager.GetConfiguration().Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        await manager.ApplyAssetDefaultStateAsync(
+            subscribe.Id,
+            AddonState.Excluded);
+
+        WorkshopManifestTestData.Write(rootPath, AddonId, newlySubscribedId);
+        AddKnownAddon(manager, newlySubscribedId);
+
+        Assert.True(await manager.UpdateAddonStatesAsync());
+
+        Assert.False(manager.GetFinalAddonStates()[newlySubscribedId]);
+        Assert.Contains(
+            newlySubscribedId,
+            File.ReadAllText(NoMountPath),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            newlySubscribedId,
+            manager.GetConfiguration().Assets.Single(
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
     }
 
     [Fact]
@@ -207,6 +259,7 @@ public sealed class AddonDisableStatePipelineTests : IDisposable
 
     private void WriteNoMountFile(params string[] disabledIds)
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(NoMountPath)!);
         var builder = new System.Text.StringBuilder();
         builder.AppendLine("\"addonnomount\"");
         builder.AppendLine("{");

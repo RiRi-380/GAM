@@ -93,6 +93,53 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
     }
 
     [Fact]
+    public async Task SubscribeExcludeAllReasonNamesEveryExclusionAuthority()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: true,
+            desiredEnabled: false,
+            enabledBySubscribe: false,
+            reason: AddonStateResolutionReason.Excluded,
+            enabledByAssets: new[]
+            {
+                new ResolvedAddonStateSource("fps", "FPS")
+            },
+            excludedByAssets: new[]
+            {
+                new ResolvedAddonStateSource(
+                    SystemAssetDefinitions.SubscribeId,
+                    SystemAssetDefinitions.SubscribeName),
+                new ResolvedAddonStateSource(
+                    SystemAssetDefinitions.GmodDisabledId,
+                    SystemAssetDefinitions.GmodDisabledName)
+            });
+        var previousLanguage = LocalizationManager.Instance.CurrentLanguage;
+
+        try
+        {
+            LocalizationManager.Instance.ChangeLanguage("en-US");
+            addon.RefreshRuntimeState(
+                resolved,
+                actualState: false,
+                hasQueuedRuntimeApply: false);
+            Assert.Contains("All subscribed addons excluded", addon.StateReasonText);
+            Assert.Contains(SystemAssetDefinitions.SubscribeName, addon.StateReasonText);
+            Assert.Contains(SystemAssetDefinitions.GmodDisabledName, addon.StateReasonText);
+
+            LocalizationManager.Instance.ChangeLanguage("ja-JP");
+            Assert.Contains("すべて除外", addon.StateReasonText);
+            Assert.Contains(SystemAssetDefinitions.SubscribeName, addon.StateReasonText);
+        }
+        finally
+        {
+            LocalizationManager.Instance.ChangeLanguage(previousLanguage);
+        }
+    }
+
+    [Fact]
     public async Task ActualStateFilterDoesNotTreatUnknownAsEnabled()
     {
         using var manager = await CreateManagerAsync();

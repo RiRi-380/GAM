@@ -37,6 +37,62 @@ public sealed class AssetStateResolverTests
     }
 
     [Fact]
+    public void Resolve_DisabledSubscribe_DoesNotVetoEnabledCustomAsset()
+    {
+        var subscribe = CreateSubscribe(AddonState.Disabled);
+        var enabled = CreateCustom("fps", "FPS", AddonState.Enabled, AddonId);
+
+        var result = Resolve(AddonId, [subscribe, enabled], AddonId);
+
+        Assert.True(result.DesiredEnabled);
+        Assert.False(result.EnabledBySubscribe);
+        Assert.Equal(AddonStateResolutionReason.Enabled, result.Reason);
+        Assert.Equal("fps", Assert.Single(result.EnabledByAssets).AssetId);
+        Assert.Empty(result.ExcludedByAssets);
+    }
+
+    [Fact]
+    public void Resolve_ExcludedSubscribe_VetoesEveryEnabledSourceAndReportsAllExclusions()
+    {
+        var subscribe = CreateSubscribe(AddonState.Excluded);
+        var enabled = CreateCustom("fps", "FPS", AddonState.Enabled, AddonId);
+        var gmodDisabled = new Asset(
+            SystemAssetDefinitions.GmodDisabledName,
+            isSystem: true)
+        {
+            Id = SystemAssetDefinitions.GmodDisabledId,
+            Addons = [AddonId]
+        };
+        gmodDisabled.SetWholeState(AddonState.Excluded);
+
+        var result = Resolve(
+            AddonId,
+            [subscribe, enabled, gmodDisabled],
+            AddonId);
+
+        Assert.False(result.DesiredEnabled);
+        Assert.False(result.EnabledBySubscribe);
+        Assert.Equal(AddonStateResolutionReason.Excluded, result.Reason);
+        Assert.Equal("fps", Assert.Single(result.EnabledByAssets).AssetId);
+        Assert.Equal(
+            [SystemAssetDefinitions.SubscribeId, SystemAssetDefinitions.GmodDisabledId],
+            result.ExcludedByAssets.Select(source => source.AssetId));
+    }
+
+    [Fact]
+    public void Resolve_UnsubscribedAddon_SubscribeExcludedStillReportsNotSubscribed()
+    {
+        var subscribe = CreateSubscribe(AddonState.Excluded);
+
+        var result = Resolve(AddonId, [subscribe]);
+
+        Assert.False(result.IsRuntimeTarget);
+        Assert.False(result.DesiredEnabled);
+        Assert.Equal(AddonStateResolutionReason.NotSubscribed, result.Reason);
+        Assert.Empty(result.ExcludedByAssets);
+    }
+
+    [Fact]
     public void Resolve_MultipleEnabledCustomAssets_ReportsEveryContributor()
     {
         var first = CreateCustom("fps", "FPS", AddonState.Enabled, AddonId);

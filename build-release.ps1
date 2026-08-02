@@ -1,6 +1,6 @@
 # Build script for GAM - Same as GitHub Actions
 param(
-    [string]$Version = "v2.0.1",
+    [string]$Version = "v2.1.0",
     [ValidateSet("prompt", "run", "skip")]
     [string]$RunMode = "prompt"
 )
@@ -32,7 +32,7 @@ if (Test-Path "dist") {
 
 # Restore dependencies
 Write-Host "Restoring dependencies..." -ForegroundColor Yellow
-dotnet restore
+dotnet restore GmodAddonManager.sln '-p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904'
 
 # Build a self-contained, multi-file application. Do not switch this back to a
 # single-file bundle: native libraries are extracted to %TEMP%\.net before startup.
@@ -46,8 +46,10 @@ dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
     @versionProps `
     -o publish
 
-# Include license in portable/installer outputs
-Copy-Item "LICENSE" -Destination "publish\\LICENSE" -Force
+# Include and validate all distribution licenses/notices.
+& "$PSScriptRoot\scripts\prepare-release-notices.ps1" `
+    -PublishDirectory "$PSScriptRoot\publish" `
+    -ProjectAssetsPath "$PSScriptRoot\src\GmodAddonManager.UI\obj\project.assets.json"
 
 # Create portable ZIP
 Write-Host "Creating portable ZIP..." -ForegroundColor Yellow
@@ -86,7 +88,7 @@ if ($innoSetupPath) {
         $vcSignature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
         throw "VC++ Redistributable signature validation failed: $($vcSignature.Status)"
     }
-    Write-Host "✓ Visual C++ Redistributable signature is valid" -ForegroundColor Green
+    Write-Host "[OK] Visual C++ Redistributable signature is valid" -ForegroundColor Green
     
     & $innoSetupPath installer/setup.iss /DMyAppVersion=$normalizedVersion
     
