@@ -111,12 +111,10 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         RemoveSelectedAddonsCommand = ReactiveCommand.CreateFromTask(RemoveSelectedAddonsAsync);
         ToggleSortDirectionCommand = ReactiveCommand.Create(ToggleSortDirection);
 
-        // フィルタリングの設定
-        filterSubscription = this.WhenAnyValue(
-                x => x.FilterText,
-                x => x.ShowOnlyAssetAddons,
-                x => x.CurrentAsset,
-                x => x.AddonFilterIndex)
+        // Text entry is the only filter source that benefits from debounce.
+        // Asset navigation and explicit filter controls must update atomically
+        // with the surrounding UI instead of leaving the previous grid visible.
+        filterSubscription = this.WhenAnyValue(x => x.FilterText)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => ApplyFilter());
@@ -136,32 +134,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     private void InitializeFilterOptions()
     {
-        AddFilterOptions(addonTypeFilters, new (string Key, string LabelKey)[]
-        {
-            ("Gamemode", "AddonType.Gamemode"),
-            ("Map", "AddonType.Map"),
-            ("Weapon", "AddonType.Weapon"),
-            ("Vehicle", "AddonType.Vehicle"),
-            ("NPC", "AddonType.NPC"),
-            ("Tool", "AddonType.Tool"),
-            ("Entity", "AddonType.Entity"),
-            ("Effects", "AddonType.Effects"),
-            ("Model", "AddonType.Model"),
-            ("ServerContent", "AddonType.ServerContent")
-        });
+        AddFilterOptions(
+            addonTypeFilters,
+            AddonClassificationService.SupportedTypes.Select(
+                value => (Key: value, LabelKey: "AddonType." + value)));
 
-        AddFilterOptions(addonTagFilters, new (string Key, string LabelKey)[]
-        {
-            ("Build", "AddonTag.Build"),
-            ("Cartoon", "AddonTag.Cartoon"),
-            ("Comic", "AddonTag.Comic"),
-            ("Fun", "AddonTag.Fun"),
-            ("Movie", "AddonTag.Movie"),
-            ("Roleplay", "AddonTag.Roleplay"),
-            ("Scenic", "AddonTag.Scenic"),
-            ("Realism", "AddonTag.Realism"),
-            ("Water", "AddonTag.Water")
-        });
+        AddFilterOptions(
+            addonTagFilters,
+            AddonClassificationService.SupportedTags.Select(
+                value => (Key: value, LabelKey: "AddonTag." + value)));
 
     }
 
@@ -193,6 +174,17 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         if (e.PropertyName == nameof(AssetItemViewModel.Name) || string.IsNullOrEmpty(e.PropertyName))
         {
             this.RaisePropertyChanged(nameof(CurrentAssetDisplayName));
+        }
+
+        if (string.IsNullOrEmpty(e.PropertyName) ||
+            e.PropertyName == nameof(AssetItemViewModel.IsEnabledState) ||
+            e.PropertyName == nameof(AssetItemViewModel.IsDisabledState) ||
+            e.PropertyName == nameof(AssetItemViewModel.IsExcludedState))
+        {
+            foreach (var addon in AllAddons)
+            {
+                addon.SetCurrentAsset(CurrentAsset);
+            }
         }
     }
 
@@ -243,11 +235,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     private void RefreshSortModeOptions()
     {
-        var japanese = LocalizationManager.Instance.CurrentLanguage
-            .StartsWith("ja", StringComparison.OrdinalIgnoreCase);
-        var labels = japanese
-            ? new[] { "最近購読", "名前", "容量", "Workshop更新" }
-            : new[] { "Recently subscribed", "Name", "Size", "Workshop updated" };
+        var labels = new[]
+        {
+            L.Get("AddonGrid.SortMode.SubscriptionTime"),
+            L.Get("AddonGrid.SortMode.Name"),
+            L.Get("AddonGrid.SortMode.Size"),
+            L.Get("AddonGrid.SortMode.WorkshopUpdated")
+        };
 
         sortModeOptions.Clear();
         foreach (var label in labels)
@@ -362,29 +356,63 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         {
             try
             {
-                await SupplementMissingTagsAndTypesAsync(cts.Token);
+                await SupplementWorkshopMetadataAsync(cts.Token);
             }
             catch (Exception ex)
             {
-                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementMissingTagsAndTypesAsync", ex);
+                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementWorkshopMetadataAsync", ex);
             }
         });
     }
 
-    private async Task SupplementMissingTagsAndTypesAsync(CancellationToken token)
+    private async Task SupplementWorkshopMetadataAsync(CancellationToken token)
     {
-        List<AddonItemViewModel> targets;
+        List<MetadataSupplementTarget> targets;
         try
         {
             targets = await Dispatcher.UIThread.InvokeAsync(() =>
-                AllAddons.Where(NeedsMetadataSupplement).ToList());
+            {
+                var config = addonManager.GetConfiguration();
+                var viewModelsById = AllAddons.ToDictionary(
+                    addon => addon.AddonId,
+                    StringComparer.Ordinal);
+                var targetIds = new HashSet<string>(
+                    AllAddons
+                        .Where(NeedsMetadataSupplement)
+                        .Select(addon => addon.AddonId),
+                    StringComparer.Ordinal);
+
+                // A subscribed item with an empty/invalid local payload is not
+                // represented by an AddonItemViewModel. Its persisted Workshop
+                // metadata still needs repair even though it must stay out of the
+                // visible inventory until Steam finishes the payload.
+                foreach (var metadata in config.AddonMetadata.Values)
+                {
+                    if (currentSubscribedAddonIds.Contains(metadata.Id) &&
+                        IsWorkshopMetadata(metadata) &&
+                        WorkshopMetadataMergeService.NeedsSupplement(metadata))
+                    {
+                        targetIds.Add(metadata.Id);
+                    }
+                }
+
+                return targetIds
+                    .Where(config.AddonMetadata.ContainsKey)
+                    .Select(addonId => new MetadataSupplementTarget(
+                        addonId,
+                        config.AddonMetadata[addonId],
+                        viewModelsById.TryGetValue(addonId, out var viewModel)
+                            ? viewModel
+                            : null))
+                    .ToList();
+            });
         }
         catch (Exception ex)
         {
             if (!metadataSupplementUiSnapshotErrorLogged)
             {
                 metadataSupplementUiSnapshotErrorLogged = true;
-                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementMissingTagsAndTypesAsync.UIThreadSnapshot", ex);
+                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementWorkshopMetadataAsync.UIThreadSnapshot", ex);
             }
 
             return;
@@ -405,10 +433,10 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             if (!metadataSupplementCacheReadErrorLogged)
             {
                 metadataSupplementCacheReadErrorLogged = true;
-                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementMissingTagsAndTypesAsync.CacheRead", ex);
+                SafeFileLogger.TryLogException("AddonGridViewModel.SupplementWorkshopMetadataAsync.CacheRead", ex);
             }
 
-            return;
+            cacheDetails = new Dictionary<string, WorkshopItemInfo>(StringComparer.Ordinal);
         }
 
         if (token.IsCancellationRequested)
@@ -419,111 +447,139 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         var seeds = new Dictionary<string, MetadataSupplementSeed>(StringComparer.Ordinal);
         var missingTagIds = new List<string>();
 
-        foreach (var addon in targets)
+        foreach (var target in targets)
         {
             if (token.IsCancellationRequested)
             {
                 return;
             }
 
-            cacheDetails.TryGetValue(addon.AddonId, out var info);
+            var metadata = target.Metadata;
+            cacheDetails.TryGetValue(target.AddonId, out var info);
 
-            var seed = new MetadataSupplementSeed(addon.AddonId);
+            var seed = new MetadataSupplementSeed(target.AddonId);
             string[]? tagsToApply = null;
             string? typeToApply = null;
 
-            if (!HasTagValues(addon.Tags) || string.IsNullOrWhiteSpace(addon.Type))
+            if (!HasTagValues(metadata.Tags) || string.IsNullOrWhiteSpace(metadata.Type))
             {
-                if (TryReadAddonJsonMetadata(addon, out var jsonType, out var jsonTags))
+                if (TryReadAddonJsonMetadata(target.ViewModel, out var jsonType, out var jsonTags))
                 {
-                    if (!HasTagValues(addon.Tags) && jsonTags != null && jsonTags.Length > 0)
+                    if (!HasTagValues(metadata.Tags) && jsonTags != null && jsonTags.Length > 0)
                     {
                         tagsToApply = NormalizeTags(jsonTags);
                     }
 
-                    if (string.IsNullOrWhiteSpace(addon.Type) && !string.IsNullOrWhiteSpace(jsonType))
+                    if (string.IsNullOrWhiteSpace(metadata.Type) && !string.IsNullOrWhiteSpace(jsonType))
                     {
                         typeToApply = jsonType;
                     }
                 }
             }
 
-            if (!HasTagValues(addon.Tags) && tagsToApply == null && info != null)
+            if (!HasTagValues(metadata.Tags) && tagsToApply == null && info != null)
             {
                 tagsToApply = ParseNormalizedTags(info.Tags);
             }
 
             seed.Tags = tagsToApply;
             seed.Type = typeToApply;
-            seeds[addon.AddonId] = seed;
+            seeds[target.AddonId] = seed;
 
-            if (!HasTagValues(addon.Tags) && tagsToApply == null)
+            if (!HasTagValues(metadata.Tags) && tagsToApply == null)
             {
-                missingTagIds.Add(addon.AddonId);
+                missingTagIds.Add(target.AddonId);
             }
         }
 
-        var webTags = new Dictionary<string, string[]?>(StringComparer.Ordinal);
-        if (missingTagIds.Count > 0 && !token.IsCancellationRequested)
+        var targetIds = targets
+            .Select(target => target.AddonId)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var detailsMap = new Dictionary<string, WorkshopItemDetails>(StringComparer.Ordinal);
+        if (!token.IsCancellationRequested)
         {
             try
             {
                 var workshopService = addonManager.GetSteamWorkshopService();
-                var detailsMap = await workshopService.GetWorkshopDetailsBatchAsync(
-                    missingTagIds,
+                detailsMap = await workshopService.GetWorkshopDetailsBatchAsync(
+                    targetIds,
                     token,
                     treatAsHot: false,
-                    requireTags: true);
-                foreach (var kvp in detailsMap)
+                    requireTags: false);
+
+                var tagsStillMissing = missingTagIds
+                    .Where(addonId =>
+                        !detailsMap.TryGetValue(addonId, out var details) ||
+                        !HasTagValues(details.Tags))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                if (tagsStillMissing.Count > 0 && !token.IsCancellationRequested)
                 {
-                    var normalizedTags = NormalizeTags(kvp.Value.Tags);
-                    if (normalizedTags != null && normalizedTags.Length > 0)
+                    var tagDetails = await workshopService.GetWorkshopDetailsBatchAsync(
+                        tagsStillMissing,
+                        token,
+                        treatAsHot: false,
+                        requireTags: true);
+                    foreach (var kvp in tagDetails)
                     {
-                        webTags[kvp.Key] = normalizedTags;
+                        detailsMap[kvp.Key] = kvp.Value;
                     }
                 }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception ex)
             {
                 if (!metadataSupplementWebErrorLogged)
                 {
                     metadataSupplementWebErrorLogged = true;
-                    SafeFileLogger.TryLogException("AddonGridViewModel.SupplementMissingTagsAndTypesAsync.WebFetch", ex);
+                    SafeFileLogger.TryLogException("AddonGridViewModel.SupplementWorkshopMetadataAsync.WebFetch", ex);
                 }
             }
         }
 
         var updates = new List<MetadataSupplementUpdate>();
-        foreach (var addon in targets)
+        foreach (var target in targets)
         {
             if (token.IsCancellationRequested)
             {
                 return;
             }
 
-            if (!seeds.TryGetValue(addon.AddonId, out var seed))
+            if (!seeds.TryGetValue(target.AddonId, out var seed))
             {
                 continue;
             }
 
             var tagsToApply = seed.Tags;
-            if (tagsToApply == null && webTags.TryGetValue(addon.AddonId, out var webTagsForAddon))
+            detailsMap.TryGetValue(target.AddonId, out var details);
+            if (tagsToApply == null && details != null)
             {
-                tagsToApply = webTagsForAddon;
+                tagsToApply = NormalizeTags(details.Tags);
             }
 
             var typeToApply = seed.Type;
-            if (string.IsNullOrWhiteSpace(addon.Type) && string.IsNullOrWhiteSpace(typeToApply))
+            if (string.IsNullOrWhiteSpace(target.Metadata.Type) && string.IsNullOrWhiteSpace(typeToApply))
             {
-                typeToApply = InferTypeFromTags(tagsToApply ?? addon.Tags?.ToArray());
+                typeToApply = AddonClassificationService.InferTypeFromTags(
+                    tagsToApply ?? target.Metadata.Tags?.ToArray());
             }
 
-            if (tagsToApply == null && string.IsNullOrWhiteSpace(typeToApply))
+            if (details == null &&
+                tagsToApply == null &&
+                string.IsNullOrWhiteSpace(typeToApply))
             {
                 continue;
             }
 
-            updates.Add(new MetadataSupplementUpdate(addon.AddonId, tagsToApply, typeToApply));
+            updates.Add(new MetadataSupplementUpdate(
+                target.AddonId,
+                details,
+                tagsToApply,
+                typeToApply));
         }
 
         if (updates.Count == 0 || token.IsCancellationRequested)
@@ -532,10 +588,12 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         var configUpdated = false;
+        var classificationUpdated = false;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             var config = addonManager.GetConfiguration();
             var addonsById = AllAddons.ToDictionary(a => a.AddonId, StringComparer.Ordinal);
+            var metadataMerger = new WorkshopMetadataMergeService();
 
             foreach (var update in updates)
             {
@@ -544,35 +602,43 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                     return;
                 }
 
+                if (!config.AddonMetadata.TryGetValue(update.AddonId, out var metadata))
+                {
+                    continue;
+                }
+
+                var changes = metadataMerger.Merge(
+                    metadata,
+                    update.Details,
+                    update.Tags,
+                    update.Type);
+                if (changes == WorkshopMetadataMergeChanges.None)
+                {
+                    continue;
+                }
+
+                config.AddonMetadata[update.AddonId] = metadata;
+                configUpdated = true;
+                classificationUpdated |=
+                    changes.HasFlag(WorkshopMetadataMergeChanges.Tags) ||
+                    changes.HasFlag(WorkshopMetadataMergeChanges.Type);
+
                 if (addonsById.TryGetValue(update.AddonId, out var addonVm))
                 {
-                    var applyTags = !HasTagValues(addonVm.Tags) ? update.Tags : null;
-                    var applyType = string.IsNullOrWhiteSpace(addonVm.Type) ? update.Type : null;
+                    if (changes.HasFlag(WorkshopMetadataMergeChanges.Title))
+                    {
+                        addonVm.UpdateTitle(metadata.Title);
+                    }
+
+                    var applyTags = changes.HasFlag(WorkshopMetadataMergeChanges.Tags)
+                        ? metadata.Tags
+                        : null;
+                    var applyType = changes.HasFlag(WorkshopMetadataMergeChanges.Type)
+                        ? metadata.Type
+                        : null;
                     if (applyTags != null || !string.IsNullOrWhiteSpace(applyType))
                     {
                         addonVm.UpdateTagsAndType(applyTags, applyType);
-                    }
-                }
-
-                if (config.AddonMetadata.TryGetValue(update.AddonId, out var metadata))
-                {
-                    var metadataChanged = false;
-                    if (update.Tags != null && update.Tags.Length > 0 && !HasTagValues(metadata.Tags))
-                    {
-                        metadata.Tags = update.Tags;
-                        metadataChanged = true;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(update.Type) && string.IsNullOrWhiteSpace(metadata.Type))
-                    {
-                        metadata.Type = update.Type;
-                        metadataChanged = true;
-                    }
-
-                    if (metadataChanged)
-                    {
-                        config.AddonMetadata[update.AddonId] = metadata;
-                        configUpdated = true;
                     }
                 }
             }
@@ -583,13 +649,21 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             try
             {
                 await addonManager.SaveConfigurationAsync();
+                if (classificationUpdated)
+                {
+                    await addonManager.ReconcileSmartAssetsAsync();
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        ViewModelLocator.AssetListViewModel?.RefreshAssetStates();
+                    });
+                }
             }
             catch (Exception ex)
             {
                 if (!metadataSupplementSaveErrorLogged)
                 {
                     metadataSupplementSaveErrorLogged = true;
-                    SafeFileLogger.TryLogException("AddonGridViewModel.SupplementMissingTagsAndTypesAsync.SaveConfiguration", ex);
+                    SafeFileLogger.TryLogException("AddonGridViewModel.SupplementWorkshopMetadataAsync.SaveConfiguration", ex);
                 }
             }
         }
@@ -607,7 +681,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             return false;
         }
 
-        return !HasTagValues(addon.Tags) || string.IsNullOrWhiteSpace(addon.Type);
+        return WorkshopMetadataMergeService.NeedsSupplement(addon.SortSource);
+    }
+
+    private static bool IsWorkshopMetadata(WorkshopAddon metadata)
+    {
+        return metadata != null &&
+               !metadata.IsLocal &&
+               ulong.TryParse(metadata.Id, out var workshopId) &&
+               workshopId > 0;
     }
 
     private static bool HasTagValues(IEnumerable<string>? tags)
@@ -617,32 +699,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     private static string[]? NormalizeTags(IEnumerable<string>? tags)
     {
-        if (tags == null)
-        {
-            return null;
-        }
-
-        var normalized = new HashSet<string>(StringComparer.Ordinal);
-        var results = new List<string>();
-
-        foreach (var tag in tags)
-        {
-            foreach (var part in SplitTagValue(tag))
-            {
-                var value = NormalizeTag(part);
-                if (string.IsNullOrEmpty(value))
-                {
-                    continue;
-                }
-
-                if (normalized.Add(value))
-                {
-                    results.Add(value);
-                }
-            }
-        }
-
-        return results.Count == 0 ? null : results.ToArray();
+        var normalized = AddonClassificationService.NormalizeTags(tags);
+        return normalized.Length == 0 ? null : normalized;
     }
 
     private static string[]? ParseNormalizedTags(string? tagsValue)
@@ -652,27 +710,10 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             return null;
         }
 
-        var normalized = new HashSet<string>(StringComparer.Ordinal);
-        var results = new List<string>();
-
-        foreach (var part in SplitTagValue(tagsValue))
-        {
-            var tag = NormalizeTag(part);
-            if (string.IsNullOrEmpty(tag))
-            {
-                continue;
-            }
-
-            if (normalized.Add(tag))
-            {
-                results.Add(tag);
-            }
-        }
-
-        return results.Count == 0 ? null : results.ToArray();
+        return NormalizeTags(new[] { tagsValue });
     }
 
-    private static bool TryReadAddonJsonMetadata(AddonItemViewModel addon, out string? type, out string[]? tags)
+    private static bool TryReadAddonJsonMetadata(AddonItemViewModel? addon, out string? type, out string[]? tags)
     {
         type = null;
         tags = null;
@@ -811,16 +852,39 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     private sealed class MetadataSupplementUpdate
     {
-        public MetadataSupplementUpdate(string addonId, string[]? tags, string? type)
+        public MetadataSupplementUpdate(
+            string addonId,
+            WorkshopItemDetails? details,
+            string[]? tags,
+            string? type)
         {
             AddonId = addonId;
+            Details = details;
             Tags = tags;
             Type = type;
         }
 
         public string AddonId { get; }
+        public WorkshopItemDetails? Details { get; }
         public string[]? Tags { get; }
         public string? Type { get; }
+    }
+
+    private sealed class MetadataSupplementTarget
+    {
+        public MetadataSupplementTarget(
+            string addonId,
+            WorkshopAddon metadata,
+            AddonItemViewModel? viewModel)
+        {
+            AddonId = addonId;
+            Metadata = metadata;
+            ViewModel = viewModel;
+        }
+
+        public string AddonId { get; }
+        public WorkshopAddon Metadata { get; }
+        public AddonItemViewModel? ViewModel { get; }
     }
 
     private sealed class MetadataSupplementSeed
@@ -878,11 +942,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         get
         {
-            var japanese = LocalizationManager.Instance.CurrentLanguage
-                .StartsWith("ja", StringComparison.OrdinalIgnoreCase);
             return sortDirection == AddonSortDirection.Ascending
-                ? japanese ? "昇順 ↑" : "Ascending ↑"
-                : japanese ? "降順 ↓" : "Descending ↓";
+                ? L.Get("AddonGrid.SortDirection.Ascending")
+                : L.Get("AddonGrid.SortDirection.Descending");
         }
     }
 
@@ -935,7 +997,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public bool ShowOnlyAssetAddons
     {
         get => showOnlyAssetAddons;
-        set => SetAndRaise(ref showOnlyAssetAddons, value);
+        set
+        {
+            if (showOnlyAssetAddons == value)
+            {
+                return;
+            }
+
+            SetAndRaise(ref showOnlyAssetAddons, value);
+            ApplyFilter();
+        }
     }
 
     public bool IsMultiSelectEnabled
@@ -979,13 +1050,19 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         {
             if (CurrentAsset?.IsSubscribeAsset == true && ShowOnlyAssetAddons)
             {
+                var visibleSubscribedCount = FilteredAddons.Count(addon =>
+                    !addon.IsLocal &&
+                    currentSubscribedAddonIds.Contains(addon.AddonId));
                 var availableCount = AllAddons.Count(addon =>
+                    !addon.IsLocal &&
                     addon.IsAvailable &&
                     currentSubscribedAddonIds.Contains(addon.AddonId));
+                var visibleLocalCount = FilteredAddons.Count(addon => addon.IsLocal);
                 return FormatSubscriptionCountDisplay(
-                    FilteredAddonsCount,
+                    visibleSubscribedCount,
                     availableCount,
                     currentSubscribedAddonIds.Count,
+                    visibleLocalCount,
                     LocalizationManager.Instance.CurrentLanguage.StartsWith(
                         "ja",
                         StringComparison.OrdinalIgnoreCase));
@@ -1052,7 +1129,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     
     public bool CanRemoveFromAsset => HasSelectedAddons && 
                                       currentAsset != null && 
-                                      !currentAsset.IsSystem;
+                                      !currentAsset.IsSystem &&
+                                      !currentAsset.IsSmart;
     
     public int AddonFilterIndex
     {
@@ -1064,6 +1142,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 addonFilterIndex = value;
                 this.RaisePropertyChanged(nameof(AddonFilterIndex));
                 this.RaisePropertyChanged(nameof(AddonCountDisplay));
+                ApplyFilter();
             }
         }
     }
@@ -1163,63 +1242,19 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         addonList = addonList
-            .Where(addon => !addon.IsLocal && !addon.IsDownloadPending)
+            .Where(addon => !addon.IsDownloadPending)
             .ToList();
 
         var config = addonManager.GetConfiguration();
         var subscribedAddonIds = new HashSet<string>(
             addonManager.GetResolvedAddonStates().Keys,
             StringComparer.Ordinal);
-        var loadedAddonIds = new HashSet<string>(
-            addonList.Select(addon => addon.Id),
-            StringComparer.Ordinal);
-
-        // Only confirmed-unsubscribed references retained by custom assets get a
-        // synthetic unavailable card. Subscribed-but-pending IDs stay aggregate-only.
-        var customAssetAddonIds = config.Assets
-            .Where(asset => !asset.IsSystem)
-            .SelectMany(asset => asset.Addons)
-            .Where(addonId => addonId != "*")
-            .Distinct(StringComparer.Ordinal);
-
-        foreach (var addonId in customAssetAddonIds)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (loadedAddonIds.Contains(addonId) ||
-                addonManager.IsLocalAddonId(addonId) ||
-                !config.AddonMetadata.TryGetValue(addonId, out var metadata) ||
-                !ShouldAddRetainedMissingAddon(
-                    config.RetainMissingAssetReferences,
-                    config.SubscriptionBaselineInitialized,
-                    metadata,
-                    subscribedAddonIds.Contains(addonId)))
-            {
-                continue;
-            }
-
-            addonList.Add(new WorkshopAddon(metadata.Id, metadata.FolderPath)
-            {
-                Title = metadata.Title,
-                Size = metadata.Size,
-                LastUpdated = metadata.LastUpdated,
-                ThumbnailUrl = metadata.ThumbnailUrl,
-                Author = metadata.Author,
-                IsEnabled = metadata.IsEnabled,
-                Description = metadata.Description,
-                Type = metadata.Type,
-                Tags = metadata.Tags,
-                IsGmaFile = metadata.IsGmaFile,
-                NeedsTitleUpdate = metadata.NeedsTitleUpdate,
-                IsFavorite = metadata.IsFavorite,
-                IsLocal = metadata.IsLocal,
-                LocalMountPath = metadata.LocalMountPath,
-                LocalManagedPath = metadata.LocalManagedPath,
-                FirstSeenSubscribedAtUtc = metadata.FirstSeenSubscribedAtUtc,
-                WorkshopUpdatedAtUtc = metadata.WorkshopUpdatedAtUtc,
-                IsAvailable = false,
-                IsDownloadPending = false
-            });
-        }
+        AddRetainedMissingAddons(
+            addonList,
+            config,
+            subscribedAddonIds,
+            addonManager.IsLocalAddonId,
+            cancellationToken);
 
         var sortedAddons = addonSortService.Sort(addonList, sortOptions).ToList();
         return new PreparedAddonInventory(sortedAddons, subscribedAddonIds);
@@ -1321,7 +1356,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                         CurrentAsset.Id,
                         assetAddonIds,
                         addon.AddonId,
-                        currentSubscribedAddonIds));
+                        currentSubscribedAddonIds,
+                        addon.IsLocal));
                 }
             }
 
@@ -1409,10 +1445,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         {
             if (option != null && option.IsSelected)
             {
-                var normalized = NormalizeTag(option.Key);
-                if (!string.IsNullOrEmpty(normalized))
+                if (!string.IsNullOrWhiteSpace(option.Key))
                 {
-                    selected.Add(normalized);
+                    selected.Add(option.Key);
                 }
             }
         }
@@ -1454,233 +1489,27 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             return false;
         }
 
-        var addonTags = BuildAddonTagSet(addon);
-
-        if (selectedTypeFilters.Count > 0 && !MatchesType(addon, selectedTypeFilters, addonTags))
+        if (selectedTypeFilters.Count > 0 &&
+            !selectedTypeFilters.Any(value =>
+                AddonClassificationService.Evaluate(
+                    addon.SortSource,
+                    new AssetMembershipRule(AssetMembershipRuleKind.Type, value)) ==
+                AddonClassificationMatch.Match))
         {
             return false;
         }
 
-        if (selectedAddonTags.Count > 0 && !ContainsAny(addonTags, selectedAddonTags))
+        if (selectedAddonTags.Count > 0 &&
+            !selectedAddonTags.Any(value =>
+                AddonClassificationService.Evaluate(
+                    addon.SortSource,
+                    new AssetMembershipRule(AssetMembershipRuleKind.Tag, value)) ==
+                AddonClassificationMatch.Match))
         {
             return false;
         }
 
         return true;
-    }
-
-    private static HashSet<string> BuildAddonTagSet(AddonItemViewModel addon)
-    {
-        var tags = new HashSet<string>(StringComparer.Ordinal);
-
-        if (addon.Tags == null)
-        {
-            return tags;
-        }
-
-        foreach (var tag in addon.Tags)
-        {
-            foreach (var part in SplitTagValue(tag))
-            {
-                var normalized = NormalizeTag(part);
-                if (!string.IsNullOrEmpty(normalized))
-                {
-                    tags.Add(normalized);
-                }
-            }
-        }
-
-        return tags;
-    }
-
-    private static IEnumerable<string> SplitTagValue(string? tagValue)
-    {
-        if (string.IsNullOrWhiteSpace(tagValue))
-        {
-            yield break;
-        }
-
-        var separators = (tagValue.Contains(',') || tagValue.Contains(';'))
-            ? new[] { ',', ';' }
-            : new[] { ' ', '\t', '\r', '\n' };
-
-        foreach (var part in tagValue.Split(separators, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = part.Trim();
-            if (!string.IsNullOrWhiteSpace(trimmed))
-            {
-                yield return trimmed;
-            }
-        }
-    }
-
-    private static readonly (string Tag, string Type)[] TypeTagMappings =
-    {
-        ("gamemode", "Gamemode"),
-        ("map", "Map"),
-        ("weapon", "Weapon"),
-        ("vehicle", "Vehicle"),
-        ("npc", "NPC"),
-        ("tool", "Tool"),
-        ("entity", "Entity"),
-        ("effect", "Effects"),
-        ("effects", "Effects"),
-        ("model", "Model"),
-        ("servercontent", "ServerContent")
-    };
-
-    private static string? InferTypeFromTags(IEnumerable<string>? tags)
-    {
-        if (tags == null)
-        {
-            return null;
-        }
-
-        var tagSet = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var tag in tags)
-        {
-            foreach (var part in SplitTagValue(tag))
-            {
-                var normalized = NormalizeTag(part);
-                if (!string.IsNullOrEmpty(normalized))
-                {
-                    tagSet.Add(normalized);
-                }
-            }
-        }
-
-        if (tagSet.Count == 0)
-        {
-            return null;
-        }
-
-        foreach (var mapping in TypeTagMappings)
-        {
-            var key = NormalizeTag(mapping.Tag);
-            if (ContainsMatch(tagSet, key))
-            {
-                return mapping.Type;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool MatchesType(AddonItemViewModel addon, HashSet<string> selectedTypeFilters, HashSet<string> addonTags)
-    {
-        var typeKey = NormalizeTag(addon.Type);
-        var hasTypeKey = !string.IsNullOrEmpty(typeKey);
-        HashSet<string>? typeKeySet = hasTypeKey
-            ? new HashSet<string>(StringComparer.Ordinal) { typeKey }
-            : null;
-
-        foreach (var selected in selectedTypeFilters)
-        {
-            if (hasTypeKey)
-            {
-                if (string.Equals(typeKey, selected, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                if (typeKeySet != null && ContainsMatch(typeKeySet, selected))
-                {
-                    return true;
-                }
-            }
-
-            if (ContainsMatch(addonTags, selected))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool ContainsAny(HashSet<string> addonTags, HashSet<string> selectedTags)
-    {
-        foreach (var selected in selectedTags)
-        {
-            if (ContainsMatch(addonTags, selected))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool ContainsMatch(HashSet<string> tagSet, string key)
-    {
-        if (tagSet.Contains(key))
-        {
-            return true;
-        }
-
-        if (key.EndsWith("s", StringComparison.Ordinal) && key.Length > 1)
-        {
-            var singular = key.Substring(0, key.Length - 1);
-            if (tagSet.Contains(singular))
-            {
-                return true;
-            }
-        }
-        else
-        {
-            var plural = key + "s";
-            if (tagSet.Contains(plural))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static readonly Dictionary<string, string> TagAliases = new(StringComparer.Ordinal)
-    {
-        { "scenery", "scenic" },
-        { "roleplaying", "roleplay" },
-        { "rp", "roleplay" },
-        { "pose", "posed" }
-    };
-
-    private static string NormalizeTag(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var trimmed = value.Trim();
-        if (trimmed.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        var buffer = new char[trimmed.Length];
-        var length = 0;
-        foreach (var ch in trimmed)
-        {
-            if (char.IsWhiteSpace(ch) || ch == '_' || ch == '-' || ch == '/')
-            {
-                continue;
-            }
-
-            buffer[length++] = char.ToLowerInvariant(ch);
-        }
-
-        var normalized = length == buffer.Length
-            ? new string(buffer)
-            : new string(buffer, 0, length);
-
-        if (TagAliases.TryGetValue(normalized, out var alias))
-        {
-            return alias;
-        }
-
-        return normalized;
     }
 
     public void SetCurrentAsset(AssetItemViewModel? asset)
@@ -1701,7 +1530,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         CurrentAsset = asset;
-        ShowOnlyAssetAddons = asset != null;
+        var nextShowOnlyAssetAddons = asset != null;
+        if (showOnlyAssetAddons != nextShowOnlyAssetAddons)
+        {
+            showOnlyAssetAddons = nextShowOnlyAssetAddons;
+            this.RaisePropertyChanged(nameof(ShowOnlyAssetAddons));
+        }
+
+        // Keep Asset-list navigation and the Addon grid in one UI transaction.
+        // Search text remains debounced independently above.
+        ApplyFilter();
 
         // デバッグ用ログ（起動時の問題調査）
         if (asset == null)
@@ -1725,7 +1563,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public void SelectAddon(string addonId, bool isControlPressed = false)
     {
         var addon = FilteredAddons.FirstOrDefault(a => a.AddonId == addonId);
-        if (addon != null)
+        if (addon != null && !addon.IsLocal)
         {
             if (IsSelectionMode || (IsMultiSelectEnabled && isControlPressed))
             {
@@ -1781,7 +1619,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public ObservableCollection<AddonItemViewModel> GetSelectedAddons()
     {
         return new ObservableCollection<AddonItemViewModel>(
-            FilteredAddons.Where(a => a.IsSelected)
+            FilteredAddons.Where(a => a.IsSelected && !a.IsLocal)
         );
     }
 
@@ -1871,7 +1709,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             if (addon.IsThumbnailLoading)
             {
-                await addon.LoadThumbnailAsync(allowRemote);
+                await addon.LoadThumbnailAsync(allowRemote, token);
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
             }
             if (loadDetails && !addon.IsDetailsLoaded)
             {
@@ -2126,7 +1968,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var selectedAddons = GetSelectedAddons();
+            var selectedAddons = new ObservableCollection<AddonItemViewModel>(
+                GetSelectedAddons().Where(addon => !addon.IsLocal));
             if (selectedAddons.Count == 0)
             {
                 return;
@@ -2141,6 +1984,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
             var targetAssets = assetListVm.Assets
                 .Where(asset => !asset.IsSystem)
+                .Where(asset => !asset.IsSmart)
                 .OrderBy(asset => asset.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToList();
 
@@ -2216,9 +2060,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            // logger.LogError("Failed to show asset selection dialog", ex); // Removed logging
+            SafeFileLogger.TryLogException(
+                "AddonGridViewModel.ShowAssetSelectionDialogAsync",
+                ex);
             var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.AssetSelectionDialogFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.AssetSelectionDialogFailed", ex.Message));
         }
     }
 
@@ -2438,7 +2286,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             // 全てのフィルタリングされたアドオンを選択
             foreach (var addon in FilteredAddons)
             {
-                if (!addon.IsSelected)
+                if (!addon.IsLocal && !addon.IsSelected)
                 {
                     addon.IsSelected = true;
                     selectedAddonIds.Add(addon.AddonId);
@@ -2470,6 +2318,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         try
         {
             if (currentAsset == null || currentAsset.IsSystem) return;
+            if (currentAsset.IsSmart) return;
             
             var selectedAddons = GetSelectedAddons();
             if (selectedAddons.Count == 0) return;
@@ -2509,8 +2358,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
+            SafeFileLogger.TryLogException(
+                "AddonGridViewModel.RemoveSelectedAddonsFromAssetAsync",
+                ex);
             var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.RemoveAddonFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.RemoveAddonFailed", ex.Message));
         }
     }
     private void RefreshRuntimeStates()
@@ -2558,22 +2412,90 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                !metadata.IsDownloadPending;
     }
 
+    private static void AddRetainedMissingAddons(
+        IList<WorkshopAddon> addonList,
+        Configuration config,
+        IReadOnlySet<string> subscribedAddonIds,
+        Func<string, bool> isLocalAddonId,
+        CancellationToken cancellationToken)
+    {
+        var loadedAddonIds = new HashSet<string>(
+            addonList.Select(addon => addon.Id),
+            StringComparer.Ordinal);
+
+        // Retention is authorized by either the profile-wide setting or the
+        // owning Asset. The per-Asset authority is required for imported fixed
+        // Assets, which deliberately preserve unavailable Workshop references.
+        var retainedAddonIds = config.Assets
+            .Where(asset =>
+                !asset.IsSystem &&
+                (config.RetainMissingAssetReferences || asset.RetainMissingReferences))
+            .SelectMany(asset => asset.Addons)
+            .Where(addonId => addonId != "*")
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var addonId in retainedAddonIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (loadedAddonIds.Contains(addonId) ||
+                isLocalAddonId(addonId) ||
+                !config.AddonMetadata.TryGetValue(addonId, out var metadata) ||
+                !ShouldAddRetainedMissingAddon(
+                    retainMissingReferences: true,
+                    config.SubscriptionBaselineInitialized,
+                    metadata,
+                    subscribedAddonIds.Contains(addonId)))
+            {
+                continue;
+            }
+
+            addonList.Add(new WorkshopAddon(metadata.Id, metadata.FolderPath)
+            {
+                Title = metadata.Title,
+                Size = metadata.Size,
+                LastUpdated = metadata.LastUpdated,
+                ThumbnailUrl = metadata.ThumbnailUrl,
+                Author = metadata.Author,
+                IsEnabled = metadata.IsEnabled,
+                Description = metadata.Description,
+                Type = metadata.Type,
+                Tags = metadata.Tags,
+                IsGmaFile = metadata.IsGmaFile,
+                NeedsTitleUpdate = metadata.NeedsTitleUpdate,
+                IsFavorite = metadata.IsFavorite,
+                IsLocal = metadata.IsLocal,
+                LocalMountPath = metadata.LocalMountPath,
+                LocalManagedPath = metadata.LocalManagedPath,
+                FirstSeenSubscribedAtUtc = metadata.FirstSeenSubscribedAtUtc,
+                WorkshopUpdatedAtUtc = metadata.WorkshopUpdatedAtUtc,
+                IsAvailable = false,
+                IsDownloadPending = false
+            });
+            loadedAddonIds.Add(addonId);
+        }
+    }
+
     private static string FormatSubscriptionCountDisplay(
         int visibleCount,
         int availableCount,
         int subscribedCount,
+        int visibleLocalCount,
         bool japanese)
     {
+        var localSuffix = visibleLocalCount > 0
+            ? japanese ? $" / ローカル {visibleLocalCount}" : $" / Local {visibleLocalCount}"
+            : string.Empty;
+
         if (visibleCount == availableCount)
         {
             return japanese
-                ? $"(利用可能 {availableCount} / 購読中 {subscribedCount})"
-                : $"(Available {availableCount} / Subscribed {subscribedCount})";
+                ? $"(利用可能 {availableCount} / 購読中 {subscribedCount}{localSuffix})"
+                : $"(Available {availableCount} / Subscribed {subscribedCount}{localSuffix})";
         }
 
         return japanese
-            ? $"(表示 {visibleCount} / 利用可能 {availableCount} / 購読中 {subscribedCount})"
-            : $"(Showing {visibleCount} / Available {availableCount} / Subscribed {subscribedCount})";
+            ? $"(表示 {visibleCount} / 利用可能 {availableCount} / 購読中 {subscribedCount}{localSuffix})"
+            : $"(Showing {visibleCount} / Available {availableCount} / Subscribed {subscribedCount}{localSuffix})";
     }
 
     private static string FormatFixedMembershipCountDisplay(
@@ -2589,8 +2511,17 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         string assetId,
         IReadOnlyCollection<string> assetAddonIds,
         string addonId,
-        IReadOnlySet<string> subscribedAddonIds)
+        IReadOnlySet<string> subscribedAddonIds,
+        bool isLocal)
     {
+        // Experimental local addons are shown beside the initial Subscribe
+        // inventory as read-only GMod-owned entries. They are not members of
+        // Subscribe Asset (or any mutable Custom Asset).
+        if (isLocal)
+        {
+            return assetId == "subscribe-system-asset";
+        }
+
         if (assetId == "subscribe-system-asset")
         {
             return subscribedAddonIds.Contains(addonId);

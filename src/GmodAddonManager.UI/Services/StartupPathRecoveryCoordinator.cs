@@ -15,6 +15,8 @@ public sealed class StartupPathRecoveryRunResult
 {
     public bool Accepted { get; init; }
     public bool ApplyRepairs { get; init; }
+    public string? ResolvedGmodInstallPath { get; init; }
+    public string? ResolvedWorkshopRootPath { get; init; }
 }
 
 public static class StartupPathRecoveryCoordinator
@@ -73,13 +75,16 @@ public static class StartupPathRecoveryCoordinator
 
         if (!decision.ShouldPrompt)
         {
-            return new StartupPathRecoveryRunResult();
+            return CreateRunResult(decision);
         }
 
         var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
         if (!result.Accepted)
         {
-            return new StartupPathRecoveryRunResult();
+            // AddonManager would perform the same automatic discovery after a
+            // declined prompt. Reuse the already validated candidates without
+            // persisting them or treating the prompt as accepted.
+            return CreateRunResult(decision);
         }
 
         settings.CustomGmodInstallPath = result.GmodInstallPath;
@@ -91,7 +96,19 @@ public static class StartupPathRecoveryCoordinator
         return new StartupPathRecoveryRunResult
         {
             Accepted = true,
-            ApplyRepairs = forcePrompt
+            ApplyRepairs = forcePrompt,
+            ResolvedGmodInstallPath = result.GmodInstallPath,
+            ResolvedWorkshopRootPath = result.WorkshopRootPath
+        };
+    }
+
+    private static StartupPathRecoveryRunResult CreateRunResult(
+        StartupPathRecoveryDecision decision)
+    {
+        return new StartupPathRecoveryRunResult
+        {
+            ResolvedGmodInstallPath = decision.DetectedGmodInstallPath,
+            ResolvedWorkshopRootPath = decision.DetectedWorkshopRootPath
         };
     }
 

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Globalization;
+using Avalonia.Headless.XUnit;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
@@ -91,6 +92,157 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         Assert.Contains("Subscribe", addon.StateReasonText);
         Assert.Contains("FPS", addon.StateReasonText);
         Assert.Contains("Recording", addon.StateReasonText);
+    }
+
+    [Fact]
+    public async Task SubscribeCardNamesTheGmodAuthorityWithoutRedundantCrossAssetChip()
+    {
+        using var manager = await CreateManagerAsync();
+        var subscribe = manager.GetConfiguration().Assets.Single(asset =>
+            asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Disabled);
+        using var subscribeViewModel = new AssetItemViewModel(
+            subscribe,
+            manager,
+            null!,
+            null!);
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: true,
+            desiredEnabled: true,
+            enabledBySubscribe: false,
+            reason: AddonStateResolutionReason.Enabled,
+            enabledByAssets:
+            [
+                new ResolvedAddonStateSource(
+                    SystemAssetDefinitions.GmodDisabledId,
+                    SystemAssetDefinitions.GmodDisabledName)
+            ],
+            excludedByAssets: Array.Empty<ResolvedAddonStateSource>());
+        var previousLanguage = LocalizationManager.Instance.CurrentLanguage;
+
+        try
+        {
+            LocalizationManager.Instance.ChangeLanguage("en-US");
+            addon.SetCurrentAsset(subscribeViewModel);
+            addon.RefreshRuntimeState(
+                resolved,
+                actualState: true,
+                hasQueuedRuntimeApply: false);
+
+            Assert.Equal("GMod: Enabled", addon.ActualStateBadgeText);
+            Assert.False(addon.HasAssetContextNotice);
+            Assert.Empty(addon.AssetContextNoticeText);
+            Assert.Contains(SystemAssetDefinitions.GmodDisabledName, addon.RuntimeStateTooltip);
+
+            LocalizationManager.Instance.ChangeLanguage("ja-JP");
+            Assert.Equal("GMod: 有効", addon.ActualStateBadgeText);
+            Assert.Empty(addon.AssetContextNoticeText);
+            Assert.Contains("GAMの希望状態", addon.RuntimeStateTooltip);
+        }
+        finally
+        {
+            LocalizationManager.Instance.ChangeLanguage(previousLanguage);
+        }
+    }
+
+    [Fact]
+    public async Task DisabledCustomAssetStillExplainsAnotherEnabledAsset()
+    {
+        using var manager = await CreateManagerAsync();
+        var neutral = new Asset("Neutral custom")
+        {
+            Id = "neutral-custom"
+        };
+        neutral.SetWholeState(AddonState.Disabled);
+        using var neutralViewModel = new AssetItemViewModel(
+            neutral,
+            manager,
+            null!,
+            null!);
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: true,
+            desiredEnabled: true,
+            enabledBySubscribe: false,
+            reason: AddonStateResolutionReason.Enabled,
+            enabledByAssets:
+            [
+                new ResolvedAddonStateSource("fps", "FPS")
+            ],
+            excludedByAssets: Array.Empty<ResolvedAddonStateSource>());
+
+        addon.SetCurrentAsset(neutralViewModel);
+        addon.RefreshRuntimeState(
+            resolved,
+            actualState: true,
+            hasQueuedRuntimeApply: false);
+
+        Assert.True(addon.HasAssetContextNotice);
+        Assert.Equal("Enabled by another Asset", addon.AssetContextNoticeText);
+    }
+
+    [Fact]
+    public async Task CardContextNoticePrioritizesQueuedApplyOverAssetContribution()
+    {
+        using var manager = await CreateManagerAsync();
+        var subscribe = manager.GetConfiguration().Assets.Single(asset =>
+            asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Disabled);
+        using var subscribeViewModel = new AssetItemViewModel(
+            subscribe,
+            manager,
+            null!,
+            null!);
+        using var addon = CreateAddonViewModel(manager);
+
+        addon.SetCurrentAsset(subscribeViewModel);
+        addon.RefreshRuntimeState(
+            CreateResolvedState(
+                desiredEnabled: false,
+                AddonStateResolutionReason.NoEnabledSource),
+            actualState: true,
+            hasQueuedRuntimeApply: true);
+
+        Assert.Equal("Pending apply", addon.AssetContextNoticeText);
+        Assert.True(addon.HasAssetContextNotice);
+    }
+
+    [Fact]
+    public async Task SubscribeEnabledStillExplainsExclusionOverride()
+    {
+        using var manager = await CreateManagerAsync();
+        var subscribe = manager.GetConfiguration().Assets.Single(asset =>
+            asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Enabled);
+        using var subscribeViewModel = new AssetItemViewModel(
+            subscribe,
+            manager,
+            null!,
+            null!);
+        using var addon = CreateAddonViewModel(manager);
+        var resolved = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: true,
+            desiredEnabled: false,
+            enabledBySubscribe: true,
+            reason: AddonStateResolutionReason.Excluded,
+            enabledByAssets: Array.Empty<ResolvedAddonStateSource>(),
+            excludedByAssets:
+            [
+                new ResolvedAddonStateSource("capture", "Capture")
+            ]);
+
+        addon.SetCurrentAsset(subscribeViewModel);
+        addon.RefreshRuntimeState(
+            resolved,
+            actualState: false,
+            hasQueuedRuntimeApply: false);
+
+        Assert.True(addon.HasAssetContextNotice);
+        Assert.Equal("Exclusion takes priority", addon.AssetContextNoticeText);
     }
 
     [Fact]
@@ -207,6 +359,47 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
     }
 
     [Fact]
+    public async Task LocalAddonUsesReadOnlyGmodPresentationInsteadOfSteamState()
+    {
+        using var manager = await CreateManagerAsync();
+        using var addon = new AddonItemViewModel(
+            new WorkshopAddon
+            {
+                Id = "local_123456789abc",
+                Title = "Local test",
+                FolderPath = rootPath,
+                IsLocal = true,
+                IsAvailable = true,
+                IsEnabled = true,
+                NeedsTitleUpdate = false
+            },
+            manager);
+        var notSubscribed = new ResolvedAddonState(
+            addon.AddonId,
+            isSubscribed: false,
+            desiredEnabled: false,
+            enabledBySubscribe: false,
+            AddonStateResolutionReason.NotSubscribed,
+            Array.Empty<ResolvedAddonStateSource>(),
+            Array.Empty<ResolvedAddonStateSource>());
+
+        addon.RefreshRuntimeState(
+            notSubscribed,
+            actualState: false,
+            hasQueuedRuntimeApply: true);
+
+        Assert.True(addon.IsLocal);
+        Assert.True(addon.ActualEnabled);
+        Assert.Equal("Enabled", addon.ActualStateText);
+        Assert.Equal("Managed by GMod", addon.DesiredStateText);
+        Assert.Equal("Local addon (read-only in GAM)", addon.StateReasonText);
+        Assert.False(addon.IsRuntimeApplyPending);
+        Assert.False(addon.IsMissing);
+        Assert.False(addon.HasWorkshopId);
+        Assert.Equal(1.0, addon.CardOpacity);
+    }
+
+    [Fact]
     public async Task SortPreferenceDefaultsToRecentDescendingAndPersistsGlobally()
     {
         using var manager = await CreateManagerAsync();
@@ -223,11 +416,28 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
                    settingsPath))
         {
             Assert.Equal(0, grid.SelectedSortModeIndex);
+            Assert.Equal(
+                new[] { "Subscription date", "Name", "Size", "Workshop updated" },
+                grid.SortModeOptions);
             Assert.Equal("Descending ↓", grid.SortDirectionLabel);
 
             grid.SelectedSortModeIndex = (int)AddonSortMode.Size;
             using var execution = grid.ToggleSortDirectionCommand.Execute().Subscribe();
             Assert.Equal("Ascending ↑", grid.SortDirectionLabel);
+
+            var previousLanguage = LocalizationManager.Instance.CurrentLanguage;
+            try
+            {
+                LocalizationManager.Instance.ChangeLanguage("ja-JP");
+                Assert.Equal(
+                    new[] { "購読日時", "名前", "容量", "Workshop更新" },
+                    grid.SortModeOptions);
+                Assert.Equal("昇順 ↑", grid.SortDirectionLabel);
+            }
+            finally
+            {
+                LocalizationManager.Instance.ChangeLanguage(previousLanguage);
+            }
         }
 
         using var restoredGrid = new AddonGridViewModel(
@@ -237,6 +447,132 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
             settingsPath);
         Assert.Equal((int)AddonSortMode.Size, restoredGrid.SelectedSortModeIndex);
         Assert.Equal("Ascending ↑", restoredGrid.SortDirectionLabel);
+    }
+
+    [AvaloniaFact]
+    public async Task AssetSwitchUpdatesVisibleMembershipWithoutWaitingForSearchDebounce()
+    {
+        using var manager = await CreateManagerAsync();
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(
+            manager,
+            Path.Combine(rootPath, "selection-grid-appdata"));
+        using var grid = new AddonGridViewModel(
+            manager,
+            pendingChangeManager,
+            processWatcher,
+            Path.Combine(rootPath, "selection-grid-sort.json"));
+        var asset = new Asset("Group child")
+        {
+            Id = "group-child",
+            Addons = ["100"]
+        };
+        manager.GetConfiguration().Assets.Add(asset);
+        using var assetViewModel = new AssetItemViewModel(
+            asset,
+            manager,
+            pendingChangeManager,
+            processWatcher);
+
+        grid.AllAddons.Add(CreateSortableAddon(
+            manager,
+            "100",
+            "Included",
+            100,
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch));
+        grid.AllAddons.Add(CreateSortableAddon(
+            manager,
+            "200",
+            "Not included",
+            200,
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch));
+        grid.ApplyFilter();
+        Assert.Equal(2, grid.FilteredAddons.Count);
+
+        grid.SetCurrentAsset(assetViewModel);
+
+        var visible = Assert.Single(grid.FilteredAddons);
+        Assert.Equal("100", visible.AddonId);
+    }
+
+    [AvaloniaFact]
+    public async Task GridSortControlsReorderTheVisibleListForEveryModeAndDirection()
+    {
+        using var manager = await CreateManagerAsync();
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(
+            manager,
+            Path.Combine(rootPath, "sort-grid-appdata"));
+        using var grid = new AddonGridViewModel(
+            manager,
+            pendingChangeManager,
+            processWatcher,
+            Path.Combine(rootPath, "sort-grid.json"));
+
+        var alpha = CreateSortableAddon(
+            manager,
+            "3",
+            "Alpha",
+            300,
+            new DateTime(2026, 1, 1, 10, 0, 0, 900, DateTimeKind.Utc).AddTicks(9),
+            new DateTime(2025, 12, 31, 23, 59, 59, 999, DateTimeKind.Utc).AddTicks(9));
+        var bravo = CreateSortableAddon(
+            manager,
+            "2",
+            "Bravo",
+            100,
+            new DateTime(2025, 12, 31, 23, 59, 59, 999, DateTimeKind.Utc).AddTicks(8),
+            new DateTime(2026, 1, 1, 10, 0, 0, 100, DateTimeKind.Utc).AddTicks(1));
+        var charlie = CreateSortableAddon(
+            manager,
+            "1",
+            "Charlie",
+            200,
+            new DateTime(2026, 1, 1, 10, 0, 0, 100, DateTimeKind.Utc).AddTicks(1),
+            new DateTime(2026, 1, 1, 10, 0, 0, 900, DateTimeKind.Utc).AddTicks(9));
+
+        grid.AllAddons.Add(alpha);
+        grid.AllAddons.Add(bravo);
+        grid.AllAddons.Add(charlie);
+        grid.ApplyFilter();
+
+        AssertModeAndBothDirections(
+            AddonSortMode.RecentlySubscribed,
+            ["Alpha", "Charlie", "Bravo"],
+            ["Bravo", "Charlie", "Alpha"]);
+        AssertModeAndBothDirections(
+            AddonSortMode.Name,
+            ["Charlie", "Bravo", "Alpha"],
+            ["Alpha", "Bravo", "Charlie"]);
+        AssertModeAndBothDirections(
+            AddonSortMode.Size,
+            ["Alpha", "Charlie", "Bravo"],
+            ["Bravo", "Charlie", "Alpha"]);
+        AssertModeAndBothDirections(
+            AddonSortMode.WorkshopUpdated,
+            ["Charlie", "Bravo", "Alpha"],
+            ["Alpha", "Bravo", "Charlie"]);
+
+        void AssertModeAndBothDirections(
+            AddonSortMode mode,
+            string[] descending,
+            string[] ascending)
+        {
+            grid.SelectedSortModeIndex = (int)mode;
+            Assert.Equal(descending, grid.FilteredAddons.Select(addon => addon.Title));
+
+            using (grid.ToggleSortDirectionCommand.Execute().Subscribe())
+            {
+                Assert.Equal(ascending, grid.FilteredAddons.Select(addon => addon.Title));
+            }
+
+            using (grid.ToggleSortDirectionCommand.Execute().Subscribe())
+            {
+                Assert.Equal(descending, grid.FilteredAddons.Select(addon => addon.Title));
+            }
+        }
     }
 
     [Fact]
@@ -303,7 +639,7 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
 
         addon.SetSortPresentationMode(AddonSortMode.RecentlySubscribed);
 
-        Assert.Equal("Subscription time unknown", addon.SortValueText);
+        Assert.Equal("Subscription date unknown", addon.SortValueText);
     }
 
     [Fact]
@@ -387,6 +723,29 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
                 Id = "123456789",
                 Title = "Test Addon",
                 FolderPath = string.Empty,
+                NeedsTitleUpdate = false
+            },
+            manager);
+    }
+
+    private static AddonItemViewModel CreateSortableAddon(
+        AddonManager manager,
+        string id,
+        string title,
+        long size,
+        DateTime firstSeenUtc,
+        DateTime workshopUpdatedUtc)
+    {
+        return new AddonItemViewModel(
+            new WorkshopAddon
+            {
+                Id = id,
+                Title = title,
+                FolderPath = string.Empty,
+                Size = size,
+                FirstSeenSubscribedAtUtc = firstSeenUtc,
+                LastUpdated = workshopUpdatedUtc,
+                WorkshopUpdatedAtUtc = workshopUpdatedUtc,
                 NeedsTitleUpdate = false
             },
             manager);

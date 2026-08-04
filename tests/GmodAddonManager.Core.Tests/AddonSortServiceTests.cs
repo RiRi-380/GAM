@@ -249,6 +249,36 @@ public sealed class AddonSortServiceTests
         Assert.Equal(new[] { "1", "2", "3" }, result.Select(addon => addon.Id));
     }
 
+    [Theory]
+    [InlineData(AddonSortMode.RecentlySubscribed)]
+    [InlineData(AddonSortMode.WorkshopUpdated)]
+    public void Sort_TimestampModesPreserveTickPrecision(AddonSortMode mode)
+    {
+        var sameMillisecond = Utc(2026, 1, 1, 12, 34, 56, 789);
+        var lower = Addon(
+            "1",
+            "Lower",
+            firstSeen: sameMillisecond.AddTicks(1),
+            workshopUpdated: sameMillisecond.AddTicks(1));
+        var higher = Addon(
+            "2",
+            "Higher",
+            firstSeen: sameMillisecond.AddTicks(9),
+            workshopUpdated: sameMillisecond.AddTicks(9));
+
+        var ascending = Sort(
+            new[] { higher, lower },
+            mode,
+            AddonSortDirection.Ascending);
+        var descending = Sort(
+            new[] { lower, higher },
+            mode,
+            AddonSortDirection.Descending);
+
+        Assert.Equal(new[] { "Lower", "Higher" }, ascending.Select(addon => addon.Title));
+        Assert.Equal(new[] { "Higher", "Lower" }, descending.Select(addon => addon.Title));
+    }
+
     [Fact]
     public void GetSortTimestampUtc_NormalizesObservedAndFallbackValues()
     {

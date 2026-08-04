@@ -9,6 +9,17 @@ public sealed class SubscriptionObservationServiceTests
     public void Observe_FirstAuthoritativeSnapshotCreatesUntimedBaseline()
     {
         var configuration = new Configuration();
+        configuration.AddonMetadata["100"] = new WorkshopAddon("100", string.Empty)
+        {
+            FirstSeenSubscribedAtUtc = new DateTime(
+                2025,
+                1,
+                2,
+                3,
+                4,
+                5,
+                DateTimeKind.Utc)
+        };
         var snapshot = new SteamWorkshopSnapshot(
             subscribedIds: ["200", "100"],
             installedIds: ["100"],
@@ -21,6 +32,7 @@ public sealed class SubscriptionObservationServiceTests
         Assert.Equal(1, result.PendingDownloadCount);
         Assert.Equal(["100", "200"], configuration.KnownSubscribedAddonIds);
         Assert.Empty(configuration.SubscriptionFirstSeenAtUtc);
+        Assert.Null(configuration.AddonMetadata["100"].FirstSeenSubscribedAtUtc);
     }
 
     [Fact]
@@ -91,5 +103,49 @@ public sealed class SubscriptionObservationServiceTests
         Assert.Equal(["200"], result.UnsubscribedIds);
         Assert.DoesNotContain("200", configuration.SubscriptionFirstSeenAtUtc.Keys);
         Assert.Null(configuration.AddonMetadata["200"].FirstSeenSubscribedAtUtc);
+    }
+
+    [Fact]
+    public void Observe_RepairsMetadataAndOrphansFromCanonicalFirstSeenHistory()
+    {
+        var canonical = new DateTime(2026, 7, 31, 1, 2, 3, DateTimeKind.Utc);
+        var stale = canonical.AddDays(-30);
+        var configuration = new Configuration
+        {
+            SubscriptionBaselineInitialized = true,
+            KnownSubscribedAddonIds = ["100", "200"],
+            SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>
+            {
+                ["100"] = canonical,
+                ["999"] = stale
+            }
+        };
+        configuration.AddonMetadata["100"] = new WorkshopAddon("100", string.Empty)
+        {
+            FirstSeenSubscribedAtUtc = stale
+        };
+        configuration.AddonMetadata["200"] = new WorkshopAddon("200", string.Empty)
+        {
+            FirstSeenSubscribedAtUtc = stale
+        };
+        configuration.AddonMetadata["999"] = new WorkshopAddon("999", string.Empty)
+        {
+            FirstSeenSubscribedAtUtc = stale
+        };
+
+        var result = new SubscriptionObservationService().Observe(
+            configuration,
+            new SteamWorkshopSnapshot(
+                ["100", "200"],
+                ["100", "200"],
+                true,
+                canonical.AddHours(1)));
+
+        Assert.True(result.Changed);
+        Assert.Equal(canonical, configuration.SubscriptionFirstSeenAtUtc["100"]);
+        Assert.DoesNotContain("999", configuration.SubscriptionFirstSeenAtUtc.Keys);
+        Assert.Equal(canonical, configuration.AddonMetadata["100"].FirstSeenSubscribedAtUtc);
+        Assert.Null(configuration.AddonMetadata["200"].FirstSeenSubscribedAtUtc);
+        Assert.Null(configuration.AddonMetadata["999"].FirstSeenSubscribedAtUtc);
     }
 }

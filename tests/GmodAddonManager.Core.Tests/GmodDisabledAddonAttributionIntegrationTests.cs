@@ -293,7 +293,7 @@ public sealed class GmodDisabledAddonAttributionIntegrationTests : IDisposable
         Assert.False(exclusive.Success);
         Assert.Contains(disabled, manager.GetConfiguration().Assets);
         Assert.Equal(SystemAssetDefinitions.GmodDisabledName, disabled.Name);
-        Assert.Equal(AddonState.Excluded, disabled.GetWholeState());
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, disabled.GetWholeState());
         Assert.Equal(["100"], disabled.Addons);
         Assert.False(disabled.IsFavorite);
         Assert.Single(disabled.VersionHistory);

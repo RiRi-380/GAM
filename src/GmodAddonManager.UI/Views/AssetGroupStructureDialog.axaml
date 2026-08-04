@@ -1,0 +1,85 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        xmlns:views="using:GmodAddonManager.UI.Views"
+        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="610"
+        x:Class="GmodAddonManager.UI.Views.AssetGroupStructureDialog"
+        Title="{loc:Localize AssetGroup.EditStructure}"
+        Width="560"
+        Height="610"
+        MinWidth="430"
+        MinHeight="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+
+    <Grid Margin="20" RowDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,12">
+            <TextBlock x:Name="TitleText"
+                       FontSize="20"
+                       FontWeight="Bold"
+                       TextWrapping="Wrap"/>
+            <TextBlock Text="{loc:Localize AssetGroup.EditStructureDescription}"
+                       FontSize="12"
+                       Opacity="0.72"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                CornerRadius="6"
+                Padding="8">
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="MemberItemsControl">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="views:AssetGroupStructureOption">
+                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                      Margin="3,4">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Name}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+                                    <Border Grid.Column="1"
+                                            Padding="6,2"
+                                            CornerRadius="4"
+                                            Background="{Binding KindBackground}"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding KindText}"
+                                                   FontSize="9"
+                                                   Foreground="{Binding KindForeground}"/>
+                                    </Border>
+                                </Grid>
+                            </CheckBox>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,14,0,0">
+            <TextBlock Grid.Column="0"
+                       Text="{loc:Localize AssetGroup.EditStructureMoveHint}"
+                       FontSize="11"
+                       Opacity="0.65"
+                       TextWrapping="Wrap"
+                       VerticalAlignment="Center"
+                       Margin="0,0,14,0"/>
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10">
+                <Button Content="{loc:Localize Dialog.Cancel}"
+                        Click="OnCancel"
+                        IsCancel="True"/>
+                <Button Content="{loc:Localize Dialog.Save}"
+                        Click="OnSave"
+                        Classes="accent"
+                        IsDefault="True"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

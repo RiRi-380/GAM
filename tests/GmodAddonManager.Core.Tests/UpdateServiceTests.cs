@@ -1,5 +1,8 @@
 using GmodAddonManager.Core.Services;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Net;
+using System.Text;
 
 namespace GmodAddonManager.Core.Tests;
 
@@ -17,6 +20,367 @@ public sealed class UpdateServiceTests
 
         Assert.Equal(UpdateCheckStatus.Error, result.Status);
         Assert.Contains("HTTPS", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_NetworkFailureReturnsErrorResult()
+    {
+        using var client = new HttpClient(new RecordingHandler(
+            (_, _) => throw new HttpRequestException("offline")));
+        var service = new UpdateService(
+            "1.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            githubToken: null,
+            client);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.Error, result.Status);
+        Assert.Contains("request failed", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_InvalidJsonReturnsErrorResult()
+    {
+        using var client = new HttpClient(new RecordingHandler(
+            (_, _) => JsonResponse("{ not-json")));
+        var service = new UpdateService(
+            "1.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            githubToken: null,
+            client);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.Error, result.Status);
+        Assert.Contains("invalid JSON", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_PrereleaseOptInQueriesListAndSelectsPrerelease()
+    {
+        var handler = new RecordingHandler((_, _) => JsonResponse(
+            """
+            [
+              {
+                "tag_name": "v2.1.0-beta.1",
+                "body": "preview",
+                "published_at": "2026-08-03T00:00:00Z",
+                "draft": false,
+                "prerelease": true,
+                "assets": [
+                  {
+                    "url": "https://api.example.test/assets/21",
+                    "name": "GAM-Setup-2.1.0-beta.1.exe",
+                    "browser_download_url": "https://downloads.example.test/GAM-Setup-2.1.0-beta.1.exe",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  }
+                ]
+              },
+              {
+                "tag_name": "v2.0.0",
+                "draft": false,
+                "prerelease": false,
+                "assets": []
+              }
+            ]
+            """));
+        using var client = new HttpClient(handler);
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource
+            {
+                ApiUrl = "https://updates.example.test/releases",
+                IncludePrerelease = true
+            },
+            githubToken: null,
+            client);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
+        Assert.Equal("v2.1.0-beta.1", result.UpdateInfo?.Version);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("https://updates.example.test/releases", request.Uri);
+    }
+
+    [Fact]
+    public async Task PrivateReleaseDownloadUsesAuthenticatedAssetApiEndpoint()
+    {
+        var handler = new RecordingHandler((_, requestNumber) =>
+            requestNumber == 0
+                ? JsonResponse(
+                    """
+                    {
+                      "tag_name": "v2.1.0",
+                      "body": "private release",
+                      "published_at": "2026-08-03T00:00:00Z",
+                      "draft": false,
+                      "prerelease": false,
+                      "assets": [
+                        {
+                          "url": "https://updates.example.test/releases/assets/42",
+                          "name": "GAM-Setup-2.1.0.exe",
+                          "browser_download_url": "https://downloads.example.test/GAM-Setup-2.1.0.exe",
+                          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        }
+                      ]
+                    }
+                    """)
+                : BinaryResponse("not the expected installer"));
+        using var client = new HttpClient(handler);
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            "private-test-token",
+            client);
+
+        var check = await service.CheckForUpdateAsync(forceCheck: true);
+        var update = Assert.IsType<UpdateInfo>(check.UpdateInfo);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.DownloadAndInstallUpdateAsync(update.DownloadUrl, update.DownloadDigest));
+
+        Assert.Equal(2, handler.Requests.Count);
+        var downloadRequest = handler.Requests[1];
+        Assert.Equal("https://updates.example.test/releases/assets/42", downloadRequest.Uri);
+        Assert.Equal("Bearer private-test-token", downloadRequest.Authorization);
+        Assert.Contains("application/octet-stream", downloadRequest.Accept);
+    }
+
+    [Fact]
+    public async Task CrossOriginAssetApiDoesNotReceiveRepositoryToken()
+    {
+        var handler = new RecordingHandler((_, requestNumber) =>
+            requestNumber == 0
+                ? JsonResponse(
+                    """
+                    {
+                      "tag_name": "v2.1.0",
+                      "draft": false,
+                      "prerelease": false,
+                      "assets": [
+                        {
+                          "url": "https://untrusted.example.test/assets/42",
+                          "name": "GAM-Setup-2.1.0.exe",
+                          "browser_download_url": "https://downloads.example.test/GAM-Setup-2.1.0.exe",
+                          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        }
+                      ]
+                    }
+                    """)
+                : BinaryResponse("not the expected installer"));
+        using var client = new HttpClient(handler);
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            "private-test-token",
+            client);
+
+        var check = await service.CheckForUpdateAsync(forceCheck: true);
+        var update = Assert.IsType<UpdateInfo>(check.UpdateInfo);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.DownloadAndInstallUpdateAsync(update.DownloadUrl, update.DownloadDigest));
+
+        var downloadRequest = handler.Requests[1];
+        Assert.Equal("https://downloads.example.test/GAM-Setup-2.1.0.exe", downloadRequest.Uri);
+        Assert.Null(downloadRequest.Authorization);
+    }
+
+    [Fact]
+    public async Task DownloadRejectsDeclaredOversizeBeforeLeavingATempFile()
+    {
+        var tempDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var handler = new RecordingHandler((_, requestNumber) =>
+                requestNumber == 0
+                    ? UpdateAvailableResponse()
+                    : new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(new byte[9])
+                    });
+            using var client = new HttpClient(handler);
+            var service = new UpdateService(
+                "2.0.0",
+                new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+                githubToken: null,
+                client,
+                maxUpdateDownloadBytes: 8,
+                temporaryDirectory: tempDirectory);
+
+            var check = await service.CheckForUpdateAsync(forceCheck: true);
+            var update = Assert.IsType<UpdateInfo>(check.UpdateInfo);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                service.DownloadAndInstallUpdateAsync(update.DownloadUrl, update.DownloadDigest));
+
+            Assert.Contains("8-byte size limit", error.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFiles(tempDirectory, "GAM-Update-Setup-*.exe"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadRejectsUnknownLengthOversizeAndDeletesPartialTempFile()
+    {
+        var tempDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var handler = new RecordingHandler((_, requestNumber) =>
+                requestNumber == 0
+                    ? UpdateAvailableResponse()
+                    : new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new UnknownLengthContent(new byte[20])
+                    });
+            using var client = new HttpClient(handler);
+            var service = new UpdateService(
+                "2.0.0",
+                new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+                githubToken: null,
+                client,
+                maxUpdateDownloadBytes: 8,
+                temporaryDirectory: tempDirectory);
+
+            var check = await service.CheckForUpdateAsync(forceCheck: true);
+            var update = Assert.IsType<UpdateInfo>(check.UpdateInfo);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                service.DownloadAndInstallUpdateAsync(update.DownloadUrl, update.DownloadDigest));
+
+            Assert.Contains("8-byte size limit", error.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFiles(tempDirectory, "GAM-Update-Setup-*.exe"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_RejectsUnknownLengthOversizeApiResponse()
+    {
+        using var client = new HttpClient(new RecordingHandler(
+            (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new UnknownLengthContent(new byte[17])
+            }));
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            githubToken: null,
+            client,
+            maxApiResponseBytes: 16);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.Error, result.Status);
+        Assert.Contains("16-byte size limit", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_RejectsDeclaredOversizeApiResponse()
+    {
+        using var client = new HttpClient(new RecordingHandler(
+            (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(new string('x', 17), Encoding.UTF8, "application/json")
+            }));
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            githubToken: null,
+            client,
+            maxApiResponseBytes: 16);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.Error, result.Status);
+        Assert.Contains("16-byte size limit", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("2.1.0-beta.1", "2.1.0", true)]
+    [InlineData("2.1.0-beta.1", "2.1.0-beta.2", true)]
+    [InlineData("2.1.0-beta.2", "2.1.0-beta.10", true)]
+    [InlineData("2.1.0-alpha", "2.1.0-alpha.1", true)]
+    [InlineData("2.1.0-alpha.1", "2.1.0-alpha.beta", true)]
+    [InlineData("2.1.0-beta.11", "2.1.0-rc.1", true)]
+    [InlineData("2.1.0", "2.1.0-beta.2", false)]
+    [InlineData("2.1.0+local", "2.1.0+remote", false)]
+    [InlineData("2.1.0-beta.2", "2.1.0-beta.02", false)]
+    public void IsRemoteVersionNewer_UsesSemVerPrecedence(
+        string current,
+        string remote,
+        bool expected)
+    {
+        var actual = UpdateService.IsRemoteVersionNewer(current, remote);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("2026-08-03T11:00:00.0000000+00:00", "2026-08-03T12:00:00.0000000+00:00", true)]
+    [InlineData("2026-08-02T12:00:00.0000000+00:00", "2026-08-03T12:00:00.0000000+00:00", false)]
+    [InlineData("2026-08-04T12:00:00.0000000+00:00", "2026-08-03T12:00:00.0000000+00:00", false)]
+    [InlineData("not-a-timestamp", "2026-08-03T12:00:00.0000000+00:00", false)]
+    public void ShouldSkipUpdateCheck_OnlyAcceptsRecentNonFutureUtcAge(
+        string lastCheck,
+        string now,
+        bool expected)
+    {
+        var actual = UpdateService.ShouldSkipUpdateCheck(
+            lastCheck,
+            DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task DeferUpdateCheckAsync_SkipsAutomaticCheckButNotForcedCheck()
+    {
+        var stateDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var handler = new RecordingHandler((_, _) => JsonResponse(
+                """
+                {
+                  "tag_name": "v2.0.0",
+                  "draft": false,
+                  "prerelease": false,
+                  "assets": []
+                }
+                """));
+            using var client = new HttpClient(handler);
+            var service = new UpdateService(
+                "2.0.0",
+                new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+                githubToken: null,
+                client,
+                updateStateDirectory: stateDirectory);
+
+            await service.DeferUpdateCheckAsync();
+
+            var automatic = await service.CheckForUpdateAsync(forceCheck: false);
+            var forced = await service.CheckForUpdateAsync(forceCheck: true);
+
+            Assert.Equal(UpdateCheckStatus.Skipped, automatic.Status);
+            Assert.Equal(UpdateCheckStatus.UpToDate, forced.Status);
+            Assert.Single(handler.Requests);
+
+            var persisted = File.ReadAllText(Path.Combine(stateDirectory, "last_update_check.txt"));
+            var timestamp = DateTimeOffset.Parse(
+                persisted,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind);
+            Assert.Equal(TimeSpan.Zero, timestamp.Offset);
+        }
+        finally
+        {
+            Directory.Delete(stateDirectory, recursive: true);
+        }
     }
 
     [Theory]
@@ -37,6 +401,8 @@ public sealed class UpdateServiceTests
     [Theory]
     [InlineData("v1.0.7.0", "v1.0.7")]
     [InlineData("1.0.8+abc", "v1.0.8")]
+    [InlineData("v2.1.0-beta.1+local", "v2.1.0-beta.1")]
+    [InlineData("2.1.0-rc.2", "v2.1.0-rc.2")]
     [InlineData("", "unknown")]
     public void NormalizeVersionLabel_UsesConsistentUserFacingFormat(string version, string expected)
     {
@@ -53,7 +419,9 @@ public sealed class UpdateServiceTests
     {
         var args = UpdateService.ResolveInstallerArguments(downloadUrl);
 
-        Assert.Equal("/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS", args);
+        Assert.Equal(
+            "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /LAUNCHAFTERINSTALL=1",
+            args);
     }
 
     [Theory]
@@ -120,12 +488,69 @@ public sealed class UpdateServiceTests
             @"C:\Temp\GAM's Setup.exe",
             "/VERYSILENT /SP-");
 
-        Assert.Contains("Wait-Process -Id 12345", script);
+        Assert.Contains("Get-Process -Id 12345 -ErrorAction SilentlyContinue", script);
+        Assert.Contains("$currentProcess | Wait-Process -Timeout 60", script);
         Assert.Contains("$installerPath = 'C:\\Temp\\GAM''s Setup.exe'", script);
         Assert.Contains("$installerArguments = '/VERYSILENT /SP-'", script);
-        Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait", script);
+        Assert.Contains("$ErrorActionPreference = 'Stop'", script);
+        Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait -PassThru", script);
+        Assert.Contains("if ($installerProcess.ExitCode -ne 0)", script);
+        Assert.Contains("update-installer.log", script);
         Assert.Contains("Remove-Item -LiteralPath $installerPath", script);
         Assert.Contains("Remove-Item -LiteralPath $PSCommandPath", script);
+        Assert.DoesNotContain("$ErrorActionPreference = 'SilentlyContinue'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildInstallerLauncherScript_ProducesValidWindowsPowerShellSyntax()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var scriptPath = Path.Combine(
+            Path.GetTempPath(),
+            $"gam-update-launcher-parse-{Guid.NewGuid():N}.ps1");
+        try
+        {
+            File.WriteAllText(
+                scriptPath,
+                UpdateService.BuildInstallerLauncherScript(
+                    12345,
+                    @"C:\Temp\GAM's Setup.exe",
+                    "/VERYSILENT /SP-"),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var escapedPath = scriptPath.Replace("'", "''", StringComparison.Ordinal);
+            var parserCommand =
+                "$tokens = $null; $errors = $null; " +
+                $"[void][System.Management.Automation.Language.Parser]::ParseFile('{escapedPath}', [ref]$tokens, [ref]$errors); " +
+                "if ($errors.Count -gt 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 }";
+            var startInfo = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(parserCommand);
+
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            Assert.True(process.WaitForExit(10_000), "PowerShell parser timed out.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"PowerShell parser rejected the launcher: {process.StandardError.ReadToEnd()}");
+        }
+        finally
+        {
+            if (File.Exists(scriptPath))
+            {
+                File.Delete(scriptPath);
+            }
+        }
     }
 
     [Fact]
@@ -176,6 +601,107 @@ public sealed class UpdateServiceTests
             {
                 File.Delete(path);
             }
+        }
+    }
+
+    private static HttpResponseMessage JsonResponse(string json)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpResponseMessage BinaryResponse(string value)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(value))
+        };
+    }
+
+    private static HttpResponseMessage UpdateAvailableResponse()
+    {
+        return JsonResponse(
+            """
+            {
+              "tag_name": "v2.1.0",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "url": "https://updates.example.test/releases/assets/42",
+                  "name": "GAM-Setup-2.1.0.exe",
+                  "browser_download_url": "https://downloads.example.test/GAM-Setup-2.1.0.exe",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                }
+              ]
+            }
+            """);
+    }
+
+    private static string CreateTemporaryDirectory()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"gam-update-size-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, int, HttpResponseMessage> responseFactory;
+        private int requestCount;
+
+        public RecordingHandler(
+            Func<HttpRequestMessage, int, HttpResponseMessage> responseFactory)
+        {
+            this.responseFactory = responseFactory;
+        }
+
+        public List<RequestSnapshot> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var requestNumber = requestCount++;
+            Requests.Add(new RequestSnapshot(
+                request.RequestUri?.AbsoluteUri ?? string.Empty,
+                request.Headers.Authorization?.ToString(),
+                request.Headers.Accept.Select(value => value.MediaType ?? string.Empty).ToArray()));
+            var response = responseFactory(request, requestNumber);
+            response.RequestMessage = request;
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed record RequestSnapshot(
+        string Uri,
+        string? Authorization,
+        string[] Accept);
+
+    private sealed class UnknownLengthContent : HttpContent
+    {
+        private readonly byte[] payload;
+
+        public UnknownLengthContent(byte[] payload)
+        {
+            this.payload = payload;
+        }
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context)
+        {
+            return stream.WriteAsync(payload, 0, payload.Length);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 }

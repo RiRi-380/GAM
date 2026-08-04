@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Xml.Linq;
 
 namespace GmodAddonManager.UI.Tests;
 
@@ -59,9 +60,11 @@ public sealed class ReleasePackagingContractTests
                     StringSplitOptions.None)
                 .Length - 1);
         Assert.Contains(
-            "Flags: nowait postinstall skipifsilent shellexec",
+            "Flags: nowait postinstall shellexec; Check: ShouldLaunchApplication",
             runSection,
             StringComparison.Ordinal);
+        Assert.Contains("function ShouldLaunchApplication(): Boolean;", installer, StringComparison.Ordinal);
+        Assert.Contains("{param:LAUNCHAFTERINSTALL|0}", installer, StringComparison.Ordinal);
         Assert.Contains("AppId=Gmod Addon Manager", installer, StringComparison.Ordinal);
         Assert.Contains("Uninstallable=yes", installer, StringComparison.Ordinal);
         Assert.Contains("CreateUninstallRegKey=yes", installer, StringComparison.Ordinal);
@@ -70,6 +73,55 @@ public sealed class ReleasePackagingContractTests
             installer,
             StringComparison.Ordinal);
         Assert.DoesNotContain("[UninstallDelete]", installer, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ApplicationAndInstallerDoNotForceElevation()
+    {
+        var manifest = ReadRepositoryFile3(
+            "src",
+            "GmodAddonManager.UI",
+            "app.manifest");
+        var project = ReadRepositoryFile3(
+            "src",
+            "GmodAddonManager.UI",
+            "GmodAddonManager.UI.csproj");
+        var installer = ReadRepositoryFile2("installer", "setup.iss");
+        var document = XDocument.Parse(manifest);
+        XNamespace privileges = "urn:schemas-microsoft-com:asm.v3";
+        var executionLevel = document
+            .Descendants(privileges + "requestedExecutionLevel")
+            .Single();
+
+        Assert.Equal("asInvoker", executionLevel.Attribute("level")?.Value);
+        Assert.Equal("false", executionLevel.Attribute("uiAccess")?.Value);
+        Assert.Contains(
+            "<ApplicationManifest>app.manifest</ApplicationManifest>",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains("PrivilegesRequired=lowest", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("runascurrentuser", installer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void InstallerPropagatesVCRedistFailuresAndLocalizesUserMessages()
+    {
+        var installer = ReadRepositoryFile2("installer", "setup.iss");
+
+        Assert.Contains("/install /quiet /norestart", installer, StringComparison.Ordinal);
+        Assert.Contains("if ResultCode = 3010", installer, StringComparison.Ordinal);
+        Assert.Contains("ResultCode <> 1638", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "RaiseException(ExpandConstant('{cm:VCRedistLaunchFailed}'))",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains("if FileExists(ExpandConstant('{tmp}\\VC_redist.x64.exe'))", installer, StringComparison.Ordinal);
+        Assert.Contains("{cm:VCRedistInstallFailed}", installer, StringComparison.Ordinal);
+        Assert.Contains("function NeedRestart(): Boolean;", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "japanese.VCRedistMissing=Microsoft Visual C++ 再頒布可能パッケージ",
+            installer,
+            StringComparison.Ordinal);
     }
 
     private static void AssertSelfContainedMultiFilePublish(string source)

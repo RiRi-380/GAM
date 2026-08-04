@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -53,6 +54,9 @@ namespace GmodAddonManager.Core.Services
         private readonly UndoManager undoManager;
         private readonly AssetStateResolver assetStateResolver;
         private readonly AssetVersionService assetVersionService;
+        private readonly AssetGroupService assetGroupService;
+        private readonly SmartAssetReconciliationService smartAssetReconciliationService;
+        private readonly GamAssetFileService gamAssetFileService;
         private readonly ConfigurationMigrationService configurationMigrationService;
         private readonly GmodDisabledAddonReconciliationService gmodDisabledAddonReconciliationService;
         private readonly SubscriptionObservationService subscriptionObservationService;
@@ -79,6 +83,7 @@ namespace GmodAddonManager.Core.Services
         private readonly SemaphoreSlim _runtimeReconcileGate = new SemaphoreSlim(1, 1);
         private static readonly TimeSpan ConfigurationPathMutexTimeout =
             TimeSpan.FromSeconds(10);
+        private const int MaximumLocalAddonJsonBytes = 1024 * 1024;
 
         public DisableMode DisableMode { get; private set; }
         public bool StrictLinkMode
@@ -101,9 +106,19 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 enableLocalAddonManagement = value;
+                if (value)
+                {
+                    enableLocalAddonDiscovery = true;
+                }
                 InvalidateWorkshopScanCache();
             }
         }
+        /// <summary>
+        /// Indicates whether local addons are discovered for read-only display.
+        /// This does not authorize any payload move, link, copy, delete, or toggle.
+        /// </summary>
+        public bool EnableLocalAddonDiscovery =>
+            enableLocalAddonDiscovery || enableLocalAddonManagement;
         public bool IsExperimentContextActive => eventLogger.IsExperimentContextActive;
         public Func<bool?>? GmodRunningProvider { get; set; }
         public Func<int?>? PendingChangeCountProvider { get; set; }
@@ -153,6 +168,7 @@ namespace GmodAddonManager.Core.Services
         }
         internal Func<Guid>? QueueRuntimeApplyTrackedProvider { get; set; }
         internal Func<Guid, bool>? ClearRuntimeApplyIfGenerationProvider { get; set; }
+        internal Action<IReadOnlyDictionary<string, bool>>? RuntimeWriteObserver { get; set; }
         public int PendingDownloadCount { get; private set; }
         public TimeSpan StateMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int StateMatchPollIntervalMs { get; set; } = 200;
@@ -167,6 +183,7 @@ namespace GmodAddonManager.Core.Services
 
         private bool strictLinkMode;
         private bool enableLocalAddonManagement;
+        private bool enableLocalAddonDiscovery;
         private Action? queueRuntimeApplyProvider;
         private bool runtimeReapplyRequiredFromRecovery;
         private bool runtimeApplyRequiredForNewSubscriptions;
@@ -244,6 +261,9 @@ namespace GmodAddonManager.Core.Services
             undoManager = new UndoManager();
             assetStateResolver = new AssetStateResolver();
             assetVersionService = new AssetVersionService();
+            assetGroupService = new AssetGroupService();
+            smartAssetReconciliationService = new SmartAssetReconciliationService();
+            gamAssetFileService = new GamAssetFileService();
             configurationMigrationService = new ConfigurationMigrationService();
             gmodDisabledAddonReconciliationService =
                 new GmodDisabledAddonReconciliationService();
@@ -252,6 +272,7 @@ namespace GmodAddonManager.Core.Services
                 Path.Combine(appDataPath, "logs"));
             eventLogger = ExperimentEventLogger.CreateDefault(appDataPath);
             StrictLinkMode = GetStrictLinkModeFromEnvironment();
+            enableLocalAddonDiscovery = options.EnableLocalAddonDiscoveryExperimental;
             EnableLocalAddonManagement = options.EnableLocalAddonsExperimental;
             customWorkshopCacheFilePaths = options.CustomWorkshopCacheFilePaths;
             DisableMode = options.DisableMode;
@@ -886,15 +907,40 @@ namespace GmodAddonManager.Core.Services
             PendingDownloadCount = observation.PendingDownloadCount;
             needsSave |= observation.Changed;
 
+            SmartAssetReconciliationResult? smartReconciliation = null;
+            if (snapshot.IsAuthoritative &&
+                configuration.Assets.Any(asset => asset.IsSmart))
+            {
+                needsSave |= RefreshClassificationMetadataForIds(
+                    snapshot.SubscribedIds);
+                smartReconciliation = smartAssetReconciliationService.Reconcile(
+                    configuration,
+                    snapshot.SubscribedIds);
+                needsSave |= smartReconciliation.ConfigurationChanged;
+            }
+
             if (needsSave)
             {
                 await SaveConfigurationAsync();
             }
 
+            ISet<string>? smartAppliedNewSubscriptionIds = null;
+            if (smartReconciliation?.MembershipChanged == true)
+            {
+                var applied = await UpdateAddonStatesAsync();
+                if (applied)
+                {
+                    smartAppliedNewSubscriptionIds = new HashSet<string>(
+                        observation.NewlySubscribedIds,
+                        StringComparer.Ordinal);
+                }
+            }
+
             await ApplyPendingNewSubscriptionStatesAsync(
                 snapshot,
                 observation,
-                "EnsureAllAddonsInSubscribeAsset");
+                "EnsureAllAddonsInSubscribeAsset",
+                smartAppliedNewSubscriptionIds);
         }
 
         public async Task<bool> RefreshGmodDisabledAddonsFromRuntimeAsync()
@@ -1083,7 +1129,8 @@ namespace GmodAddonManager.Core.Services
         private async Task ApplyPendingNewSubscriptionStatesAsync(
             SteamWorkshopSnapshot snapshot,
             SubscriptionObservationResult observation,
-            string operationName)
+            string operationName,
+            ISet<string>? alreadyAppliedAddonIds = null)
         {
             if (snapshot == null ||
                 observation == null ||
@@ -1101,7 +1148,10 @@ namespace GmodAddonManager.Core.Services
                     .Where(IsWorkshopNumericId)
                     .Where(subscribedIds.Contains),
                 StringComparer.Ordinal);
-            if (GetPendingNewSubscriptionIds(subscribedIds, newlyObservedIds).Count == 0)
+            if (GetPendingNewSubscriptionIds(
+                    subscribedIds,
+                    newlyObservedIds,
+                    alreadyAppliedAddonIds).Count == 0)
             {
                 return;
             }
@@ -1111,7 +1161,8 @@ namespace GmodAddonManager.Core.Services
             {
                 var pendingIds = GetPendingNewSubscriptionIds(
                     subscribedIds,
-                    newlyObservedIds);
+                    newlyObservedIds,
+                    alreadyAppliedAddonIds);
                 if (pendingIds.Count == 0)
                 {
                     return;
@@ -1135,7 +1186,8 @@ namespace GmodAddonManager.Core.Services
 
                 pendingIds = GetPendingNewSubscriptionIds(
                     subscribedIds,
-                    newlyObservedIds);
+                    newlyObservedIds,
+                    alreadyAppliedAddonIds);
                 if (pendingIds.Count == 0)
                 {
                     return;
@@ -1195,7 +1247,8 @@ namespace GmodAddonManager.Core.Services
 
         private List<string> GetPendingNewSubscriptionIds(
             ISet<string> subscribedIds,
-            IEnumerable<string> newlyObservedIds)
+            IEnumerable<string> newlyObservedIds,
+            ISet<string>? alreadyAppliedAddonIds = null)
         {
             var pendingIds = new HashSet<string>(
                 newlyObservedIds ?? Enumerable.Empty<string>(),
@@ -1214,6 +1267,10 @@ namespace GmodAddonManager.Core.Services
             }
 
             pendingIds.IntersectWith(subscribedIds);
+            if (alreadyAppliedAddonIds != null)
+            {
+                pendingIds.ExceptWith(alreadyAppliedAddonIds);
+            }
             return pendingIds
                 .Where(IsWorkshopNumericId)
                 .OrderBy(id => id, StringComparer.Ordinal)
@@ -1826,6 +1883,12 @@ namespace GmodAddonManager.Core.Services
             var visibleWorkshopIds = new HashSet<string>(
                 visibleAddons.Where(addon => !addon.IsLocal).Select(addon => addon.Id),
                 StringComparer.Ordinal);
+            var availableReferenceIds = new HashSet<string>(
+                subscribedIds,
+                StringComparer.Ordinal);
+            availableReferenceIds.UnionWith(visibleAddons
+                .Where(addon => addon.IsLocal && !string.IsNullOrWhiteSpace(addon.Id))
+                .Select(addon => addon.Id));
 
             PendingDownloadCount = subscribedIds.Except(visibleWorkshopIds, StringComparer.Ordinal).Count();
 
@@ -1842,14 +1905,15 @@ namespace GmodAddonManager.Core.Services
             foreach (var asset in configuration.Assets.Where(asset => !IsSystemInventoryAsset(asset)))
             {
                 var missingIds = asset.Addons
-                    .Where(id => id != "*" && !subscribedIds.Contains(id))
+                    .Where(id => id != "*" && !availableReferenceIds.Contains(id))
                     .ToList();
                 if (missingIds.Count == 0)
                 {
                     continue;
                 }
 
-                if (configuration.RetainMissingAssetReferences)
+                if (configuration.RetainMissingAssetReferences ||
+                    asset.RetainMissingReferences)
                 {
                     foreach (var addonId in missingIds)
                     {
@@ -1906,15 +1970,42 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
+
+            SmartAssetReconciliationResult? smartReconciliation = null;
+            if (configuration.Assets.Any(asset => asset.IsSmart))
+            {
+                changed |= RefreshClassificationMetadataForIds(subscribedIds);
+                smartReconciliation = smartAssetReconciliationService.Reconcile(
+                    configuration,
+                    subscribedIds);
+                changed |= smartReconciliation.ConfigurationChanged;
+            }
+
             if (changed)
             {
                 await SaveConfigurationImmediatelyAsync();
             }
 
+            ISet<string>? smartAppliedNewSubscriptionIds = null;
+            if (smartReconciliation?.MembershipChanged == true)
+            {
+                // Membership is already materialized before the resolver runs.
+                // This applies both additions and confirmed removals; while GMod
+                // is running, the existing state pipeline safely queues the write.
+                var applied = await UpdateAddonStatesAsync();
+                if (applied)
+                {
+                    smartAppliedNewSubscriptionIds = new HashSet<string>(
+                        observation.NewlySubscribedIds,
+                        StringComparer.Ordinal);
+                }
+            }
+
             await ApplyPendingNewSubscriptionStatesAsync(
                 snapshot,
                 observation,
-                "FinalizeWorkshopInventory");
+                "FinalizeWorkshopInventory",
+                smartAppliedNewSubscriptionIds);
 
             return visibleAddons;
         }
@@ -2406,7 +2497,7 @@ namespace GmodAddonManager.Core.Services
         private async Task<List<WorkshopAddon>> ScanLocalAddonsAsync()
         {
             var results = new List<WorkshopAddon>();
-            if (!EnableLocalAddonManagement)
+            if (!EnableLocalAddonDiscovery)
             {
                 return results;
             }
@@ -2464,6 +2555,14 @@ namespace GmodAddonManager.Core.Services
             foreach (var kvp in configuration.AddonMetadata.Where(kvp => kvp.Value.IsLocal).ToList())
             {
                 if (seenIds.Contains(kvp.Key))
+                {
+                    continue;
+                }
+
+                // Discovery-only mode reflects only payloads currently mounted in
+                // Garry's Mod. Legacy managed metadata is deliberately preserved for
+                // recovery, but it is neither displayed nor touched here.
+                if (!EnableLocalAddonManagement)
                 {
                     continue;
                 }
@@ -2540,14 +2639,17 @@ namespace GmodAddonManager.Core.Services
             addon.LocalMountPath = normalizedMount;
             addon.NeedsTitleUpdate = false;
 
-            if (string.IsNullOrWhiteSpace(addon.LocalManagedPath))
+            if (EnableLocalAddonManagement &&
+                string.IsNullOrWhiteSpace(addon.LocalManagedPath))
             {
                 addon.LocalManagedPath = GetDefaultLocalManagedPath(addonId, isGma);
             }
 
             addon.IsEnabled = isGma ? File.Exists(normalizedMount) : Directory.Exists(normalizedMount);
 
-            var dataPath = ResolveLocalDataPath(addon) ?? normalizedMount;
+            var dataPath = EnableLocalAddonManagement
+                ? ResolveLocalDataPath(addon) ?? normalizedMount
+                : normalizedMount;
             addon.FolderPath = dataPath;
 
             if (isGma)
@@ -2618,14 +2720,11 @@ namespace GmodAddonManager.Core.Services
         private void ReadLocalAddonJson(string folderPath, WorkshopAddon addon)
         {
             var jsonPath = Path.Combine(folderPath, "addon.json");
-            if (!File.Exists(jsonPath))
-            {
-                return;
-            }
-
             try
             {
-                var json = File.ReadAllText(jsonPath);
+                var json = ReadBoundedUtf8Text(
+                    jsonPath,
+                    MaximumLocalAddonJsonBytes);
                 var obj = JObject.Parse(json);
 
                 var title = obj.Value<string>("title") ?? obj.Value<string>("name");
@@ -2634,11 +2733,10 @@ namespace GmodAddonManager.Core.Services
                     addon.Title = title.Trim();
                 }
 
-                var type = obj.Value<string>("type");
-                if (!string.IsNullOrWhiteSpace(type))
-                {
-                    addon.Type = type.Trim();
-                }
+                var rawType = obj.Value<string>("type");
+                var parsedType = string.IsNullOrWhiteSpace(rawType)
+                    ? string.Empty
+                    : rawType.Trim();
 
                 var description = obj.Value<string>("description");
                 if (!string.IsNullOrWhiteSpace(description))
@@ -2653,9 +2751,10 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 var tagsToken = obj["tags"];
+                string[] parsedTags;
                 if (tagsToken is JArray tagsArray)
                 {
-                    addon.Tags = tagsArray
+                    parsedTags = tagsArray
                         .Select(t => t?.ToString())
                         .Where(t => !string.IsNullOrWhiteSpace(t))
                         .Select(t => t!.Trim())
@@ -2663,23 +2762,172 @@ namespace GmodAddonManager.Core.Services
                 }
                 else if (tagsToken is JValue tagsValue && !string.IsNullOrWhiteSpace(tagsValue.ToString()))
                 {
-                    addon.Tags = tagsValue.ToString()
+                    parsedTags = tagsValue.ToString()
                         .Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(t => t.Trim())
                         .Where(t => !string.IsNullOrWhiteSpace(t))
                         .ToArray();
                 }
+                else
+                {
+                    parsedTags = Array.Empty<string>();
+                }
+
+                var sourceLastWriteTimeUtc = File.GetLastWriteTimeUtc(jsonPath);
+                addon.Type = parsedType;
+                addon.Tags = parsedTags;
+                addon.TypeMetadataStatus =
+                    AddonClassificationMetadataStatus.Known;
+                addon.TagsMetadataStatus =
+                    AddonClassificationMetadataStatus.Known;
+                addon.ClassificationSourceLastWriteTimeUtc =
+                    sourceLastWriteTimeUtc;
+            }
+            catch (FileNotFoundException)
+            {
+                // Successful absence is authoritative: classifications previously
+                // supplied by addon.json no longer exist.
+                ClearLocalAddonJsonClassification(addon);
             }
             catch (Exception ex)
             {
+                // A transient read/parse failure is not proof that the previous
+                // classification disappeared. Preserve the values, but mark their
+                // authority unknown until a successful scan can confirm them.
+                addon.TypeMetadataStatus =
+                    AddonClassificationMetadataStatus.Unknown;
+                addon.TagsMetadataStatus =
+                    AddonClassificationMetadataStatus.Unknown;
                 errorHandler.HandleWarning($"Failed to read addon.json from {folderPath}: {ex.Message}", "ReadLocalAddonJson");
             }
+        }
+
+        private static void ClearLocalAddonJsonClassification(WorkshopAddon addon)
+        {
+            addon.Type = string.Empty;
+            addon.Tags = Array.Empty<string>();
+            addon.TypeMetadataStatus = AddonClassificationMetadataStatus.Known;
+            addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Known;
+            addon.ClassificationSourceLastWriteTimeUtc = null;
+        }
+
+        private static string ReadBoundedUtf8Text(string path, int maximumBytes)
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > maximumBytes)
+            {
+                throw new InvalidDataException(
+                    $"addon.json exceeds the {maximumBytes}-byte safety limit.");
+            }
+
+            using var content = new MemoryStream((int)stream.Length);
+            var buffer = new byte[8192];
+            var totalBytesRead = 0;
+            while (true)
+            {
+                var remainingBeforeLimit = maximumBytes + 1 - totalBytesRead;
+                if (remainingBeforeLimit <= 0)
+                {
+                    throw new InvalidDataException(
+                        $"addon.json exceeds the {maximumBytes}-byte safety limit.");
+                }
+
+                var read = stream.Read(
+                    buffer,
+                    0,
+                    Math.Min(buffer.Length, remainingBeforeLimit));
+                if (read == 0)
+                {
+                    break;
+                }
+
+                totalBytesRead += read;
+                if (totalBytesRead > maximumBytes)
+                {
+                    throw new InvalidDataException(
+                        $"addon.json exceeds the {maximumBytes}-byte safety limit.");
+                }
+
+                content.Write(buffer, 0, read);
+            }
+
+            var json = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(
+                    content.GetBuffer(),
+                    0,
+                    totalBytesRead);
+            return json.Length > 0 && json[0] == '\uFEFF'
+                ? json.Substring(1)
+                : json;
         }
 
         private static string NormalizeLocalPath(string path)
         {
             var full = Path.GetFullPath(path);
             return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        internal static bool IsPathWithinRoot(string? candidatePath, string? rootPath)
+        {
+            if (string.IsNullOrWhiteSpace(candidatePath) ||
+                string.IsNullOrWhiteSpace(rootPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var candidateFullPath = Path.GetFullPath(candidatePath);
+                var candidate = candidateFullPath.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (candidate.Length == 0)
+                {
+                    candidate = Path.GetPathRoot(candidateFullPath) ?? candidateFullPath;
+                }
+
+                var rootFullPath = Path.GetFullPath(rootPath);
+                var root = rootFullPath.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (root.Length == 0)
+                {
+                    root = Path.GetPathRoot(rootFullPath) ?? rootFullPath;
+                }
+
+                if (string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase) ||
+                    candidate.Length <= root.Length)
+                {
+                    return false;
+                }
+
+                if (root[root.Length - 1] == Path.DirectorySeparatorChar ||
+                    root[root.Length - 1] == Path.AltDirectorySeparatorChar)
+                {
+                    return true;
+                }
+
+                var boundary = candidate[root.Length];
+                return boundary == Path.DirectorySeparatorChar ||
+                       boundary == Path.AltDirectorySeparatorChar;
+            }
+            catch (Exception ex) when (
+                ex is ArgumentException ||
+                ex is NotSupportedException ||
+                ex is PathTooLongException)
+            {
+                return false;
+            }
         }
 
         private string GetLocalAddonIdFromPath(string mountPath)
@@ -2785,30 +3033,60 @@ namespace GmodAddonManager.Core.Services
             return addon.IsGmaFile ? File.Exists(mountPath) : Directory.Exists(mountPath);
         }
 
-        private string? ResolveLocalMountPath(WorkshopAddon addon)
+        internal string? ResolveLocalMountPath(WorkshopAddon addon)
         {
-            if (!string.IsNullOrWhiteSpace(addon.LocalMountPath))
+            try
             {
-                return addon.LocalMountPath;
+                if (!string.IsNullOrWhiteSpace(addon.LocalMountPath))
+                {
+                    var configuredMountPath = NormalizeLocalPath(addon.LocalMountPath);
+                    return IsAllowedLocalMountPath(addon, configuredMountPath)
+                        ? configuredMountPath
+                        : null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(addon.FolderPath))
+                {
+                    var candidate = NormalizeLocalPath(addon.FolderPath);
+                    return IsAllowedLocalMountPath(addon, candidate)
+                        ? candidate
+                        : null;
+                }
             }
-
-            if (!string.IsNullOrWhiteSpace(addon.FolderPath))
+            catch (Exception ex) when (
+                ex is ArgumentException ||
+                ex is NotSupportedException ||
+                ex is PathTooLongException)
             {
-                var candidate = NormalizeLocalPath(addon.FolderPath);
-                if (!string.IsNullOrWhiteSpace(localAddonsPath) &&
-                    candidate.StartsWith(NormalizeLocalPath(localAddonsPath), StringComparison.OrdinalIgnoreCase))
-                {
-                    return candidate;
-                }
-
-                if (!string.IsNullOrWhiteSpace(localRootGmaPath) &&
-                    candidate.StartsWith(NormalizeLocalPath(localRootGmaPath), StringComparison.OrdinalIgnoreCase))
-                {
-                    return candidate;
-                }
+                return null;
             }
 
             return null;
+        }
+
+        private bool IsAllowedLocalMountPath(WorkshopAddon addon, string candidate)
+        {
+            if (!string.IsNullOrWhiteSpace(localAddonsPath) &&
+                IsPathWithinRoot(candidate, localAddonsPath) &&
+                !string.Equals(
+                    NormalizeLocalPath(candidate),
+                    NormalizeLocalPath(localAddonsPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!addon.IsGmaFile || string.IsNullOrWhiteSpace(localRootGmaPath))
+            {
+                return false;
+            }
+
+            var candidateParent = Path.GetDirectoryName(candidate);
+            return !string.IsNullOrWhiteSpace(candidateParent) &&
+                   string.Equals(
+                       NormalizeLocalPath(candidateParent),
+                       NormalizeLocalPath(localRootGmaPath),
+                       StringComparison.OrdinalIgnoreCase);
         }
 
         private string? ResolveLocalDataPath(WorkshopAddon addon)
@@ -3490,15 +3768,48 @@ namespace GmodAddonManager.Core.Services
             PendingDownloadCount = subscriptionTruthAvailable
                 ? cachedAddonIds.Except(downloadedAddonIds, StringComparer.Ordinal).Count()
                 : 0;
-            if (observation.Changed)
+            foreach (var addon in newAddons)
+            {
+                config.AddonMetadata[addon.Id] = addon;
+            }
+
+            SmartAssetReconciliationResult? smartReconciliation = null;
+            var metadataChanged = false;
+            if (subscriptionTruthAvailable &&
+                config.Assets.Any(asset => asset.IsSmart))
+            {
+                metadataChanged = RefreshClassificationMetadataForIds(
+                    cachedAddonIds);
+                smartReconciliation = smartAssetReconciliationService.Reconcile(
+                    config,
+                    cachedAddonIds);
+            }
+
+            if (observation.Changed ||
+                newAddons.Count > 0 ||
+                metadataChanged ||
+                smartReconciliation?.ConfigurationChanged == true)
             {
                 await SaveConfigurationAsync();
+            }
+
+            ISet<string>? smartAppliedNewSubscriptionIds = null;
+            if (smartReconciliation?.MembershipChanged == true)
+            {
+                var applied = await UpdateAddonStatesAsync();
+                if (applied)
+                {
+                    smartAppliedNewSubscriptionIds = new HashSet<string>(
+                        observation.NewlySubscribedIds,
+                        StringComparer.Ordinal);
+                }
             }
 
             await ApplyPendingNewSubscriptionStatesAsync(
                 workshopSnapshot,
                 observation,
-                "ScanForNewAddons");
+                "ScanForNewAddons",
+                smartAppliedNewSubscriptionIds);
 
             return newAddons;
         }
@@ -3630,6 +3941,353 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        /// <summary>
+        /// Refreshes classification metadata from local payloads and the local
+        /// Steam manifest cache. No network request is performed. Payload files
+        /// are parsed only when their classification source timestamp changed or
+        /// the previous result is unknown.
+        /// </summary>
+        private bool RefreshClassificationMetadataForIds(IEnumerable<string> addonIds)
+        {
+            if (addonIds == null)
+            {
+                return false;
+            }
+
+            Dictionary<string, WorkshopItemInfo> cachedDetails;
+            try
+            {
+                cachedDetails = GetAddonDetailsFromCache();
+            }
+            catch
+            {
+                cachedDetails = new Dictionary<string, WorkshopItemInfo>(
+                    StringComparer.Ordinal);
+            }
+
+            var changed = false;
+            foreach (var addonId in addonIds
+                         .Where(IsWorkshopNumericId)
+                         .Select(id => id.Trim())
+                         .Distinct(StringComparer.Ordinal))
+            {
+                configuration.AddonMetadata.TryGetValue(addonId, out var addon);
+                var sourcePath = ResolveClassificationSourcePath(addonId, addon);
+                cachedDetails.TryGetValue(addonId, out var cachedInfo);
+                if (addon == null && sourcePath == null && cachedInfo == null)
+                {
+                    continue;
+                }
+
+                if (addon == null)
+                {
+                    addon = new WorkshopAddon(addonId, sourcePath ?? string.Empty)
+                    {
+                        Title = $"Workshop-{addonId}",
+                        NeedsTitleUpdate = true,
+                        IsAvailable = sourcePath != null,
+                        IsDownloadPending = sourcePath == null
+                    };
+                    configuration.AddonMetadata[addonId] = addon;
+                    changed = true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(addon.Type) &&
+                    addon.TypeMetadataStatus != AddonClassificationMetadataStatus.Known)
+                {
+                    addon.TypeMetadataStatus = AddonClassificationMetadataStatus.Known;
+                    changed = true;
+                }
+                if ((addon.Tags?.Length ?? 0) > 0 &&
+                    addon.TagsMetadataStatus != AddonClassificationMetadataStatus.Known)
+                {
+                    addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Known;
+                    changed = true;
+                }
+
+                var payloadClassificationSucceeded = false;
+                if (sourcePath != null)
+                {
+                    DateTime sourceTimestampUtc;
+                    try
+                    {
+                        sourceTimestampUtc = GetClassificationSourceTimestampUtc(
+                            sourcePath);
+                    }
+                    catch
+                    {
+                        sourceTimestampUtc = DateTime.MinValue;
+                    }
+
+                    var needsPayloadRead =
+                        addon.ClassificationSourceLastWriteTimeUtc != sourceTimestampUtc ||
+                        addon.TypeMetadataStatus == AddonClassificationMetadataStatus.Unknown ||
+                        addon.TagsMetadataStatus == AddonClassificationMetadataStatus.Unknown;
+                    if (needsPayloadRead &&
+                        TryReadClassificationFromPayload(
+                            sourcePath,
+                            out var type,
+                            out var tags,
+                            out var typeClassificationCompleted,
+                            out var tagClassificationCompleted))
+                    {
+                        payloadClassificationSucceeded = true;
+                        if (typeClassificationCompleted)
+                        {
+                            var normalizedType = type?.Trim() ?? string.Empty;
+                            if (!string.Equals(
+                                    addon.Type,
+                                    normalizedType,
+                                    StringComparison.Ordinal))
+                            {
+                                addon.Type = normalizedType;
+                                changed = true;
+                            }
+                            if (addon.TypeMetadataStatus !=
+                                AddonClassificationMetadataStatus.Known)
+                            {
+                                addon.TypeMetadataStatus =
+                                    AddonClassificationMetadataStatus.Known;
+                                changed = true;
+                            }
+                        }
+
+                        if (tagClassificationCompleted)
+                        {
+                            var normalizedTags = (tags ?? Array.Empty<string>())
+                                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                                .Select(tag => tag.Trim())
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToArray();
+                            if (!(addon.Tags ?? Array.Empty<string>())
+                                .SequenceEqual(
+                                    normalizedTags,
+                                    StringComparer.OrdinalIgnoreCase))
+                            {
+                                addon.Tags = normalizedTags;
+                                changed = true;
+                            }
+                            if (addon.TagsMetadataStatus !=
+                                AddonClassificationMetadataStatus.Known)
+                            {
+                                addon.TagsMetadataStatus =
+                                    AddonClassificationMetadataStatus.Known;
+                                changed = true;
+                            }
+                        }
+
+                        if (addon.ClassificationSourceLastWriteTimeUtc !=
+                            sourceTimestampUtc)
+                        {
+                            addon.ClassificationSourceLastWriteTimeUtc =
+                                sourceTimestampUtc;
+                            changed = true;
+                        }
+                    }
+                    else if (!needsPayloadRead &&
+                             addon.ClassificationSourceLastWriteTimeUtc.HasValue)
+                    {
+                        payloadClassificationSucceeded = true;
+                    }
+                }
+
+                // addon.json/GMA is the higher-priority classification source.
+                // Steam cache tags supplement only when the payload did not
+                // provide a fresh result.
+                if (!payloadClassificationSucceeded &&
+                    cachedInfo != null &&
+                    !string.IsNullOrWhiteSpace(cachedInfo.Tags))
+                {
+                    var cachedTags = SplitTagsFromCache(cachedInfo.Tags);
+                    if (cachedTags.Length > 0)
+                    {
+                        if (!(addon.Tags ?? Array.Empty<string>())
+                            .SequenceEqual(
+                                cachedTags,
+                                StringComparer.OrdinalIgnoreCase))
+                        {
+                            addon.Tags = cachedTags;
+                            changed = true;
+                        }
+                        if (addon.TagsMetadataStatus !=
+                            AddonClassificationMetadataStatus.Known)
+                        {
+                            addon.TagsMetadataStatus =
+                                AddonClassificationMetadataStatus.Known;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            return changed;
+        }
+
+        private string? ResolveClassificationSourcePath(
+            string addonId,
+            WorkshopAddon? addon)
+        {
+            var configuredPath = addon?.FolderPath;
+            if (!string.IsNullOrWhiteSpace(configuredPath) &&
+                (File.Exists(configuredPath) || Directory.Exists(configuredPath)))
+            {
+                return configuredPath;
+            }
+
+            var workshopDirectory = Path.Combine(workshopPath, addonId);
+            if (Directory.Exists(workshopDirectory))
+            {
+                return workshopDirectory;
+            }
+
+            if (!string.IsNullOrWhiteSpace(gmodCachePath))
+            {
+                var cacheGma = Path.Combine(gmodCachePath, $"{addonId}.gma");
+                if (HasNonEmptyFile(cacheGma))
+                {
+                    return cacheGma;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool TryReadClassificationFromPayload(
+            string sourcePath,
+            out string? type,
+            out string[]? tags,
+            out bool typeClassificationCompleted,
+            out bool tagClassificationCompleted)
+        {
+            type = null;
+            tags = null;
+            typeClassificationCompleted = false;
+            tagClassificationCompleted = false;
+
+            try
+            {
+                if (File.Exists(sourcePath))
+                {
+                    var succeeded = sourcePath.EndsWith(
+                                        ".gma",
+                                        StringComparison.OrdinalIgnoreCase) &&
+                                    AddonJsonReader.TryReadFromGma(
+                                        sourcePath,
+                                        out type,
+                                        out tags);
+                    if (succeeded)
+                    {
+                        typeClassificationCompleted = true;
+                        tagClassificationCompleted = true;
+                    }
+                    return succeeded;
+                }
+
+                if (!Directory.Exists(sourcePath))
+                {
+                    return false;
+                }
+
+                var addonJsonPath = Path.Combine(sourcePath, "addon.json");
+                if (AddonJsonReader.TryReadClassificationDocumentFromFile(
+                        addonJsonPath,
+                        out type,
+                        out tags))
+                {
+                    typeClassificationCompleted = true;
+                    tagClassificationCompleted = true;
+                    return true;
+                }
+
+                var gmaPath = Directory.EnumerateFiles(sourcePath, "*.gma")
+                    .FirstOrDefault();
+                if (gmaPath != null &&
+                    AddonJsonReader.TryReadFromGma(gmaPath, out type, out tags))
+                {
+                    typeClassificationCompleted = true;
+                    tagClassificationCompleted = true;
+                    return true;
+                }
+
+                type = InferTypeFromAddonFolder(sourcePath);
+                typeClassificationCompleted = !string.IsNullOrWhiteSpace(type);
+                tagClassificationCompleted = typeClassificationCompleted;
+                return typeClassificationCompleted;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        private static DateTime GetClassificationSourceTimestampUtc(string sourcePath)
+        {
+            if (File.Exists(sourcePath))
+            {
+                return File.GetLastWriteTimeUtc(sourcePath);
+            }
+
+            var addonJsonPath = Path.Combine(sourcePath, "addon.json");
+            if (File.Exists(addonJsonPath))
+            {
+                return File.GetLastWriteTimeUtc(addonJsonPath);
+            }
+
+            var gmaPath = Directory.Exists(sourcePath)
+                ? Directory.EnumerateFiles(sourcePath, "*.gma").FirstOrDefault()
+                : null;
+            return gmaPath != null
+                ? File.GetLastWriteTimeUtc(gmaPath)
+                : Directory.GetLastWriteTimeUtc(sourcePath);
+        }
+
+        private static string? InferTypeFromAddonFolder(string folderPath)
+        {
+            if (Directory.Exists(Path.Combine(folderPath, "gamemodes")))
+            {
+                return "Gamemode";
+            }
+            var mapsPath = Path.Combine(folderPath, "maps");
+            if (Directory.Exists(mapsPath) &&
+                Directory.EnumerateFiles(mapsPath, "*.bsp").Any())
+            {
+                return "Map";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "weapons")))
+            {
+                return "Weapon";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "vehicles")))
+            {
+                return "Vehicle";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "npc")))
+            {
+                return "NPC";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "tools")))
+            {
+                return "Tool";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "entities")))
+            {
+                return "Entity";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "lua", "effects")))
+            {
+                return "Effects";
+            }
+            if (Directory.Exists(Path.Combine(folderPath, "models")))
+            {
+                return "Model";
+            }
+            return null;
+        }
+
         private bool ApplyWorkshopCacheTags(IEnumerable<WorkshopAddon> addons)
         {
             if (addons == null)
@@ -3665,6 +4323,19 @@ namespace GmodAddonManager.Core.Services
                     continue;
                 }
 
+                if (!string.IsNullOrWhiteSpace(addon.Type) &&
+                    addon.TypeMetadataStatus != AddonClassificationMetadataStatus.Known)
+                {
+                    addon.TypeMetadataStatus = AddonClassificationMetadataStatus.Known;
+                    updated = true;
+                }
+                if ((addon.Tags?.Length ?? 0) > 0 &&
+                    addon.TagsMetadataStatus != AddonClassificationMetadataStatus.Known)
+                {
+                    addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Known;
+                    updated = true;
+                }
+
                 if (info.TimeUpdated.HasValue)
                 {
                     var workshopUpdatedAtUtc =
@@ -3686,6 +4357,7 @@ namespace GmodAddonManager.Core.Services
                 if (tags.Length > 0)
                 {
                     addon.Tags = tags;
+                    addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Known;
                     updated = true;
                 }
             }
@@ -3744,7 +4416,7 @@ namespace GmodAddonManager.Core.Services
                 }
             return System.Text.Encoding.UTF8.GetString(bytes.ToArray());
         }
-        
+
         // GMAファイルからタイトルのみを高速に読み取る専用メソッド
         private async Task<string?> ReadGmaTitleOnlyAsync(string gmaPath)
         {
@@ -3941,17 +4613,112 @@ namespace GmodAddonManager.Core.Services
 
         private async Task<long> CalculateDirectorySizeAsync(DirectoryInfo directory)
         {
-            return await Task.Run(() =>
+            return await Task.Run(() => CalculateDirectorySizeSafely(directory.FullName));
+        }
+
+        private static long CalculateDirectorySizeSafely(string rootPath)
+        {
+            long totalSize = 0;
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(rootPath);
+
+            while (pendingDirectories.Count > 0)
             {
+                var currentDirectory = pendingDirectories.Pop();
+                if (!TryGetFileAttributes(currentDirectory, out var directoryAttributes) ||
+                    (directoryAttributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+
+                IEnumerator<string>? entries = null;
                 try
                 {
-                    return directory.GetFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+                    entries = Directory
+                        .EnumerateFileSystemEntries(currentDirectory)
+                        .GetEnumerator();
                 }
-                catch
+                catch (Exception ex) when (
+                    ex is IOException ||
+                    ex is UnauthorizedAccessException ||
+                    ex is System.Security.SecurityException)
                 {
-                    return 0;
+                    continue;
                 }
-            });
+
+                using (entries)
+                {
+                    while (true)
+                    {
+                        string entryPath;
+                        try
+                        {
+                            if (!entries.MoveNext())
+                            {
+                                break;
+                            }
+
+                            entryPath = entries.Current;
+                        }
+                        catch (Exception ex) when (
+                            ex is IOException ||
+                            ex is UnauthorizedAccessException ||
+                            ex is System.Security.SecurityException)
+                        {
+                            break;
+                        }
+
+                        if (!TryGetFileAttributes(entryPath, out var attributes) ||
+                            (attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            continue;
+                        }
+
+                        if ((attributes & FileAttributes.Directory) != 0)
+                        {
+                            pendingDirectories.Push(entryPath);
+                            continue;
+                        }
+
+                        try
+                        {
+                            var length = new FileInfo(entryPath).Length;
+                            totalSize = length > long.MaxValue - totalSize
+                                ? long.MaxValue
+                                : totalSize + length;
+                        }
+                        catch (Exception ex) when (
+                            ex is IOException ||
+                            ex is UnauthorizedAccessException ||
+                            ex is System.Security.SecurityException)
+                        {
+                            // One raced or unreadable file must not discard the
+                            // sizes already collected from the rest of the addon.
+                        }
+                    }
+                }
+            }
+
+            return totalSize;
+        }
+
+        private static bool TryGetFileAttributes(
+            string path,
+            out FileAttributes attributes)
+        {
+            try
+            {
+                attributes = File.GetAttributes(path);
+                return true;
+            }
+            catch (Exception ex) when (
+                ex is IOException ||
+                ex is UnauthorizedAccessException ||
+                ex is System.Security.SecurityException)
+            {
+                attributes = default;
+                return false;
+            }
         }
 
         private static bool HasNonEmptyFile(string path)
@@ -4014,7 +4781,7 @@ namespace GmodAddonManager.Core.Services
             return false;
         }
 
-        private void ValidatePath(string? path, string paramName)
+        internal void ValidatePath(string? path, string paramName)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -4039,12 +4806,6 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentException($"Invalid path format: {path}", paramName, ex);
             }
             
-            // Check for any path traversal attempts
-            if (path.Contains("..", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"Path traversal detected in: {path}", paramName);
-            }
-            
             // Check for Windows special paths
             if (path.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(@"\\.\", StringComparison.OrdinalIgnoreCase) ||
@@ -4056,11 +4817,13 @@ namespace GmodAddonManager.Core.Services
             // Ensure the path is within expected boundaries
             if (!string.IsNullOrEmpty(workshopPath) && !string.IsNullOrEmpty(managerPath))
             {
-                bool isInWorkshop = fullPath.StartsWith(workshopPath, StringComparison.OrdinalIgnoreCase);
-                bool isInManager = fullPath.StartsWith(managerPath, StringComparison.OrdinalIgnoreCase);
-                bool isInGmodCache = !string.IsNullOrEmpty(gmodCachePath) && fullPath.StartsWith(gmodCachePath, StringComparison.OrdinalIgnoreCase);
-                bool isInAppDirectory = fullPath.StartsWith(AppDomain.CurrentDomain.BaseDirectory, StringComparison.OrdinalIgnoreCase);
-                bool isInGmodRoot = !string.IsNullOrEmpty(gmodRootPath) && fullPath.StartsWith(gmodRootPath, StringComparison.OrdinalIgnoreCase);
+                bool isInWorkshop = IsPathWithinRoot(fullPath, workshopPath);
+                bool isInManager = IsPathWithinRoot(fullPath, managerPath);
+                bool isInGmodCache = IsPathWithinRoot(fullPath, gmodCachePath);
+                bool isInAppDirectory = IsPathWithinRoot(
+                    fullPath,
+                    AppDomain.CurrentDomain.BaseDirectory);
+                bool isInGmodRoot = IsPathWithinRoot(fullPath, gmodRootPath);
                 
                 if (!isInWorkshop && !isInManager && !isInGmodCache && !isInAppDirectory && !isInGmodRoot)
                 {
@@ -5682,6 +6445,7 @@ namespace GmodAddonManager.Core.Services
                 try
                 {
                     (string Json, JObject Raw, Configuration Value) loaded;
+                    var recoveredConfigurationFromBackup = false;
                     try
                     {
                         loaded = await ReadConfigurationFileAsync(configPath);
@@ -5710,6 +6474,7 @@ namespace GmodAddonManager.Core.Services
                         }
 
                         await RestoreConfigurationBackupAsync(backupPath);
+                        recoveredConfigurationFromBackup = true;
                         errorHandler.HandleWarning(
                             "Recovered configuration from config.json.bak; the invalid primary was preserved.",
                             "LoadConfiguration");
@@ -5726,6 +6491,8 @@ namespace GmodAddonManager.Core.Services
                             "initialRuntimeImportCompleted",
                             StringComparison.OrdinalIgnoreCase) == null;
 
+                    var configurationNeedsSave = false;
+                    string? currentSchemaSnapshotBeforeNormalization = null;
                     if (configurationMigrationService.RequiresMigration(jsonObj))
                     {
                         var migrationBackupPath =
@@ -5743,10 +6510,12 @@ namespace GmodAddonManager.Core.Services
                             $"Migrated configuration to schema {Configuration.CurrentSchemaVersion}. " +
                             $"Review assets: {migrationResult.NeedsReviewAssetIds.Count}.",
                             "LoadConfiguration");
-                        await SaveConfigurationImmediatelyAsync();
+                        configurationNeedsSave = true;
                     }
                     else
                     {
+                        currentSchemaSnapshotBeforeNormalization =
+                            JsonConvert.SerializeObject(configuration);
                         configurationMigrationService.NormalizeCurrentSchema(
                             configuration,
                             removeLegacyJunctionAsset: DisableMode == DisableMode.Soft);
@@ -5756,13 +6525,31 @@ namespace GmodAddonManager.Core.Services
                         {
                             configuration.InitialRuntimeImportCompleted = true;
                             configuration.InitialRuntimeImportCompletedAtUtc ??= DateTime.UtcNow;
-                            await SaveConfigurationImmediatelyAsync();
                         }
                     }
-                    
+
                     // Fix any invalid CurrentVersion values
                     FixInvalidCurrentVersions();
                     configuration.PathState ??= new PathState();
+
+                    if (currentSchemaSnapshotBeforeNormalization != null)
+                    {
+                        var currentSchemaWasNormalized = !string.Equals(
+                            currentSchemaSnapshotBeforeNormalization,
+                            JsonConvert.SerializeObject(configuration),
+                            StringComparison.Ordinal);
+                        // Preserve a byte-for-byte backup restore as recovery
+                        // evidence; the next ordinary load persists the same
+                        // idempotent current-schema repairs.
+                        configurationNeedsSave = missingInitialRuntimeImportMarker ||
+                            (currentSchemaWasNormalized &&
+                             !recoveredConfigurationFromBackup);
+                    }
+
+                    if (configurationNeedsSave)
+                    {
+                        await SaveConfigurationImmediatelyAsync();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -6021,6 +6808,8 @@ namespace GmodAddonManager.Core.Services
                             Version = configuration.Version,
                             LastUpdated = now,
                             Assets = configuration.Assets.ToList(),
+                            AssetGroups = configuration.AssetGroups.ToList(),
+                            MaxNestedGroupDepth = configuration.MaxNestedGroupDepth,
                             AddonMetadata = addonMetadataSnapshot,
                             JunctionHistory = junctionHistorySnapshot,
                             PathState = configuration.PathState ?? new PathState(),
@@ -6238,14 +7027,7 @@ namespace GmodAddonManager.Core.Services
 
         public bool AssetNameExists(string name)
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return false;
-            }
-
-            var trimmedName = name.Trim();
-            return configuration.Assets.Any(asset =>
-                string.Equals(asset.Name, trimmedName, StringComparison.CurrentCultureIgnoreCase));
+            return assetGroupService.NameExists(configuration, name);
         }
 
         private static void ThrowIfProtectedSystemAsset(string? assetId)
@@ -6260,24 +7042,22 @@ namespace GmodAddonManager.Core.Services
         public void RenameAsset(string assetId, string newName)
         {
             ThrowIfProtectedSystemAsset(assetId);
-            if (string.IsNullOrWhiteSpace(newName))
-            {
-                throw new ArgumentException("Asset name cannot be empty.", nameof(newName));
-            }
-
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             if (asset == null)
             {
                 throw new InvalidOperationException($"Asset not found or is system asset: {assetId}");
             }
 
-            var trimmed = newName.Trim();
-            if (string.Equals(asset.Name, trimmed, StringComparison.CurrentCultureIgnoreCase))
+            var trimmed = NormalizeGamAssetName(newName);
+            if (string.Equals(asset.Name, trimmed, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
-            if (AssetNameExists(trimmed))
+            if (assetGroupService.NameExists(
+                    configuration,
+                    trimmed,
+                    exceptAssetId: asset.Id))
             {
                 throw new InvalidOperationException($"Asset name already exists: {trimmed}");
             }
@@ -6296,35 +7076,26 @@ namespace GmodAddonManager.Core.Services
         public async Task SetAssetFavoriteAsync(string assetId, bool isFavorite)
         {
             ThrowIfProtectedSystemAsset(assetId);
-            var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
-            if (asset == null)
-            {
-                throw new InvalidOperationException($"Custom asset not found: {assetId}");
-            }
-
-            if (asset.IsFavorite == isFavorite)
+            var undoAction = assetGroupService.SetFavorite(
+                configuration,
+                AssetListEntryKind.Asset,
+                assetId,
+                isFavorite);
+            if (undoAction == null)
             {
                 return;
             }
-
-            var previousFavorite = asset.IsFavorite;
-            var undoAction = new UndoAction(
-                UndoActionType.AssetFavoriteChanged,
-                $"{(isFavorite ? "Favorited" : "Unfavorited")} asset '{asset.Name}'")
-            {
-                AssetId = asset.Id,
-                AssetName = asset.Name,
-                PreviousFavoriteState = previousFavorite
-            };
             undoManager.RecordAction(undoAction);
-            asset.IsFavorite = isFavorite;
             try
             {
                 await SaveConfigurationImmediatelyAsync();
             }
             catch
             {
-                asset.IsFavorite = previousFavorite;
+                assetGroupService.TryUndo(
+                    configuration,
+                    undoAction,
+                    out _);
                 undoManager.RemoveAction(undoAction);
                 throw;
             }
@@ -6344,12 +7115,231 @@ namespace GmodAddonManager.Core.Services
                     ? candidate
                     : Path.Combine(managerPath, candidate);
 
+                var ownedImageDirectory = Path.Combine(
+                    managerPath,
+                    AssetImageDirectoryName);
+                if (!IsPathWithinRoot(fullPath, ownedImageDirectory))
+                {
+                    return null;
+                }
+
                 ValidatePath(fullPath, "assetImagePath");
-                return fullPath;
+                return Path.GetFullPath(fullPath);
             }
             catch
             {
                 return null;
+            }
+        }
+
+        public string? ResolveAssetGroupImagePath(AssetGroup group)
+        {
+            if (group == null || string.IsNullOrWhiteSpace(group.ImagePath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var candidate = group.ImagePath.Trim();
+                var fullPath = Path.IsPathRooted(candidate)
+                    ? candidate
+                    : Path.Combine(managerPath, candidate);
+                var ownedImageDirectory = Path.Combine(
+                    managerPath,
+                    AssetImageDirectoryName);
+                if (!IsPathWithinRoot(fullPath, ownedImageDirectory))
+                {
+                    return null;
+                }
+
+                ValidatePath(fullPath, "assetGroupImagePath");
+                return Path.GetFullPath(fullPath);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public async Task<bool> ApplyAssetGroupEditAsync(
+            string groupId,
+            string newName,
+            string? sourceImagePath,
+            AssetImageCrop? crop,
+            bool removeImage)
+        {
+            var group = configuration.AssetGroups.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, groupId, StringComparison.Ordinal));
+            if (group == null)
+            {
+                throw new InvalidOperationException($"Asset Group not found: {groupId}");
+            }
+
+            var normalizedName = NormalizeGamAssetName(newName);
+            var nameChanged = !string.Equals(
+                group.Name,
+                normalizedName,
+                StringComparison.Ordinal);
+            if (nameChanged && assetGroupService.NameExists(
+                    configuration,
+                    normalizedName,
+                    exceptGroupId: group.Id))
+            {
+                throw new InvalidOperationException(
+                    $"Asset or Group name already exists: {normalizedName}");
+            }
+
+            var replacementImageBytes =
+                !removeImage && !string.IsNullOrWhiteSpace(sourceImagePath)
+                    ? CreateAssetImagePngFromFile(sourceImagePath, crop)
+                    : null;
+            var previousImageReference = group.ImagePath;
+            var previousImagePath = ResolveAssetGroupImagePath(group);
+            var imageChanged =
+                replacementImageBytes != null ||
+                (removeImage &&
+                 (!string.IsNullOrWhiteSpace(previousImageReference) ||
+                  (!string.IsNullOrWhiteSpace(previousImagePath) &&
+                   File.Exists(previousImagePath))));
+            if (!nameChanged && !imageChanged)
+            {
+                return false;
+            }
+
+            string? replacementImagePath = null;
+            if (replacementImageBytes != null)
+            {
+                replacementImagePath = Path.Combine(
+                    GetAssetImageDirectory(),
+                    $"group-{group.Id}.png");
+                ValidatePath(replacementImagePath, "assetGroupImagePath");
+            }
+
+            var fileSnapshots =
+                new Dictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)>(
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (var path in new[] { previousImagePath, replacementImagePath }
+                         .Where(path => !string.IsNullOrWhiteSpace(path))
+                         .Cast<string>()
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var exists = File.Exists(path);
+                fileSnapshots[path] = exists
+                    ? (true, File.ReadAllBytes(path), File.GetAttributes(path))
+                    : (false, null, FileAttributes.Normal);
+            }
+
+            var previousName = group.Name;
+            UndoAction? undoAction = null;
+            try
+            {
+                group.Name = normalizedName;
+                if (replacementImageBytes != null)
+                {
+                    File.WriteAllBytes(replacementImagePath!, replacementImageBytes);
+                    group.ImagePath = Path.Combine(
+                        AssetImageDirectoryName,
+                        $"group-{group.Id}.png");
+                }
+                else if (imageChanged)
+                {
+                    if (!string.IsNullOrWhiteSpace(previousImagePath) &&
+                        File.Exists(previousImagePath))
+                    {
+                        File.SetAttributes(previousImagePath, FileAttributes.Normal);
+                        File.Delete(previousImagePath);
+                    }
+                    group.ImagePath = null;
+                }
+
+                var previousImageBytes =
+                    !string.IsNullOrWhiteSpace(previousImagePath) &&
+                    fileSnapshots.TryGetValue(previousImagePath, out var previousSnapshot) &&
+                    previousSnapshot.Exists
+                        ? previousSnapshot.Bytes
+                        : null;
+                undoAction = new UndoAction(
+                    imageChanged
+                        ? UndoActionType.AssetGroupImageChanged
+                        : UndoActionType.AssetGroupRenamed,
+                    $"Edited Asset Group '{previousName}'")
+                {
+                    GroupId = group.Id,
+                    GroupName = group.Name,
+                    PreviousGroupName = nameChanged ? previousName : null,
+                    PreviousGroupImagePath = previousImageReference,
+                    PreviousGroupImageBytes = previousImageBytes
+                };
+                undoManager.RecordAction(undoAction);
+                await SaveConfigurationImmediatelyAsync();
+                return true;
+            }
+            catch
+            {
+                group.Name = previousName;
+                group.ImagePath = previousImageReference;
+                foreach (var snapshot in fileSnapshots)
+                {
+                    if (!snapshot.Value.Exists)
+                    {
+                        if (File.Exists(snapshot.Key))
+                        {
+                            File.SetAttributes(snapshot.Key, FileAttributes.Normal);
+                            File.Delete(snapshot.Key);
+                        }
+                        continue;
+                    }
+
+                    var directory = Path.GetDirectoryName(snapshot.Key);
+                    if (!string.IsNullOrWhiteSpace(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    File.WriteAllBytes(snapshot.Key, snapshot.Value.Bytes!);
+                    File.SetAttributes(snapshot.Key, snapshot.Value.Attributes);
+                }
+
+                if (undoAction != null)
+                {
+                    undoManager.RemoveAction(undoAction);
+                }
+                throw;
+            }
+        }
+
+        public Task<bool> RenameAssetGroupAsync(string groupId, string newName)
+        {
+            return ApplyAssetGroupEditAsync(
+                groupId,
+                newName,
+                sourceImagePath: null,
+                crop: null,
+                removeImage: false);
+        }
+
+        private static void RestoreImageFileSnapshots(
+            IReadOnlyDictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)> snapshots)
+        {
+            foreach (var snapshot in snapshots)
+            {
+                if (!snapshot.Value.Exists)
+                {
+                    if (File.Exists(snapshot.Key))
+                    {
+                        File.SetAttributes(snapshot.Key, FileAttributes.Normal);
+                        File.Delete(snapshot.Key);
+                    }
+                    continue;
+                }
+
+                var directory = Path.GetDirectoryName(snapshot.Key);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                File.WriteAllBytes(snapshot.Key, snapshot.Value.Bytes!);
+                File.SetAttributes(snapshot.Key, snapshot.Value.Attributes);
             }
         }
 
@@ -6481,28 +7471,21 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidOperationException($"Asset not found: {assetId}");
             }
 
-            var normalizedName = newName?.Trim() ?? string.Empty;
+            var normalizedName = asset.IsSystem
+                ? asset.Name
+                : NormalizeGamAssetName(newName);
             var nameChanged =
                 !asset.IsSystem &&
                 !string.Equals(
                     asset.Name,
                     normalizedName,
-                    StringComparison.CurrentCultureIgnoreCase);
+                    StringComparison.OrdinalIgnoreCase);
             if (nameChanged)
             {
-                if (string.IsNullOrWhiteSpace(normalizedName))
-                {
-                    throw new ArgumentException(
-                        "Asset name cannot be empty.",
-                        nameof(newName));
-                }
-
-                if (configuration.Assets.Any(other =>
-                        other.Id != asset.Id &&
-                        string.Equals(
-                            other.Name,
-                            normalizedName,
-                            StringComparison.CurrentCultureIgnoreCase)))
+                if (assetGroupService.NameExists(
+                        configuration,
+                        normalizedName,
+                        exceptAssetId: asset.Id))
                 {
                     throw new InvalidOperationException(
                         $"Asset name already exists: {normalizedName}");
@@ -6686,6 +7669,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             var info = codec.Info;
+            ValidateAssetImageDecodeInfo(info);
             var bitmap = new SKBitmap(info.Width, info.Height, info.ColorType, info.AlphaType);
             var result = codec.GetPixels(info, bitmap.GetPixels());
             if (result == SKCodecResult.Success || result == SKCodecResult.IncompleteInput)
@@ -6695,6 +7679,30 @@ namespace GmodAddonManager.Core.Services
 
             bitmap.Dispose();
             return null;
+        }
+
+        internal static void ValidateAssetImageDecodeInfo(SKImageInfo info)
+        {
+            if (info.Width <= 0 || info.Height <= 0)
+            {
+                throw new InvalidOperationException("The source image has invalid dimensions.");
+            }
+
+            if (info.Width > GamAssetDocumentImageNormalizer.MaximumDimension ||
+                info.Height > GamAssetDocumentImageNormalizer.MaximumDimension)
+            {
+                throw new InvalidOperationException(
+                    $"The source image exceeds the {GamAssetDocumentImageNormalizer.MaximumDimension}-pixel dimension limit.");
+            }
+
+            var pixelCount = (long)info.Width * info.Height;
+            if (pixelCount > GamAssetDocumentImageNormalizer.MaximumPixelCount ||
+                info.BytesPerPixel <= 0 ||
+                info.BytesSize64 > GamAssetDocumentImageNormalizer.MaximumDecodedBytes)
+            {
+                throw new InvalidOperationException(
+                    "The source image is too large to decode safely.");
+            }
         }
 
         private static SKRectI NormalizeCropRect(AssetImageCrop? crop, int width, int height)
@@ -6745,12 +7753,7 @@ namespace GmodAddonManager.Core.Services
 
         public void CreateAsset(string name)
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                throw new ArgumentException("Asset name cannot be empty.", nameof(name));
-            }
-
-            name = name.Trim();
+            name = NormalizeGamAssetName(name);
             if (AssetNameExists(name))
             {
                 throw new InvalidOperationException($"Asset name already exists: {name}");
@@ -6758,15 +7761,9 @@ namespace GmodAddonManager.Core.Services
 
             errorHandler.HandleInfo($"CreateAsset: Creating asset with name: {name}", "CreateAsset");
             var asset = new Asset(name);
-            configuration.Assets.Add(asset);
+            var undoAction = assetGroupService.AddNewAsset(configuration, asset);
             errorHandler.HandleInfo($"CreateAsset: Asset created with ID: {asset.Id}, Total assets: {configuration.Assets.Count}", "CreateAsset");
-            
-            // Undo險倬鹸
-            undoManager.RecordAction(new UndoAction(UndoActionType.AssetCreated, $"Asset '{name}' created")
-            {
-                AssetId = asset.Id,
-                AssetName = name
-            });
+            undoManager.RecordAction(undoAction);
         }
 
         public async Task<Asset> CreateAssetAsync(string name)
@@ -6792,6 +7789,1662 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        private static void ThrowIfSmartAssetMembershipOwned(Asset asset)
+        {
+            if (asset.IsSmart)
+            {
+                throw new InvalidOperationException(
+                    "Smart Asset membership is managed by its rule and cannot be edited manually.");
+            }
+        }
+
+        public async Task<Asset> CreateSmartAssetAsync(
+            string name,
+            AssetMembershipRule rule)
+        {
+            var normalizedName = NormalizeGamAssetName(name);
+            if (AssetNameExists(normalizedName))
+            {
+                throw new InvalidOperationException(
+                    $"Asset name already exists: {normalizedName}");
+            }
+
+            if (!AddonClassificationService.TryNormalizeRule(
+                    rule,
+                    out var normalizedRule,
+                    out var ruleError))
+            {
+                throw new ArgumentException(ruleError, nameof(rule));
+            }
+
+            var asset = new Asset(normalizedName)
+            {
+                MembershipRule = normalizedRule,
+                SmartAutomationState = new SmartAssetAutomationState
+                {
+                    SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                    Status = SmartAssetAutomationStatus.Active
+                }
+            };
+            var undoAction = assetGroupService.AddNewAsset(configuration, asset);
+            undoAction.Description = $"Smart Asset '{normalizedName}' created";
+            undoManager.RecordAction(undoAction);
+
+            SmartAssetReconciliationResult? reconciliation = null;
+            try
+            {
+                var snapshot = GetWorkshopSnapshotFromCache();
+                if (snapshot.IsAuthoritative)
+                {
+                    RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
+                    reconciliation = smartAssetReconciliationService.Reconcile(
+                        configuration,
+                        snapshot.SubscribedIds);
+                }
+
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                configuration.Assets.Remove(asset);
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            if (reconciliation?.MembershipChanged == true)
+            {
+                try
+                {
+                    await UpdateAddonStatesAsync();
+                }
+                catch (Exception ex)
+                {
+                    QueueRuntimeApplyProvider?.Invoke();
+                    errorHandler.HandleError(
+                        ex,
+                        "Smart Asset creation was saved; runtime reconciliation was queued",
+                        ErrorSeverity.Warning);
+                }
+            }
+
+            return asset;
+        }
+
+        public async Task<SmartAssetReconciliationResult> ReconcileSmartAssetsAsync()
+        {
+            var snapshot = GetWorkshopSnapshotFromCache();
+            if (!snapshot.IsAuthoritative)
+            {
+                return SmartAssetReconciliationResult.NotAuthoritative();
+            }
+
+            var metadataChanged = RefreshClassificationMetadataForIds(
+                snapshot.SubscribedIds);
+            var result = smartAssetReconciliationService.Reconcile(
+                configuration,
+                snapshot.SubscribedIds);
+            if (metadataChanged || result.ConfigurationChanged)
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+
+            if (result.MembershipChanged)
+            {
+                try
+                {
+                    await UpdateAddonStatesAsync();
+                }
+                catch (Exception ex)
+                {
+                    QueueRuntimeApplyProvider?.Invoke();
+                    errorHandler.HandleError(
+                        ex,
+                        "Smart Asset reconciliation was saved; runtime reconciliation was queued",
+                        ErrorSeverity.Warning);
+                }
+            }
+
+            return result;
+        }
+
+        public AssetGroupDisplayState GetAssetGroupDisplayState(string groupId)
+        {
+            return assetGroupService.GetDisplayState(configuration, groupId);
+        }
+
+        public IReadOnlyList<Asset> GetOrderedAssetGroupChildren(string groupId)
+        {
+            return assetGroupService.GetOrderedChildren(configuration, groupId);
+        }
+
+        public IReadOnlyList<AssetGroup> GetOrderedAssetGroupChildGroups(string groupId)
+        {
+            return assetGroupService.GetOrderedChildGroups(configuration, groupId);
+        }
+
+        public Task<AssetGroup> CreateAssetGroupAsync(
+            string name,
+            IEnumerable<string>? memberAssetIds)
+        {
+            return CreateAssetGroupAsync(
+                name,
+                parentGroupId: null,
+                memberAssetIds,
+                childGroupIds: null);
+        }
+
+        public async Task<AssetGroup> CreateAssetGroupAsync(
+            string name,
+            string? parentGroupId,
+            IEnumerable<string>? memberAssetIds,
+            IEnumerable<string>? childGroupIds)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var group = assetGroupService.CreateGroup(
+                configuration,
+                NormalizeGamAssetName(name),
+                parentGroupId,
+                memberAssetIds,
+                childGroupIds,
+                out var undoAction);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group creation");
+            return group;
+        }
+
+        public async Task<Asset> CreateAssetInGroupAsync(
+            string name,
+            string groupId,
+            AssetMembershipRule? rule)
+        {
+            var normalizedName = NormalizeGamAssetName(name);
+            AssetMembershipRule? normalizedRule = null;
+            if (rule != null && !AddonClassificationService.TryNormalizeRule(
+                    rule,
+                    out normalizedRule,
+                    out var ruleError))
+            {
+                throw new ArgumentException(ruleError, nameof(rule));
+            }
+
+            var rollback = CloneConfiguration(configuration);
+            var asset = new Asset(normalizedName);
+            if (normalizedRule != null)
+            {
+                asset.MembershipRule = normalizedRule;
+                asset.SmartAutomationState = new SmartAssetAutomationState
+                {
+                    SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                    Status = SmartAssetAutomationStatus.Active
+                };
+            }
+
+            var undoAction = assetGroupService.AddNewAsset(
+                configuration,
+                asset,
+                groupId);
+            var requiresRuntimeReconcile = false;
+            if (asset.IsSmart)
+            {
+                var snapshot = GetWorkshopSnapshotFromCache();
+                if (snapshot.IsAuthoritative)
+                {
+                    RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
+                    requiresRuntimeReconcile = smartAssetReconciliationService.Reconcile(
+                        configuration,
+                        snapshot.SubscribedIds).MembershipChanged;
+                }
+            }
+
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile,
+                "Asset creation inside an Asset Group");
+            return asset;
+        }
+
+        public async Task ApplyAssetGroupStateAsync(
+            string groupId,
+            AddonState state)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.ApplyGroupState(
+                configuration,
+                groupId,
+                state);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: undoAction != null,
+                "Asset Group state change");
+        }
+
+        public async Task SetAssetGroupFavoriteAsync(
+            string groupId,
+            bool isFavorite)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetFavorite(
+                configuration,
+                AssetListEntryKind.Group,
+                groupId,
+                isFavorite);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group favorite change");
+        }
+
+        public async Task SetAssetGroupMembersAsync(
+            string groupId,
+            IEnumerable<string>? memberAssetIds)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetGroupMembers(
+                configuration,
+                groupId,
+                memberAssetIds);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group membership change");
+        }
+
+        public async Task SetAssetGroupMembersAsync(
+            string groupId,
+            IEnumerable<string>? memberAssetIds,
+            IEnumerable<string>? childGroupIds)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetGroupMembers(
+                configuration,
+                groupId,
+                memberAssetIds,
+                childGroupIds);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group membership change");
+        }
+
+        public async Task MoveAssetToGroupAsync(
+            string assetId,
+            string? destinationGroupId)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.MoveAsset(
+                configuration,
+                assetId,
+                destinationGroupId);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group membership change");
+        }
+
+        public async Task MoveAssetGroupAsync(
+            string groupId,
+            string? destinationGroupId)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.MoveGroup(
+                configuration,
+                groupId,
+                destinationGroupId);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Nested Asset Group membership change");
+        }
+
+        public async Task SetMaxNestedGroupDepthAsync(int maxNestedDepth)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetMaxNestedGroupDepth(
+                configuration,
+                maxNestedDepth);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Maximum nested Asset Group depth change");
+        }
+
+        public async Task<bool> UpdateAssetMemoAsync(
+            string assetId,
+            string? memo)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetAssetMemo(
+                configuration,
+                assetId,
+                memo);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset memo change");
+            return undoAction != null;
+        }
+
+        public async Task<bool> UpdateAssetGroupMemoAsync(
+            string groupId,
+            string? memo)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.SetGroupMemo(
+                configuration,
+                groupId,
+                memo);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset Group memo change");
+            return undoAction != null;
+        }
+
+        public Task<bool> DeleteAssetGroupAsync(string groupId)
+        {
+            return DeleteAssetGroupAsync(
+                groupId,
+                AssetGroupDeleteMode.KeepAssets);
+        }
+
+        public async Task<bool> DeleteAssetGroupAsync(
+            string groupId,
+            AssetGroupDeleteMode deleteMode)
+        {
+            if (!Enum.IsDefined(typeof(AssetGroupDeleteMode), deleteMode))
+            {
+                throw new ArgumentOutOfRangeException(nameof(deleteMode));
+            }
+
+            if (configuration.AssetGroups.All(group =>
+                    !string.Equals(group.Id, groupId, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.DeleteGroup(
+                configuration,
+                groupId,
+                deleteMode);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: undoAction.DeletedAssets?.Count > 0,
+                deleteMode == AssetGroupDeleteMode.DeleteAssets
+                    ? "Asset Group and contained Asset deletion"
+                    : "Asset Group deletion");
+            return true;
+        }
+
+        public async Task ReorderAssetListEntryAsync(
+            AssetListEntryKind kind,
+            string entryId,
+            int targetIndex,
+            string? parentGroupId = null)
+        {
+            var rollback = CloneConfiguration(configuration);
+            var undoAction = assetGroupService.ReorderEntry(
+                configuration,
+                kind,
+                entryId,
+                targetIndex,
+                parentGroupId);
+            await CommitAssetGroupMutationAsync(
+                undoAction,
+                rollback,
+                requiresRuntimeReconcile: false,
+                "Asset list reorder");
+        }
+
+        private async Task CommitAssetGroupMutationAsync(
+            UndoAction? undoAction,
+            Configuration rollback,
+            bool requiresRuntimeReconcile,
+            string operationName)
+        {
+            if (undoAction == null)
+            {
+                return;
+            }
+
+            undoManager.RecordAction(undoAction);
+            try
+            {
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                RestoreConfigurationInPlace(configuration, rollback);
+                undoManager.RemoveAction(undoAction);
+                throw;
+            }
+
+            if (!requiresRuntimeReconcile)
+            {
+                return;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    $"{operationName} was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+        }
+
+        /// <summary>
+        /// Reads and validates one portable .gam Asset without mutating the profile
+        /// or Steam. Missing IDs are calculated only when GAM has an authoritative
+        /// subscription baseline.
+        /// </summary>
+        public async Task<GamAssetImportPreview> PreviewGamAssetImportAsync(
+            string path)
+        {
+            var document = await gamAssetFileService.ReadAsync(path);
+            return BuildGamAssetImportPreview(document);
+        }
+
+        public async Task<GamAssetFileImportPreview> PreviewGamFileImportAsync(
+            string path)
+        {
+            var content = await gamAssetFileService.ReadAnyAsync(path);
+            if (content.Kind == GamAssetFileContentKind.SingleAsset)
+            {
+                var singlePreview = BuildGamAssetImportPreview(content.SingleAsset!);
+                return new GamAssetFileImportPreview(
+                    content,
+                    singlePreview,
+                    singlePreview.SubscriptionStatusKnown,
+                    singlePreview.ReferencedAddonIds,
+                    singlePreview.MissingSubscriptionAddonIds);
+            }
+
+            var bundle = content.Bundle!;
+            var referencedIds = bundle.Assets
+                .SelectMany(asset => asset.Membership.Kind == GamAssetDocumentMembershipKind.Fixed
+                    ? asset.Membership.AddonIds
+                    : asset.Membership.SnapshotAddonIds)
+                .Where(IsWorkshopNumericId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+            var fixedIds = bundle.Assets
+                .Where(asset =>
+                    asset.Membership.Kind == GamAssetDocumentMembershipKind.Fixed)
+                .SelectMany(asset => asset.Membership.AddonIds)
+                .Where(IsWorkshopNumericId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+            var subscriptionStatusKnown = configuration.SubscriptionBaselineInitialized;
+            var subscribedIds = new HashSet<string>(
+                (configuration.KnownSubscribedAddonIds ?? new List<string>())
+                    .Where(IsWorkshopNumericId),
+                StringComparer.Ordinal);
+            var missingIds = subscriptionStatusKnown
+                ? fixedIds.Where(id => !subscribedIds.Contains(id)).ToList()
+                : new List<string>();
+            return new GamAssetFileImportPreview(
+                content,
+                singleAssetPreview: null,
+                subscriptionStatusKnown,
+                referencedIds,
+                missingIds);
+        }
+
+        private GamAssetImportPreview BuildGamAssetImportPreview(
+            GamAssetDocument document)
+        {
+            var isFixedMembership = document.Membership.Kind ==
+                GamAssetDocumentMembershipKind.Fixed;
+            var referencedIds = (isFixedMembership
+                    ? document.Membership.AddonIds
+                    : document.Membership.SnapshotAddonIds)
+                .Where(IsWorkshopNumericId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+            var subscriptionStatusKnown = configuration.SubscriptionBaselineInitialized;
+            var subscribedIds = new HashSet<string>(
+                (configuration.KnownSubscribedAddonIds ?? new List<string>())
+                    .Where(IsWorkshopNumericId),
+                StringComparer.Ordinal);
+            // A Smart snapshot describes the exporting machine only. Preserve it
+            // for an informational count, but never convert it into missing IDs or
+            // actionable Workshop URLs on the importing machine.
+            var missingIds = subscriptionStatusKnown && isFixedMembership
+                ? referencedIds
+                    .Where(id => !subscribedIds.Contains(id))
+                    .ToList()
+                : new List<string>();
+
+            return new GamAssetImportPreview(
+                document,
+                BuildUniqueGamAssetName(document.Name),
+                subscriptionStatusKnown,
+                referencedIds,
+                missingIds);
+        }
+
+        /// <summary>
+        /// Exports exactly one non-system Asset. Smart membership is exported as a
+        /// rule plus an informational snapshot; Steam and local paths are never
+        /// touched or serialized.
+        /// </summary>
+        public async Task ExportAssetToGamFileAsync(
+            string assetId,
+            string path,
+            bool includeImage)
+        {
+            await ExportAssetToGamFileAsync(
+                assetId,
+                path,
+                includeImage,
+                includeMemo: false);
+        }
+
+        public async Task ExportAssetToGamFileAsync(
+            string assetId,
+            string path,
+            bool includeImage,
+            bool includeMemo)
+        {
+            if (string.IsNullOrWhiteSpace(assetId))
+            {
+                throw new ArgumentException("Asset ID cannot be empty.", nameof(assetId));
+            }
+
+            var asset = configuration.Assets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, assetId, StringComparison.Ordinal) &&
+                !candidate.IsSystem);
+            if (asset == null)
+            {
+                throw new InvalidOperationException(
+                    $"Custom Asset not found: {assetId}");
+            }
+
+            var document = await BuildPortableAssetDocumentAsync(
+                asset,
+                includeImage,
+                includeMemo);
+            await gamAssetFileService.WriteAsync(path, document, overwrite: true);
+        }
+
+        private async Task<GamAssetDocument> BuildPortableAssetDocumentAsync(
+            Asset asset,
+            bool includeImage,
+            bool includeMemo)
+        {
+            var membership = BuildPortableMembership(asset);
+            var imageBytes = includeImage
+                ? await ReadPortableImageAsync(
+                    ResolveAssetImagePath(asset),
+                    "Asset")
+                : null;
+            return new GamAssetDocument(
+                asset.Name,
+                ToGamAssetDocumentState(asset.State),
+                membership,
+                imageBytes,
+                memo: includeMemo ? asset.Memo : null);
+        }
+
+        private static GamAssetDocumentMembership BuildPortableMembership(Asset asset)
+        {
+            if (!asset.IsSmart)
+            {
+                var unsupportedCount = asset.Addons.Count(id =>
+                    !IsWorkshopNumericId(id));
+                if (unsupportedCount != 0)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The Asset contains {unsupportedCount} non-Workshop reference(s) that .gam cannot represent.");
+                }
+                return GamAssetDocumentMembership.Fixed(
+                    asset.Addons
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(id => id, StringComparer.Ordinal));
+            }
+
+            if (!AddonClassificationService.TryNormalizeRule(
+                    asset.MembershipRule,
+                    out var normalizedRule,
+                    out var ruleError))
+            {
+                throw new GamAssetDocumentException(
+                    $"The Smart Asset rule cannot be exported: {ruleError}");
+            }
+
+            var documentRuleKind = normalizedRule.Kind switch
+            {
+                AssetMembershipRuleKind.Type => GamAssetDocumentRuleKind.Type,
+                AssetMembershipRuleKind.Tag => GamAssetDocumentRuleKind.Tag,
+                _ => throw new GamAssetDocumentException(
+                    "The Smart Asset rule kind cannot be exported.")
+            };
+            return GamAssetDocumentMembership.Smart(
+                new GamAssetDocumentRule(documentRuleKind, normalizedRule.Value),
+                asset.Addons
+                    .Where(IsWorkshopNumericId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal));
+        }
+
+        private static async Task<byte[]?> ReadPortableImageAsync(
+            string? imagePath,
+            string entityKind)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            {
+                return null;
+            }
+
+            var imageFile = new FileInfo(imagePath);
+            if (imageFile.Length > GamAssetDocumentImageNormalizer.MaximumInputBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"The {entityKind} image is too large to include in a .gam file.");
+            }
+            return await File.ReadAllBytesAsync(imagePath);
+        }
+
+        public Task ExportGamSelectionAsync(
+            IEnumerable<string>? assetIds,
+            IEnumerable<string>? groupIds,
+            string path,
+            bool includeImages)
+        {
+            return ExportGamSelectionAsync(
+                assetIds,
+                groupIds,
+                path,
+                includeImages,
+                includeMemos: false);
+        }
+
+        public async Task ExportGamSelectionAsync(
+            IEnumerable<string>? assetIds,
+            IEnumerable<string>? groupIds,
+            string path,
+            bool includeImages,
+            bool includeMemos)
+        {
+            var requestedAssetIds = new HashSet<string>(
+                (assetIds ?? Array.Empty<string>())
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Select(id => id.Trim()),
+                StringComparer.Ordinal);
+            var requestedGroupIds = new HashSet<string>(
+                (groupIds ?? Array.Empty<string>())
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Select(id => id.Trim()),
+                StringComparer.Ordinal);
+            if (requestedAssetIds.Count == 0 && requestedGroupIds.Count == 0)
+            {
+                throw new ArgumentException("At least one Asset or Asset Group must be selected.");
+            }
+
+            var selectedAssets = configuration.Assets
+                .Where(asset => requestedAssetIds.Contains(asset.Id))
+                .ToList();
+            if (selectedAssets.Count != requestedAssetIds.Count ||
+                selectedAssets.Any(asset => asset.IsSystem))
+            {
+                throw new InvalidOperationException(
+                    "The share selection contains a missing or system Asset.");
+            }
+            var selectedGroups = configuration.AssetGroups
+                .Where(group => requestedGroupIds.Contains(group.Id))
+                .ToList();
+            if (selectedGroups.Count != requestedGroupIds.Count)
+            {
+                throw new InvalidOperationException(
+                    "The share selection contains a missing Asset Group.");
+            }
+
+            if (selectedGroups.Count == 0 && selectedAssets.Count == 1)
+            {
+                await ExportAssetToGamFileAsync(
+                    selectedAssets[0].Id,
+                    path,
+                    includeImages,
+                    includeMemos);
+                return;
+            }
+
+            var groupsById = configuration.AssetGroups.ToDictionary(
+                group => group.Id,
+                StringComparer.Ordinal);
+            var rootSelectedGroups = selectedGroups
+                .Where(group => !HasRequestedGroupAncestor(
+                    group,
+                    requestedGroupIds,
+                    groupsById))
+                .ToList();
+            var includedGroupIds = ExpandGamExportGroupIds(
+                rootSelectedGroups.Select(group => group.Id),
+                configuration.AssetGroups);
+            var looseSelectedAssets = selectedAssets
+                .Where(asset => string.IsNullOrWhiteSpace(asset.ParentGroupId) ||
+                                !includedGroupIds.Contains(asset.ParentGroupId))
+                .ToList();
+            var rootEntries = OrderGamExportEntries(
+                looseSelectedAssets,
+                rootSelectedGroups);
+
+            var orderedAssets = new List<Asset>();
+            var orderedGroups = new List<AssetGroup>();
+            var includedAssetIds = new HashSet<string>(StringComparer.Ordinal);
+            var visitedGroupIds = new HashSet<string>(StringComparer.Ordinal);
+
+            void CollectEntry(GamExportEntry entry)
+            {
+                if (entry.Asset != null)
+                {
+                    if (includedAssetIds.Add(entry.Asset.Id))
+                    {
+                        orderedAssets.Add(entry.Asset);
+                    }
+                    return;
+                }
+
+                var group = entry.Group!;
+                if (!visitedGroupIds.Add(group.Id))
+                {
+                    return;
+                }
+                orderedGroups.Add(group);
+                foreach (var child in OrderGamExportEntries(
+                             configuration.Assets.Where(asset =>
+                                 !asset.IsSystem &&
+                                 string.Equals(
+                                     asset.ParentGroupId,
+                                     group.Id,
+                                     StringComparison.Ordinal)),
+                             configuration.AssetGroups.Where(candidate =>
+                                 string.Equals(
+                                     candidate.ParentGroupId,
+                                     group.Id,
+                                     StringComparison.Ordinal))))
+                {
+                    CollectEntry(child);
+                }
+            }
+
+            foreach (var entry in rootEntries)
+            {
+                CollectEntry(entry);
+            }
+
+            var localAssetIds = orderedAssets
+                .Select((asset, index) => new
+                {
+                    asset.Id,
+                    LocalId = $"asset-{index + 1}"
+                })
+                .ToDictionary(item => item.Id, item => item.LocalId, StringComparer.Ordinal);
+            var localGroupIds = orderedGroups
+                .Select((group, index) => new
+                {
+                    group.Id,
+                    LocalId = $"group-{index + 1}"
+                })
+                .ToDictionary(item => item.Id, item => item.LocalId, StringComparer.Ordinal);
+            var bundleAssets = new List<GamAssetBundleAsset>(orderedAssets.Count);
+            foreach (var asset in orderedAssets)
+            {
+                var imageBytes = includeImages
+                    ? await ReadPortableImageAsync(
+                        ResolveAssetImagePath(asset),
+                        "Asset")
+                    : null;
+                bundleAssets.Add(new GamAssetBundleAsset(
+                    localAssetIds[asset.Id],
+                    asset.Name,
+                    ToGamAssetDocumentState(asset.State),
+                    BuildPortableMembership(asset),
+                    imageBytes,
+                    memo: includeMemos ? asset.Memo : null));
+            }
+
+            var bundleGroups = new List<GamAssetBundleGroup>(orderedGroups.Count);
+            foreach (var group in orderedGroups)
+            {
+                var children = OrderGamExportEntries(
+                        configuration.Assets.Where(asset =>
+                            !asset.IsSystem &&
+                            string.Equals(asset.ParentGroupId, group.Id, StringComparison.Ordinal)),
+                        configuration.AssetGroups.Where(candidate =>
+                            string.Equals(candidate.ParentGroupId, group.Id, StringComparison.Ordinal)))
+                    .Select(entry => ToGamBundleReference(
+                        entry,
+                        localAssetIds,
+                        localGroupIds))
+                    .ToList();
+                var imageBytes = includeImages
+                    ? await ReadPortableImageAsync(
+                        ResolveAssetGroupImagePath(group),
+                        "Asset Group")
+                    : null;
+                bundleGroups.Add(new GamAssetBundleGroup(
+                    localGroupIds[group.Id],
+                    group.Name,
+                    ToGamAssetDocumentState(group.DefaultChildState),
+                    children,
+                    imageBytes,
+                    memo: includeMemos ? group.Memo : null));
+            }
+
+            var rootChildren = rootEntries
+                .Select(entry => ToGamBundleReference(
+                    entry,
+                    localAssetIds,
+                    localGroupIds))
+                .ToList();
+
+            await gamAssetFileService.WriteBundleAsync(
+                path,
+                new GamAssetBundleDocument(bundleAssets, bundleGroups, rootChildren),
+                overwrite: true);
+        }
+
+        private static bool HasRequestedGroupAncestor(
+            AssetGroup group,
+            ISet<string> requestedGroupIds,
+            IReadOnlyDictionary<string, AssetGroup> groupsById)
+        {
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var parentId = group.ParentGroupId;
+            while (!string.IsNullOrWhiteSpace(parentId) && visited.Add(parentId))
+            {
+                if (requestedGroupIds.Contains(parentId))
+                {
+                    return true;
+                }
+                parentId = groupsById.TryGetValue(parentId, out var parent)
+                    ? parent.ParentGroupId
+                    : null;
+            }
+            return false;
+        }
+
+        private static HashSet<string> ExpandGamExportGroupIds(
+            IEnumerable<string> rootGroupIds,
+            IEnumerable<AssetGroup> groups)
+        {
+            var children = groups
+                .Where(group => !string.IsNullOrWhiteSpace(group.ParentGroupId))
+                .GroupBy(group => group.ParentGroupId!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>(rootGroupIds.Reverse());
+            while (pending.Count > 0)
+            {
+                var currentId = pending.Pop();
+                if (!result.Add(currentId) || !children.TryGetValue(currentId, out var direct))
+                {
+                    continue;
+                }
+                for (var index = direct.Count - 1; index >= 0; index--)
+                {
+                    pending.Push(direct[index].Id);
+                }
+            }
+            return result;
+        }
+
+        private static IReadOnlyList<GamExportEntry> OrderGamExportEntries(
+            IEnumerable<Asset> assets,
+            IEnumerable<AssetGroup> groups)
+        {
+            return assets.Select(asset => new GamExportEntry(asset))
+                .Concat(groups.Select(group => new GamExportEntry(group)))
+                .OrderBy(entry => entry.IsFavorite ? 0 : 1)
+                .ThenBy(entry => entry.SortOrder < 0 ? int.MaxValue : entry.SortOrder)
+                .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => entry.Kind)
+                .ThenBy(entry => entry.Id, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private static GamAssetBundleEntryReference ToGamBundleReference(
+            GamExportEntry entry,
+            IReadOnlyDictionary<string, string> localAssetIds,
+            IReadOnlyDictionary<string, string> localGroupIds)
+        {
+            return entry.Asset != null
+                ? GamAssetBundleEntryReference.Asset(localAssetIds[entry.Asset.Id])
+                : GamAssetBundleEntryReference.Group(localGroupIds[entry.Group!.Id]);
+        }
+
+        private sealed class GamExportEntry
+        {
+            public GamExportEntry(Asset asset)
+            {
+                Asset = asset;
+                Kind = AssetListEntryKind.Asset;
+            }
+
+            public GamExportEntry(AssetGroup group)
+            {
+                Group = group;
+                Kind = AssetListEntryKind.Group;
+            }
+
+            public Asset? Asset { get; }
+            public AssetGroup? Group { get; }
+            public AssetListEntryKind Kind { get; }
+            public string Id => Asset?.Id ?? Group!.Id;
+            public string Name => Asset?.Name ?? Group!.Name;
+            public bool IsFavorite => Asset?.IsFavorite ?? Group!.IsFavorite;
+            public int SortOrder => Asset?.SortOrder ?? Group!.SortOrder;
+        }
+
+        /// <summary>
+        /// Imports a previously previewed document as a new Asset identity. This
+        /// operation never subscribes to or unsubscribes from Steam Workshop.
+        /// </summary>
+        public async Task<Asset> ImportGamAssetAsync(
+            GamAssetImportPreview preview,
+            string assetName)
+        {
+            if (preview == null)
+            {
+                throw new ArgumentNullException(nameof(preview));
+            }
+
+            var normalizedName = NormalizeGamAssetName(assetName);
+            if (AssetNameExists(normalizedName))
+            {
+                throw new InvalidOperationException(
+                    $"Asset name already exists: {normalizedName}");
+            }
+
+            // Re-validate programmatically constructed previews at the mutation
+            // boundary and normalize the embedded image/rule exactly as file input.
+            var document = GamAssetDocumentCodec.Deserialize(
+                GamAssetDocumentCodec.Serialize(preview.Document));
+            var rollbackConfiguration = CloneConfiguration(configuration);
+            var asset = new Asset(normalizedName)
+            {
+                State = FromGamAssetDocumentState(document.State),
+                Memo = document.Memo ?? string.Empty,
+                IsFavorite = false,
+                ParentGroupId = null,
+                SortOrder = GetNextRootNormalSortOrder(),
+                RetainMissingReferences =
+                    document.Membership.Kind == GamAssetDocumentMembershipKind.Fixed
+            };
+            asset.AddonStates.Clear();
+
+            if (document.Membership.Kind == GamAssetDocumentMembershipKind.Fixed)
+            {
+                asset.Addons = document.Membership.AddonIds
+                    .Where(IsWorkshopNumericId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
+            }
+            else
+            {
+                var rule = document.Membership.Rule
+                    ?? throw new GamAssetDocumentException(
+                        "The Smart Asset rule is missing.");
+                asset.MembershipRule = new AssetMembershipRule(
+                    rule.Kind == GamAssetDocumentRuleKind.Type
+                        ? AssetMembershipRuleKind.Type
+                        : AssetMembershipRuleKind.Tag,
+                    rule.Value);
+                asset.SmartAutomationState = new SmartAssetAutomationState
+                {
+                    SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                    Status = SmartAssetAutomationStatus.Active
+                };
+                // SnapshotAddonIds are intentionally informational. Current local
+                // metadata and the imported rule alone determine membership.
+                asset.Addons.Clear();
+            }
+
+            string? importedImagePath = null;
+            UndoAction? undoAction = null;
+            try
+            {
+                configuration.Assets.Add(asset);
+                AddMissingGamImportMetadata(asset);
+
+                if (asset.IsSmart)
+                {
+                    var snapshot = GetWorkshopSnapshotFromCache();
+                    if (snapshot.IsAuthoritative)
+                    {
+                        RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
+                        smartAssetReconciliationService.Reconcile(
+                            configuration,
+                            snapshot.SubscribedIds);
+                    }
+                }
+
+                var documentImage = document.ImageBytes;
+                if (documentImage != null)
+                {
+                    importedImagePath = WriteImportedAssetImage(asset, documentImage);
+                }
+
+                undoAction = new UndoAction(
+                    UndoActionType.AssetCreated,
+                    $"Imported Asset '{asset.Name}' from .gam")
+                {
+                    AssetId = asset.Id,
+                    AssetName = asset.Name
+                };
+                undoManager.RecordAction(undoAction);
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                RestoreConfigurationInPlace(configuration, rollbackConfiguration);
+                if (undoAction != null)
+                {
+                    undoManager.RemoveAction(undoAction);
+                }
+                TryDeleteImportedAssetImage(importedImagePath);
+                throw;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    ".gam import was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+
+            return asset;
+        }
+
+        public async Task<GamAssetImportResult> ImportGamFileAsync(
+            GamAssetFileImportPreview preview,
+            string? singleAssetName = null)
+        {
+            if (preview == null)
+            {
+                throw new ArgumentNullException(nameof(preview));
+            }
+
+            if (!preview.IsBundle)
+            {
+                var singlePreview = preview.SingleAssetPreview!;
+                var imported = await ImportGamAssetAsync(
+                    singlePreview,
+                    string.IsNullOrWhiteSpace(singleAssetName)
+                        ? singlePreview.SuggestedAssetName
+                        : singleAssetName);
+                return new GamAssetImportResult(
+                    new[] { imported },
+                    Array.Empty<AssetGroup>(),
+                    isBundle: false);
+            }
+
+            return await ImportGamBundleAsync(preview.Content.Bundle!);
+        }
+
+        private async Task<GamAssetImportResult> ImportGamBundleAsync(
+            GamAssetBundleDocument sourceBundle)
+        {
+            var bundle = await Task.Run(() =>
+                GamAssetBundleCodec.ValidateAndNormalize(sourceBundle));
+
+            var rollbackConfiguration = CloneConfiguration(configuration);
+            var usedNames = new HashSet<string>(
+                configuration.Assets.Select(asset => asset.Name)
+                    .Concat(configuration.AssetGroups.Select(group => group.Name)),
+                StringComparer.OrdinalIgnoreCase);
+            var usedIds = new HashSet<string>(
+                configuration.Assets.Select(asset => asset.Id)
+                    .Concat(configuration.AssetGroups.Select(group => group.Id)),
+                StringComparer.Ordinal);
+            var assetsByLocalId = new Dictionary<string, Asset>(StringComparer.Ordinal);
+            var importedAssets = new List<Asset>(bundle.Assets.Count);
+            foreach (var portableAsset in bundle.Assets)
+            {
+                var asset = CreateImportedBundleAsset(
+                    portableAsset,
+                    BuildUniqueGamImportName(portableAsset.Name, usedNames));
+                while (!usedIds.Add(asset.Id))
+                {
+                    asset.Id = Guid.NewGuid().ToString();
+                }
+                assetsByLocalId.Add(portableAsset.LocalId, asset);
+                importedAssets.Add(asset);
+            }
+
+            var importedGroups = new List<AssetGroup>(bundle.Groups.Count);
+            var groupPairs = new List<(GamAssetBundleGroup Portable, AssetGroup Model)>();
+            foreach (var portableGroup in bundle.Groups)
+            {
+                var group = new AssetGroup(
+                    BuildUniqueGamImportName(portableGroup.Name, usedNames))
+                {
+                    DefaultChildState = FromGamAssetDocumentState(
+                        portableGroup.DefaultChildState),
+                    Memo = portableGroup.Memo ?? string.Empty,
+                    IsFavorite = false
+                };
+                while (!usedIds.Add(group.Id))
+                {
+                    group.Id = Guid.NewGuid().ToString();
+                }
+                importedGroups.Add(group);
+                groupPairs.Add((portableGroup, group));
+            }
+
+            var groupsByLocalId = groupPairs.ToDictionary(
+                pair => pair.Portable.LocalId,
+                pair => pair.Model,
+                StringComparer.Ordinal);
+            var nextRootOrder = GetNextRootNormalSortOrder();
+            var rootOrder = nextRootOrder;
+            foreach (var rootChild in bundle.RootChildren)
+            {
+                AssignImportedBundleEntry(
+                    rootChild,
+                    parentGroupId: null,
+                    rootOrder++,
+                    assetsByLocalId,
+                    groupsByLocalId);
+            }
+            foreach (var pair in groupPairs)
+            {
+                var childOrder = 0;
+                foreach (var child in pair.Portable.Children)
+                {
+                    AssignImportedBundleEntry(
+                        child,
+                        pair.Model.Id,
+                        childOrder++,
+                        assetsByLocalId,
+                        groupsByLocalId);
+                }
+            }
+            var requiredNestedDepth = GetRequiredGamBundleDepth(bundle);
+            var previousMaxNestedDepth = configuration.MaxNestedGroupDepth;
+
+            var importedImagePaths = new List<string>();
+            UndoAction? undoAction = null;
+            try
+            {
+                if (requiredNestedDepth > configuration.MaxNestedGroupDepth)
+                {
+                    configuration.MaxNestedGroupDepth = requiredNestedDepth;
+                }
+                configuration.AssetGroups.AddRange(importedGroups);
+                configuration.Assets.AddRange(importedAssets);
+                foreach (var asset in importedAssets)
+                {
+                    AddMissingGamImportMetadata(asset);
+                }
+
+                var snapshot = GetWorkshopSnapshotFromCache();
+                if (snapshot.IsAuthoritative && importedAssets.Any(asset => asset.IsSmart))
+                {
+                    RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
+                    smartAssetReconciliationService.Reconcile(
+                        configuration,
+                        snapshot.SubscribedIds);
+                }
+
+                foreach (var portableAsset in bundle.Assets)
+                {
+                    var image = portableAsset.ImageBytes;
+                    if (image == null)
+                    {
+                        continue;
+                    }
+                    importedImagePaths.Add(WriteImportedAssetImage(
+                        assetsByLocalId[portableAsset.LocalId],
+                        image));
+                }
+                foreach (var pair in groupPairs)
+                {
+                    var image = pair.Portable.ImageBytes;
+                    if (image == null)
+                    {
+                        continue;
+                    }
+                    importedImagePaths.Add(WriteImportedAssetGroupImage(
+                        pair.Model,
+                        image));
+                }
+
+                undoAction = new UndoAction(
+                    UndoActionType.GamBundleImported,
+                    $"Imported {importedAssets.Count} Assets and {importedGroups.Count} Asset Groups from .gam")
+                {
+                    AffectedAssetIds = importedAssets.Select(asset => asset.Id).ToList(),
+                    AffectedGroupIds = importedGroups.Select(group => group.Id).ToList(),
+                    PreviousMaxNestedGroupDepth =
+                        requiredNestedDepth > previousMaxNestedDepth
+                            ? previousMaxNestedDepth
+                            : null
+                };
+                undoManager.RecordAction(undoAction);
+                await SaveConfigurationImmediatelyAsync();
+            }
+            catch
+            {
+                RestoreConfigurationInPlace(configuration, rollbackConfiguration);
+                if (undoAction != null)
+                {
+                    undoManager.RemoveAction(undoAction);
+                }
+                foreach (var imagePath in importedImagePaths)
+                {
+                    TryDeleteImportedAssetImage(imagePath);
+                }
+                throw;
+            }
+
+            try
+            {
+                await UpdateAddonStatesAsync();
+            }
+            catch (Exception ex)
+            {
+                QueueRuntimeApplyProvider?.Invoke();
+                errorHandler.HandleError(
+                    ex,
+                    ".gam bundle import was saved; runtime reconciliation was queued",
+                    ErrorSeverity.Warning);
+            }
+
+            return new GamAssetImportResult(
+                importedAssets,
+                importedGroups,
+                isBundle: true);
+        }
+
+        private static void AssignImportedBundleEntry(
+            GamAssetBundleEntryReference entry,
+            string? parentGroupId,
+            int sortOrder,
+            IReadOnlyDictionary<string, Asset> assetsByLocalId,
+            IReadOnlyDictionary<string, AssetGroup> groupsByLocalId)
+        {
+            if (entry.Kind == GamAssetBundleEntryKind.Asset)
+            {
+                var asset = assetsByLocalId[entry.LocalId];
+                asset.ParentGroupId = parentGroupId;
+                asset.IsFavorite = false;
+                asset.SortOrder = sortOrder;
+                return;
+            }
+
+            var group = groupsByLocalId[entry.LocalId];
+            group.ParentGroupId = parentGroupId;
+            group.IsFavorite = false;
+            group.SortOrder = sortOrder;
+        }
+
+        private static int GetRequiredGamBundleDepth(GamAssetBundleDocument bundle)
+        {
+            if (bundle.Groups.Count == 0)
+            {
+                return 0;
+            }
+
+            var groupsByLocalId = bundle.Groups.ToDictionary(
+                group => group.LocalId,
+                StringComparer.Ordinal);
+            var maximum = 0;
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+
+            void Visit(GamAssetBundleEntryReference entry, int groupDepth)
+            {
+                if (entry.Kind != GamAssetBundleEntryKind.Group)
+                {
+                    return;
+                }
+
+                maximum = Math.Max(maximum, groupDepth);
+                if (!visited.Add(entry.LocalId))
+                {
+                    return;
+                }
+                var group = groupsByLocalId[entry.LocalId];
+                foreach (var child in group.Children)
+                {
+                    Visit(child, groupDepth + 1);
+                }
+            }
+
+            foreach (var rootChild in bundle.RootChildren)
+            {
+                Visit(rootChild, groupDepth: 0);
+            }
+            return maximum;
+        }
+
+        private Asset CreateImportedBundleAsset(
+            GamAssetBundleAsset portable,
+            string name)
+        {
+            var asset = new Asset(name)
+            {
+                State = FromGamAssetDocumentState(portable.State),
+                Memo = portable.Memo ?? string.Empty,
+                IsFavorite = false,
+                RetainMissingReferences =
+                    portable.Membership.Kind == GamAssetDocumentMembershipKind.Fixed
+            };
+            asset.AddonStates.Clear();
+            if (portable.Membership.Kind == GamAssetDocumentMembershipKind.Fixed)
+            {
+                asset.Addons = portable.Membership.AddonIds
+                    .Where(IsWorkshopNumericId)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
+                return asset;
+            }
+
+            var rule = portable.Membership.Rule
+                ?? throw new GamAssetDocumentException(
+                    "The Smart Asset rule is missing.");
+            asset.MembershipRule = new AssetMembershipRule(
+                rule.Kind == GamAssetDocumentRuleKind.Type
+                    ? AssetMembershipRuleKind.Type
+                    : AssetMembershipRuleKind.Tag,
+                rule.Value);
+            asset.SmartAutomationState = new SmartAssetAutomationState
+            {
+                SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                Status = SmartAssetAutomationStatus.Active
+            };
+            asset.Addons.Clear();
+            return asset;
+        }
+
+        private int GetNextRootNormalSortOrder()
+        {
+            var orders = configuration.Assets
+                .Where(asset => !asset.IsSystem &&
+                                asset.ParentGroupId == null &&
+                                !asset.IsFavorite)
+                .Select(asset => asset.SortOrder)
+                .Concat(configuration.AssetGroups
+                    .Where(group => group.ParentGroupId == null &&
+                                    !group.IsFavorite)
+                    .Select(group => group.SortOrder))
+                .Where(order => order >= 0 && order < int.MaxValue)
+                .ToList();
+            return orders.Count == 0 ? 0 : checked(orders.Max() + 1);
+        }
+
+        private string BuildUniqueGamImportName(
+            string requestedName,
+            ISet<string> usedNames)
+        {
+            var normalized = NormalizeGamAssetName(requestedName);
+            if (usedNames.Add(normalized))
+            {
+                return normalized;
+            }
+
+            for (var suffixNumber = 2; suffixNumber < int.MaxValue; suffixNumber++)
+            {
+                var suffix = $" ({suffixNumber})";
+                var stem = TruncateAtTextElementBoundary(
+                    normalized,
+                    GamAssetDocumentCodec.MaximumAssetNameLength - suffix.Length);
+                var candidate = NormalizeGamAssetName(stem.TrimEnd() + suffix);
+                if (usedNames.Add(candidate))
+                {
+                    return candidate;
+                }
+            }
+            throw new InvalidOperationException(
+                "A unique Asset or Group name could not be generated.");
+        }
+
+        private string BuildUniqueGamAssetName(string requestedName)
+        {
+            var normalized = NormalizeGamAssetName(requestedName);
+            if (!AssetNameExists(normalized))
+            {
+                return normalized;
+            }
+
+            for (var suffixNumber = 2; suffixNumber < int.MaxValue; suffixNumber++)
+            {
+                var suffix = $" ({suffixNumber})";
+                var stem = TruncateAtTextElementBoundary(
+                    normalized,
+                    GamAssetDocumentCodec.MaximumAssetNameLength - suffix.Length);
+                var candidate = NormalizeGamAssetName(stem.TrimEnd() + suffix);
+                if (!AssetNameExists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "A unique Asset name could not be generated.");
+        }
+
+        private static string TruncateAtTextElementBoundary(
+            string value,
+            int maximumLength)
+        {
+            if (value.Length <= maximumLength)
+            {
+                return value;
+            }
+
+            var boundaries = StringInfo.ParseCombiningCharacters(value);
+            var acceptedLength = 0;
+            for (var index = 0; index < boundaries.Length; index++)
+            {
+                var elementEnd = index + 1 < boundaries.Length
+                    ? boundaries[index + 1]
+                    : value.Length;
+                if (elementEnd > maximumLength)
+                {
+                    break;
+                }
+                acceptedLength = elementEnd;
+            }
+
+            return value.Substring(0, acceptedLength);
+        }
+
+        private static string NormalizeGamAssetName(string? name)
+        {
+            var normalized = name?.Trim() ?? string.Empty;
+            if (normalized.Length == 0 ||
+                normalized.Length > GamAssetDocumentCodec.MaximumAssetNameLength)
+            {
+                throw new ArgumentException(
+                    $"Asset name must contain 1 to {GamAssetDocumentCodec.MaximumAssetNameLength} characters.",
+                    nameof(name));
+            }
+
+            if (normalized.Any(char.IsControl))
+            {
+                throw new ArgumentException(
+                    "Asset name cannot contain control characters.",
+                    nameof(name));
+            }
+
+            return normalized;
+        }
+
+        private void AddMissingGamImportMetadata(Asset asset)
+        {
+            if (asset.IsSmart)
+            {
+                return;
+            }
+
+            var subscriptionStatusKnown = configuration.SubscriptionBaselineInitialized;
+            var subscribedIds = new HashSet<string>(
+                (configuration.KnownSubscribedAddonIds ?? new List<string>())
+                    .Where(IsWorkshopNumericId),
+                StringComparer.Ordinal);
+            foreach (var addonId in asset.Addons)
+            {
+                if (configuration.AddonMetadata.ContainsKey(addonId))
+                {
+                    continue;
+                }
+
+                var isKnownSubscribed =
+                    subscriptionStatusKnown && subscribedIds.Contains(addonId);
+                configuration.AddonMetadata[addonId] = new WorkshopAddon(
+                    addonId,
+                    string.Empty)
+                {
+                    Title = $"Workshop-{addonId}",
+                    NeedsTitleUpdate = true,
+                    IsAvailable = false,
+                    IsDownloadPending = isKnownSubscribed,
+                    IsEnabled = false
+                };
+            }
+        }
+
+        private string WriteImportedAssetImage(Asset asset, byte[] sourceBytes)
+        {
+            var normalizedBytes = GamAssetDocumentImageNormalizer.Normalize(sourceBytes);
+            var imageDirectory = GetAssetImageDirectory();
+            var fileName = $"{asset.Id}.png";
+            var destinationPath = Path.Combine(imageDirectory, fileName);
+            var temporaryPath = Path.Combine(
+                imageDirectory,
+                $".{asset.Id}.{Guid.NewGuid():N}.tmp");
+            ValidatePath(destinationPath, "gamImportedAssetImagePath");
+            ValidatePath(temporaryPath, "gamImportedAssetImageTempPath");
+
+            try
+            {
+                File.WriteAllBytes(temporaryPath, normalizedBytes);
+                File.Move(temporaryPath, destinationPath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+
+            asset.ImagePath = Path.Combine(AssetImageDirectoryName, fileName);
+            return destinationPath;
+        }
+
+        private string WriteImportedAssetGroupImage(
+            AssetGroup group,
+            byte[] sourceBytes)
+        {
+            var normalizedBytes = GamAssetDocumentImageNormalizer.Normalize(sourceBytes);
+            var imageDirectory = GetAssetImageDirectory();
+            var fileName = $"group-{group.Id}.png";
+            var destinationPath = Path.Combine(imageDirectory, fileName);
+            var temporaryPath = Path.Combine(
+                imageDirectory,
+                $".group-{group.Id}.{Guid.NewGuid():N}.tmp");
+            ValidatePath(destinationPath, "gamImportedAssetGroupImagePath");
+            ValidatePath(temporaryPath, "gamImportedAssetGroupImageTempPath");
+
+            try
+            {
+                File.WriteAllBytes(temporaryPath, normalizedBytes);
+                File.Move(temporaryPath, destinationPath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+
+            group.ImagePath = Path.Combine(AssetImageDirectoryName, fileName);
+            return destinationPath;
+        }
+
+        private void TryDeleteImportedAssetImage(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                // Configuration rollback remains authoritative. Surface the orphan
+                // so support can remove it instead of silently hiding the failure.
+                errorHandler.HandleWarning(
+                    $"Failed to remove an unreferenced imported Asset image: {ex.Message}",
+                    "GamAssetImport");
+            }
+        }
+
+        private static GamAssetDocumentState ToGamAssetDocumentState(
+            AddonState state)
+        {
+            return state switch
+            {
+                AddonState.Enabled => GamAssetDocumentState.Enabled,
+                AddonState.Disabled => GamAssetDocumentState.Disabled,
+                AddonState.Excluded => GamAssetDocumentState.Excluded,
+                _ => throw new GamAssetDocumentException(
+                    "The Asset state cannot be exported.")
+            };
+        }
+
+        private static AddonState FromGamAssetDocumentState(
+            GamAssetDocumentState state)
+        {
+            return state switch
+            {
+                GamAssetDocumentState.Enabled => AddonState.Enabled,
+                GamAssetDocumentState.Disabled => AddonState.Disabled,
+                GamAssetDocumentState.Excluded => AddonState.Excluded,
+                _ => throw new GamAssetDocumentException(
+                    "The .gam Asset state is invalid.")
+            };
+        }
+
         public void DeleteAsset(string assetId)
         {
             if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
@@ -6811,7 +9464,7 @@ namespace GmodAddonManager.Core.Services
                     AffectedAddonIds = new List<string>(asset.Addons),
                     PreviousAddonStates = new Dictionary<string, AddonState>(asset.AddonStates)
                 });
-                
+
                 configuration.Assets.Remove(asset);
             }
         }
@@ -6942,6 +9595,8 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidOperationException($"Custom asset not found: {assetId}");
             }
 
+            ThrowIfSmartAssetMembershipOwned(asset);
+
             var previousCurrentVersion = asset.CurrentVersion;
             var snapshot = assetVersionService.CreateSnapshot(asset, note);
             try
@@ -6969,6 +9624,8 @@ namespace GmodAddonManager.Core.Services
             {
                 return false;
             }
+
+            ThrowIfSmartAssetMembershipOwned(asset);
 
             var previousMembership = asset.Addons.ToList();
             var previousCurrentVersion = asset.CurrentVersion;
@@ -7030,6 +9687,8 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
+            ThrowIfSmartAssetMembershipOwned(asset);
+
             var snapshotIndex = asset.VersionHistory.IndexOf(snapshot);
             var previousCurrentVersion = asset.CurrentVersion;
             if (!assetVersionService.DeleteSnapshot(asset, version))
@@ -7065,6 +9724,8 @@ namespace GmodAddonManager.Core.Services
                 return 0;
             }
 
+            ThrowIfSmartAssetMembershipOwned(asset);
+
             var previousHistory = asset.VersionHistory.ToList();
             var previousCurrentVersion = asset.CurrentVersion;
             var removed = assetVersionService.ClearHistory(asset);
@@ -7089,6 +9750,7 @@ namespace GmodAddonManager.Core.Services
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId && !a.IsSystem);
             var snapshot = asset?.VersionHistory.FirstOrDefault(item => item.Version == version);
             return asset != null &&
+                   !asset.IsSmart &&
                    snapshot != null &&
                    assetVersionService.HasMembershipChanges(asset, snapshot);
         }
@@ -7101,6 +9763,10 @@ namespace GmodAddonManager.Core.Services
             }
 
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset != null)
+            {
+                ThrowIfSmartAssetMembershipOwned(asset);
+            }
             var normalizedAddonId = addonId?.Trim();
             if (asset != null &&
                 !asset.ContainsAllAddons() &&
@@ -7223,6 +9889,10 @@ namespace GmodAddonManager.Core.Services
             }
 
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset != null)
+            {
+                ThrowIfSmartAssetMembershipOwned(asset);
+            }
             if (asset == null ||
                 asset.ContainsAllAddons() ||
                 addonIds == null ||
@@ -7339,6 +10009,10 @@ namespace GmodAddonManager.Core.Services
             }
 
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
+            if (asset != null)
+            {
+                ThrowIfSmartAssetMembershipOwned(asset);
+            }
             if (asset == null || asset.ContainsAllAddons() || addonIds == null || addonIds.Count == 0)
             {
                 return;
@@ -8772,6 +11446,12 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
+            RuntimeWriteObserver?.Invoke(
+                targetStates.ToDictionary(
+                    entry => entry.Key,
+                    entry => entry.Value,
+                    StringComparer.Ordinal));
+
             gmodDisabledAddonReconciliationService.RecordSuccessfulGamWrite(
                 configuration,
                 targetStates,
@@ -9169,6 +11849,109 @@ namespace GmodAddonManager.Core.Services
                 ?? throw new InvalidOperationException(
                     "Failed to clone configuration for transactional rollback.");
         }
+
+        private static void RestoreConfigurationInPlace(
+            Configuration target,
+            Configuration snapshot)
+        {
+            // Keep the live collection and entity identities that UI view-models may
+            // already reference. Replacing only the Configuration object is not
+            // enough: a failed Smart import can temporarily mutate an existing
+            // Asset before save, leaving an AssetItemViewModel pointed at the stale
+            // instance after a wholesale JSON rollback.
+            var liveAssetCollection = target.Assets ?? new List<Asset>();
+            var liveAssetsById = liveAssetCollection
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.Id))
+                .GroupBy(asset => asset.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var liveGroupCollection = target.AssetGroups ?? new List<AssetGroup>();
+            var liveGroupsById = liveGroupCollection
+                .Where(group => !string.IsNullOrWhiteSpace(group.Id))
+                .GroupBy(group => group.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var liveMetadataCollection = target.AddonMetadata ??
+                new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal);
+            var liveMetadataById = new Dictionary<string, WorkshopAddon>(
+                liveMetadataCollection,
+                StringComparer.Ordinal);
+
+            var json = JsonConvert.SerializeObject(snapshot);
+            JsonConvert.PopulateObject(
+                json,
+                target,
+                new JsonSerializerSettings
+                {
+                    ObjectCreationHandling = ObjectCreationHandling.Replace
+                });
+
+            var populatedAssetsById = (target.Assets ?? new List<Asset>())
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.Id))
+                .GroupBy(asset => asset.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            liveAssetCollection.Clear();
+            foreach (var snapshotAsset in snapshot.Assets ?? new List<Asset>())
+            {
+                if (liveAssetsById.TryGetValue(snapshotAsset.Id, out var liveAsset))
+                {
+                    PopulateRollbackEntity(snapshotAsset, liveAsset);
+                    liveAssetCollection.Add(liveAsset);
+                }
+                else if (populatedAssetsById.TryGetValue(snapshotAsset.Id, out var populatedAsset))
+                {
+                    liveAssetCollection.Add(populatedAsset);
+                }
+            }
+            target.Assets = liveAssetCollection;
+
+            var populatedGroupsById = (target.AssetGroups ?? new List<AssetGroup>())
+                .Where(group => !string.IsNullOrWhiteSpace(group.Id))
+                .GroupBy(group => group.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            liveGroupCollection.Clear();
+            foreach (var snapshotGroup in snapshot.AssetGroups ?? new List<AssetGroup>())
+            {
+                if (liveGroupsById.TryGetValue(snapshotGroup.Id, out var liveGroup))
+                {
+                    PopulateRollbackEntity(snapshotGroup, liveGroup);
+                    liveGroupCollection.Add(liveGroup);
+                }
+                else if (populatedGroupsById.TryGetValue(snapshotGroup.Id, out var populatedGroup))
+                {
+                    liveGroupCollection.Add(populatedGroup);
+                }
+            }
+            target.AssetGroups = liveGroupCollection;
+
+            var populatedMetadata = target.AddonMetadata ??
+                new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal);
+            liveMetadataCollection.Clear();
+            foreach (var snapshotEntry in snapshot.AddonMetadata ??
+                     new Dictionary<string, WorkshopAddon>())
+            {
+                if (liveMetadataById.TryGetValue(snapshotEntry.Key, out var liveMetadata))
+                {
+                    PopulateRollbackEntity(snapshotEntry.Value, liveMetadata);
+                    liveMetadataCollection[snapshotEntry.Key] = liveMetadata;
+                }
+                else if (populatedMetadata.TryGetValue(snapshotEntry.Key, out var populatedEntry))
+                {
+                    liveMetadataCollection[snapshotEntry.Key] = populatedEntry;
+                }
+            }
+            target.AddonMetadata = liveMetadataCollection;
+        }
+
+        private static void PopulateRollbackEntity<T>(T snapshot, T target)
+            where T : class
+        {
+            JsonConvert.PopulateObject(
+                JsonConvert.SerializeObject(snapshot),
+                target,
+                new JsonSerializerSettings
+                {
+                    ObjectCreationHandling = ObjectCreationHandling.Replace
+                });
+        }
         
         /// <summary>
         // Initialize WorkshopIconResolver
@@ -9425,11 +12208,25 @@ namespace GmodAddonManager.Core.Services
             var actionHandled = false;
             var configurationPersisted = false;
             var requiresRuntimeReconcile = false;
+            var imagePathsToDeleteAfterPersist = new List<string>();
             var previousLastUpdated = configuration.LastUpdated;
             Action? rollbackMutation = null;
 
             try
             {
+                if (action.Type != UndoActionType.AssetGroupImageChanged &&
+                    assetGroupService.TryUndo(
+                        configuration,
+                        action,
+                        out var groupUndoMutation))
+                {
+                    actionHandled = true;
+                    requiresRuntimeReconcile =
+                        groupUndoMutation!.RequiresRuntimeReconcile;
+                    rollbackMutation = groupUndoMutation.Rollback;
+                }
+                else
+                {
                 switch (action.Type)
                 {
                     case UndoActionType.AssetCreated:
@@ -9440,6 +12237,11 @@ namespace GmodAddonManager.Core.Services
                             if (assetIndex >= 0)
                             {
                                 var removedAsset = configuration.Assets[assetIndex];
+                                var assetImagePath = ResolveAssetImagePath(removedAsset);
+                                if (!string.IsNullOrWhiteSpace(assetImagePath))
+                                {
+                                    imagePathsToDeleteAfterPersist.Add(assetImagePath);
+                                }
                                 rollbackMutation = () =>
                                 {
                                     if (configuration.Assets.All(a => a.Id != removedAsset.Id))
@@ -9704,6 +12506,139 @@ namespace GmodAddonManager.Core.Services
                         }
                         break;
 
+                    case UndoActionType.GamBundleImported:
+                        {
+                            var assetIds = new HashSet<string>(
+                                action.AffectedAssetIds ?? new List<string>(),
+                                StringComparer.Ordinal);
+                            var groupIds = new HashSet<string>(
+                                action.AffectedGroupIds ?? new List<string>(),
+                                StringComparer.Ordinal);
+                            if (assetIds.Count == 0 && groupIds.Count == 0)
+                            {
+                                break;
+                            }
+
+                            var removedAssets = configuration.Assets
+                                .Where(asset => assetIds.Contains(asset.Id))
+                                .ToList();
+                            var removedGroups = configuration.AssetGroups
+                                .Where(group => groupIds.Contains(group.Id))
+                                .ToList();
+                            if (removedAssets.Count != assetIds.Count ||
+                                removedGroups.Count != groupIds.Count)
+                            {
+                                break;
+                            }
+
+                            foreach (var removedAsset in removedAssets)
+                            {
+                                var path = ResolveAssetImagePath(removedAsset);
+                                if (!string.IsNullOrWhiteSpace(path))
+                                {
+                                    imagePathsToDeleteAfterPersist.Add(path);
+                                }
+                            }
+                            foreach (var removedGroup in removedGroups)
+                            {
+                                var path = ResolveAssetGroupImagePath(removedGroup);
+                                if (!string.IsNullOrWhiteSpace(path))
+                                {
+                                    imagePathsToDeleteAfterPersist.Add(path);
+                                }
+                            }
+
+                            var previousAssets = configuration.Assets.ToList();
+                            var previousGroups = configuration.AssetGroups.ToList();
+                            var currentMaxNestedGroupDepth =
+                                configuration.MaxNestedGroupDepth;
+                            rollbackMutation = () =>
+                            {
+                                configuration.Assets.Clear();
+                                configuration.Assets.AddRange(previousAssets);
+                                configuration.AssetGroups.Clear();
+                                configuration.AssetGroups.AddRange(previousGroups);
+                                configuration.MaxNestedGroupDepth =
+                                    currentMaxNestedGroupDepth;
+                            };
+                            configuration.Assets.RemoveAll(asset =>
+                                assetIds.Contains(asset.Id));
+                            configuration.AssetGroups.RemoveAll(group =>
+                                groupIds.Contains(group.Id));
+                            if (action.PreviousMaxNestedGroupDepth is int previousDepth &&
+                                previousDepth >= Configuration.MinimumNestedGroupDepth &&
+                                previousDepth <= Configuration.MaximumNestedGroupDepth)
+                            {
+                                configuration.MaxNestedGroupDepth = previousDepth;
+                            }
+                            actionHandled = true;
+                            requiresRuntimeReconcile = true;
+                        }
+                        break;
+
+                    case UndoActionType.AssetGroupImageChanged:
+                        if (action.GroupId != null)
+                        {
+                            var group = configuration.AssetGroups.FirstOrDefault(candidate =>
+                                string.Equals(candidate.Id, action.GroupId, StringComparison.Ordinal));
+                            if (group != null)
+                            {
+                                var currentName = group.Name;
+                                var currentImageReference = group.ImagePath;
+                                var currentImagePath = ResolveAssetGroupImagePath(group);
+                                group.ImagePath = action.PreviousGroupImagePath;
+                                var previousImagePath = ResolveAssetGroupImagePath(group);
+                                group.ImagePath = currentImageReference;
+
+                                var imageSnapshots =
+                                    new Dictionary<string, (bool Exists, byte[]? Bytes, FileAttributes Attributes)>(
+                                        StringComparer.OrdinalIgnoreCase);
+                                foreach (var path in new[] { currentImagePath, previousImagePath }
+                                             .Where(path => !string.IsNullOrWhiteSpace(path))
+                                             .Cast<string>()
+                                             .Distinct(StringComparer.OrdinalIgnoreCase))
+                                {
+                                    var exists = File.Exists(path);
+                                    imageSnapshots[path] = exists
+                                        ? (true, File.ReadAllBytes(path), File.GetAttributes(path))
+                                        : (false, null, FileAttributes.Normal);
+                                }
+
+                                rollbackMutation = () =>
+                                {
+                                    group.Name = currentName;
+                                    group.ImagePath = currentImageReference;
+                                    RestoreImageFileSnapshots(imageSnapshots);
+                                };
+
+                                if (action.PreviousGroupName != null)
+                                {
+                                    group.Name = action.PreviousGroupName;
+                                }
+                                if (!string.IsNullOrWhiteSpace(currentImagePath) &&
+                                    File.Exists(currentImagePath))
+                                {
+                                    File.SetAttributes(currentImagePath, FileAttributes.Normal);
+                                    File.Delete(currentImagePath);
+                                }
+                                group.ImagePath = action.PreviousGroupImagePath;
+                                if (action.PreviousGroupImageBytes != null &&
+                                    !string.IsNullOrWhiteSpace(previousImagePath))
+                                {
+                                    var directory = Path.GetDirectoryName(previousImagePath);
+                                    if (!string.IsNullOrWhiteSpace(directory))
+                                    {
+                                        Directory.CreateDirectory(directory);
+                                    }
+                                    File.WriteAllBytes(
+                                        previousImagePath,
+                                        action.PreviousGroupImageBytes);
+                                }
+                                actionHandled = true;
+                            }
+                        }
+                        break;
+
                     case UndoActionType.AssetFavoriteChanged:
                         if (action.AssetId != null && action.PreviousFavoriteState.HasValue)
                         {
@@ -9846,6 +12781,7 @@ namespace GmodAddonManager.Core.Services
                         }
                         break;
                 }
+                }
 
                 if (!actionHandled)
                 {
@@ -9855,6 +12791,11 @@ namespace GmodAddonManager.Core.Services
 
                 await SaveConfigurationImmediatelyAsync();
                 configurationPersisted = true;
+                foreach (var imagePath in imagePathsToDeleteAfterPersist
+                             .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    TryDeleteImportedAssetImage(imagePath);
+                }
 
                 if (requiresRuntimeReconcile)
                 {
@@ -10267,6 +13208,7 @@ namespace GmodAddonManager.Core.Services
             errorHandler.HandleInfo("Starting GAM configuration reset", "ResetManager");
 
             var originalAssets = configuration.Assets;
+            var originalAssetGroups = configuration.AssetGroups;
             var existingSubscribeAsset = configuration.Assets
                 .FirstOrDefault(asset => asset.Id == SubscribeSystemAssetId);
             var originalSubscribeName = existingSubscribeAsset?.Name;
@@ -10320,6 +13262,8 @@ namespace GmodAddonManager.Core.Services
             subscribeAsset.Name = "Subscribe Asset";
             subscribeAsset.IsSystem = true;
             subscribeAsset.IsFavorite = false;
+            subscribeAsset.ParentGroupId = null;
+            subscribeAsset.SortOrder = 0;
             subscribeAsset.ImagePath = null;
             subscribeAsset.VersionHistory.Clear();
             subscribeAsset.CurrentVersion = 0;
@@ -10332,13 +13276,16 @@ namespace GmodAddonManager.Core.Services
             {
                 Id = SystemAssetDefinitions.GmodDisabledId
             };
-            gmodDisabledAsset.SetWholeState(AddonState.Excluded);
+            gmodDisabledAsset.SetWholeState(
+                SystemAssetDefinitions.GmodDisabledDefaultState);
+            gmodDisabledAsset.SortOrder = 1;
 
             configuration.Assets = new List<Asset>
             {
                 subscribeAsset,
                 gmodDisabledAsset
             };
+            configuration.AssetGroups = new List<AssetGroup>();
             configuration.InitialRuntimeImportCompleted = true;
             configuration.InitialRuntimeImportCompletedAtUtc = DateTime.UtcNow;
             configuration.GamAppliedRuntimeBaselineInitialized = false;
@@ -10379,6 +13326,7 @@ namespace GmodAddonManager.Core.Services
             catch
             {
                 configuration.Assets = originalAssets;
+                configuration.AssetGroups = originalAssetGroups;
                 if (existingSubscribeAsset != null)
                 {
                     existingSubscribeAsset.Name = originalSubscribeName!;

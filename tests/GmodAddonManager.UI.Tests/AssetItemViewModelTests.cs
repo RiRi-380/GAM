@@ -136,6 +136,67 @@ public sealed class AssetItemViewModelTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task SmartAsset_ShowsRuleAndAutomationState_AndHidesMembershipVersions()
+    {
+        using var manager = await CreateManagerAsync();
+        var asset = new Asset("Roleplay")
+        {
+            MembershipRule = new AssetMembershipRule(
+                AssetMembershipRuleKind.Tag,
+                "Roleplay"),
+            SmartAutomationState = new SmartAssetAutomationState
+            {
+                Status = SmartAssetAutomationStatus.Active
+            }
+        };
+        using var viewModel = new AssetItemViewModel(
+            asset,
+            manager,
+            null!,
+            null!);
+        var previousLanguage = LocalizationManager.Instance.CurrentLanguage;
+
+        try
+        {
+            LocalizationManager.Instance.ChangeLanguage("ja-JP");
+            Assert.True(viewModel.IsSmart);
+            Assert.False(viewModel.CanManageVersions);
+            Assert.Equal("タグ: Roleplay", viewModel.SmartRuleText);
+            Assert.Equal("自動同期", viewModel.SmartAutomationStatusText);
+            Assert.False(viewModel.IsSmartAutomationFrozen);
+
+            asset.SmartAutomationState.Status =
+                SmartAssetAutomationStatus.FrozenInvalidRule;
+            viewModel.RefreshFromModel(asset);
+
+            Assert.True(viewModel.IsSmartAutomationFrozen);
+            Assert.Equal("自動同期を停止中", viewModel.SmartAutomationStatusText);
+            Assert.Contains("現在のメンバーを維持", viewModel.SmartAutomationDescription);
+        }
+        finally
+        {
+            LocalizationManager.Instance.ChangeLanguage(previousLanguage);
+        }
+    }
+
+    [Fact]
+    public async Task ImportedAsset_CanKeepUnavailableMembershipWithoutChangingGlobalSetting()
+    {
+        using var manager = await CreateManagerAsync();
+        var asset = new Asset("Imported")
+        {
+            RetainMissingReferences = true
+        };
+        using var viewModel = new AssetItemViewModel(
+            asset,
+            manager,
+            null!,
+            null!);
+
+        Assert.True(viewModel.IncludesUnavailableMembership);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(rootPath))

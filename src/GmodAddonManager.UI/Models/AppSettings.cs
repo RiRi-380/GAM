@@ -6,10 +6,23 @@ namespace GmodAddonManager.UI.Models
 {
     public class AppSettings
     {
-        public string Language { get; set; } = "ja-JP";
+        private const string DefaultLanguage = "ja-JP";
+
+        public string Language { get; set; } = DefaultLanguage;
         public bool ShowConsoleOnStartup { get; set; } = false;
         public bool EnableBackgroundTitleUpdates { get; set; } = false;
         public bool EnableBackgroundAddonPreload { get; set; } = false;
+        public bool EnableLocalAddonDiscoveryExperimental { get; set; } = false;
+        /// <summary>
+        /// Enables the experimental membership History UI. Version data remains
+        /// persisted by Core while this presentation-only flag is disabled.
+        /// </summary>
+        public bool EnableMemberHistoryExperimental { get; set; } = false;
+        /// <summary>
+        /// Presentation-only preference. The protected GMod Disabled Addons
+        /// Asset remains active even while its card is hidden from the list.
+        /// </summary>
+        public bool CollapseGmodDisabledAddons { get; set; } = false;
         public string? CustomGmodInstallPath { get; set; }
         public string? CustomWorkshopPath { get; set; }
         public string? ConfirmedGmodInstallPath { get; set; }
@@ -91,7 +104,8 @@ namespace GmodAddonManager.UI.Models
                 {
                     Directory.CreateDirectory(dir);
                 }
-                
+
+                Language = NormalizeLanguage(Language);
                 var json = Newtonsoft.Json.JsonConvert.SerializeObject(this, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(tempPath, json);
 
@@ -141,8 +155,26 @@ namespace GmodAddonManager.UI.Models
                 throw new InvalidOperationException("Application settings file is empty.");
             }
 
-            return Newtonsoft.Json.JsonConvert.DeserializeObject<AppSettings>(json)
+            var settings = Newtonsoft.Json.JsonConvert.DeserializeObject<AppSettings>(json)
                 ?? throw new InvalidOperationException("Application settings deserialized to null.");
+            settings.Language = NormalizeLanguage(settings.Language);
+            return settings;
+        }
+
+        private static string NormalizeLanguage(string? language)
+        {
+            var normalized = language?.Trim();
+            if (string.Equals(normalized, "en-US", StringComparison.OrdinalIgnoreCase))
+            {
+                return "en-US";
+            }
+
+            if (string.Equals(normalized, "ja-JP", StringComparison.OrdinalIgnoreCase))
+            {
+                return "ja-JP";
+            }
+
+            return DefaultLanguage;
         }
 
         private static bool IsValid(string path)

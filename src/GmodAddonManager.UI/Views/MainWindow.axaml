@@ -87,19 +87,26 @@
                     </Button>
 
                     <Button Command="{Binding RefreshCommand}" 
+                            IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
                             ToolTip.Tip="{loc:Localize MainWindow.RescanAddons}"
                             Width="32" Height="32">
                         <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
                     </Button>
 
                     <Button Command="{Binding UndoCommand}"
-                            IsEnabled="{Binding CanUndo}"
                             ToolTip.Tip="{loc:Localize MainWindow.UndoLastAction}"
                             Width="32" Height="32">
+                        <Button.IsEnabled>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="CanUndo"/>
+                                <Binding Path="AssetListViewModel.IsAssetMutationEnabled"/>
+                            </MultiBinding>
+                        </Button.IsEnabled>
                         <TextBlock Text="↩️" FontSize="16"/>
                     </Button>
 
                     <Button Command="{Binding AllOffCommand}"
+                            IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
                             ToolTip.Tip="{loc:Localize MainWindow.AllOffTooltip}"
                             Width="32" Height="32"
                             Classes="danger">
@@ -111,6 +118,7 @@
                 <TextBox Grid.Column="4" 
                          Name="SearchTextBox"
                          Text="{Binding SearchText}"
+                         IsEnabled="{Binding AssetListViewModel.IsAddonGridVisible}"
                          Watermark="{loc:Localize MainWindow.SearchPlaceholder}"
                          MinWidth="120"
                          MaxWidth="300"
@@ -189,12 +197,37 @@
                     <views:AssetListView DataContext="{Binding AssetListViewModel}"/>
                 </SplitView.Pane>
 
-                <views:AddonGridView Name="AddonGridControl"
-                                     DataContext="{Binding AddonGridViewModel}"/>
+                <Grid>
+                    <Grid Name="AddonGridHost"
+                          IsVisible="{Binding AssetListViewModel.IsAddonGridVisible}">
+                        <views:AddonGridView Name="AddonGridControl"
+                                             DataContext="{Binding AddonGridViewModel}"/>
+                    </Grid>
+                    <Border IsVisible="{Binding AssetListViewModel.IsCurrentGroupEmptyVisible}"
+                            Background="#181818"
+                            Padding="32">
+                        <TextBlock Text="{Binding AssetListViewModel.CurrentGroupEmptyText}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Foreground="#AFAFAF"
+                                   FontSize="16"/>
+                    </Border>
+                    <Grid Name="ShareWorkspaceHost"
+                          IsVisible="{Binding AssetListViewModel.IsShareMode}"
+                          Background="#181818"
+                          ZIndex="2">
+                        <views:GamShareWorkspaceView
+                            DataContext="{Binding AssetListViewModel}"/>
+                    </Grid>
+                </Grid>
             </SplitView>
 
             <!-- フローティング詳細パネル -->
-            <controls:AddonDetailsFloatingPanel Name="AddonDetailsPanel"/>
+            <controls:AddonDetailsFloatingPanel
+                Name="AddonDetailsPanel"
+                IsVisible="{Binding AssetListViewModel.IsAddonGridVisible}"/>
         </Grid>
     </DockPanel>
 

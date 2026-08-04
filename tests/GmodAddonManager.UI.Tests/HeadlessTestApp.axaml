@@ -1,0 +1,20 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="using:GmodAddonManager.UI.Converters"
+             x:Class="GmodAddonManager.UI.Tests.HeadlessTestApp"
+             RequestedThemeVariant="Dark">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://GmodAddonManager.UI/Assets/Icons.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <converters:BoolToColorConverter x:Key="BoolToColorConverter"/>
+            <converters:FirstCharacterConverter x:Key="FirstCharacterConverter"/>
+            <converters:AssetIdToColorConverter x:Key="AssetIdToColorConverter"/>
+            <converters:BytesToKilobytesConverter x:Key="BytesToKilobytesConverter"/>
+        </ResourceDictionary>
+    </Application.Resources>
+    <Application.Styles>
+        <FluentTheme/>
+    </Application.Styles>
+</Application>

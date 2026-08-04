@@ -6,7 +6,7 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class InitialAddonStateImportServiceTests
 {
     [Fact]
-    public void Import_CreatesExcludedAssetFromSubscribedDisabledIntersection()
+    public void Import_CreatesNeutralOffAssetFromSubscribedDisabledIntersection()
     {
         var configuration = new Configuration();
         configuration.CreateDefaultAssets();
@@ -26,7 +26,7 @@ public sealed class InitialAddonStateImportServiceTests
             asset => asset.Name == InitialAddonStateImportService.ImportedAssetName);
         Assert.True(imported.IsSystem);
         Assert.Equal(SystemAssetDefinitions.GmodDisabledId, imported.Id);
-        Assert.Equal(AddonState.Excluded, imported.GetWholeState());
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, imported.GetWholeState());
         Assert.Equal(["200"], imported.Addons);
         Assert.DoesNotContain("300", imported.Addons);
         Assert.True(configuration.InitialRuntimeImportCompleted);

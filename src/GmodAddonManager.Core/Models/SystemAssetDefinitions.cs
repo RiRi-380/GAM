@@ -11,6 +11,7 @@ namespace GmodAddonManager.Core.Models
 
         public const string GmodDisabledId = "gmod-disabled-system-asset";
         public const string GmodDisabledName = "GMod Disabled Addons";
+        public const AddonState GmodDisabledDefaultState = AddonState.Disabled;
 
         public const string JunctionId = "junction-system-asset";
         public const string JunctionName = "Junction";

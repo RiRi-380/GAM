@@ -11,8 +11,9 @@
     
     <Grid>
         <!-- アドオンが選択されていない時のダッシュボード -->
-        <controls:DashboardControl IsVisible="{Binding SelectedAddon, Converter={x:Static ObjectConverters.IsNull}}"
-                                  DataContext="{Binding DashboardViewModel}"/>
+        <Grid IsVisible="{Binding SelectedAddon, Converter={x:Static ObjectConverters.IsNull}}">
+            <controls:DashboardControl DataContext="{Binding DashboardViewModel}"/>
+        </Grid>
         
         <!-- アドオンが選択されている時の詳細 -->
         <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"

@@ -23,8 +23,11 @@
                     BorderThickness="3"
                     BorderBrush="{Binding BorderColor}"
                     Opacity="{Binding CardOpacity}"
+                    ToolTip.Tip="{Binding RuntimeStateTooltip}"
+                    AutomationProperties.HelpText="{Binding RuntimeStateTooltip}"
                     Classes.selected="{Binding IsSelected}"
                     Classes.selectionMode="{Binding $parent[UserControl].DataContext.IsSelectionMode}"
+                    Classes.local="{Binding IsLocal}"
                     PointerPressed="OnAddonPointerPressed"
                     DoubleTapped="OnAddonDoubleTapped">
                 
@@ -52,6 +55,9 @@
                     </Style>
                     <Style Selector="Border">
                         <Setter Property="Cursor" Value="Hand"/>
+                    </Style>
+                    <Style Selector="Border.local">
+                        <Setter Property="Cursor" Value="Arrow"/>
                     </Style>
                 </Border.Styles>
                 
@@ -94,17 +100,24 @@
                                 </Image.Transitions>
                             </Image>
 
-                            <!-- Current GMod mount state -->
-                            <Border Background="{Binding ActualStateBadgeBackground}"
-                                    CornerRadius="4"
-                                    Padding="4,2"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Top">
-                                <TextBlock Text="{Binding ActualStateText}"
-                                           FontSize="10"
-                                           FontWeight="Bold"
-                                           Foreground="White"/>
-                            </Border>
+                            <!-- Context notices that require more than the card color -->
+                            <StackPanel HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        Spacing="3">
+                                <Border Background="#CC26394D"
+                                        BorderBrush="#805EA8E8"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="4,2"
+                                        HorizontalAlignment="Right"
+                                        IsVisible="{Binding HasAssetContextNotice}"
+                                        ToolTip.Tip="{Binding StateReasonText}">
+                                    <TextBlock Text="{Binding AssetContextNoticeText}"
+                                               FontSize="9"
+                                               FontWeight="SemiBold"
+                                               Foreground="#D8ECFF"/>
+                                </Border>
+                            </StackPanel>
 
                             <Border Background="#C97800"
                                     CornerRadius="4"
@@ -113,6 +126,19 @@
                                     VerticalAlignment="Top"
                                     IsVisible="{Binding IsMissing}">
                                 <TextBlock Text="{loc:Localize Addon.Missing}"
+                                           FontSize="10"
+                                           FontWeight="Bold"
+                                           Foreground="White"/>
+                            </Border>
+
+                            <Border Background="#1565C0"
+                                    CornerRadius="4"
+                                    Padding="4,2"
+                                    HorizontalAlignment="Left"
+                                     VerticalAlignment="Top"
+                                     IsVisible="{Binding IsLocal}"
+                                     ToolTip.Tip="{loc:Localize AddonGrid.LocalReadOnlyReason}">
+                                <TextBlock Text="{loc:Localize Addon.Local}"
                                            FontSize="10"
                                            FontWeight="Bold"
                                            Foreground="White"/>

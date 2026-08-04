@@ -182,8 +182,18 @@ public sealed partial class App : Application, IDisposable
                 {
                     ErrorHandler = errorHandler,
                     DisableMode = disableMode,
-                    CustomGmodInstallPath = settings.CustomGmodInstallPath,
-                    CustomWorkshopPath = settings.CustomWorkshopPath
+                    // Startup path recovery already performed the expensive Steam
+                    // discovery. Pass its validated result through so AddonManager
+                    // only validates the resolved pair instead of scanning every
+                    // Steam library a second time before the window is shown.
+                    CustomGmodInstallPath =
+                        startupPathRecovery.ResolvedGmodInstallPath ??
+                        settings.CustomGmodInstallPath,
+                    CustomWorkshopPath =
+                        startupPathRecovery.ResolvedWorkshopRootPath ??
+                        settings.CustomWorkshopPath,
+                    EnableLocalAddonDiscoveryExperimental =
+                        settings.EnableLocalAddonDiscoveryExperimental
                 });
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"AddonManager created, calling InitializeAsync at: {DateTime.Now}\n");

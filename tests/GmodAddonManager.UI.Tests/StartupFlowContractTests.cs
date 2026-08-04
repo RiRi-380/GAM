@@ -234,6 +234,60 @@ public sealed class StartupFlowContractTests
     }
 
     [Fact]
+    public void StartupPathDiscoveryIsPassedToAddonManagerInsteadOfRepeated()
+    {
+        var coordinator = ReadRepositoryFile(
+            "src",
+            "GmodAddonManager.UI",
+            "Services",
+            "StartupPathRecoveryCoordinator.cs");
+        var app = ReadRepositoryFile3(
+            "src",
+            "GmodAddonManager.UI",
+            "App.axaml.cs");
+        var manager = ReadRepositoryFile(
+            "src",
+            "GmodAddonManager.Core",
+            "Services",
+            "AddonManager.cs");
+        var managerConstructor = ExtractMethod(
+            manager,
+            "public AddonManager(AddonManagerOptions? options)");
+
+        Assert.Contains(
+            "ResolvedGmodInstallPath = decision.DetectedGmodInstallPath",
+            coordinator,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ResolvedWorkshopRootPath = decision.DetectedWorkshopRootPath",
+            coordinator,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "startupPathRecovery.ResolvedGmodInstallPath ??",
+            app,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "startupPathRecovery.ResolvedWorkshopRootPath ??",
+            app,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            coordinator.Split(
+                    "new SteamPathDetector().DetectPathSnapshot()",
+                    StringSplitOptions.None)
+                .Length - 1);
+        var overrideIndex = managerConstructor.IndexOf(
+            "PathOverrideResolver.TryCreateSnapshot(",
+            StringComparison.Ordinal);
+        var fallbackIndex = managerConstructor.IndexOf(
+            "if (pathSnapshot == null)",
+            StringComparison.Ordinal);
+        Assert.True(
+            overrideIndex >= 0 && fallbackIndex > overrideIndex,
+            "AddonManager must validate the passed pair before falling back to Steam discovery.");
+    }
+
+    [Fact]
     public void RuntimeWriteGateCombinesWatcherStateWithDirectProcessDetection()
     {
         var source = ReadRepositoryFile3(

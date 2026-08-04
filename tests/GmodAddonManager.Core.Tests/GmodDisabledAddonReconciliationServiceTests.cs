@@ -9,7 +9,7 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
     private readonly GmodDisabledAddonReconciliationService service = new();
 
     [Fact]
-    public void CreateDefaultAssets_PutsFixedExcludedAssetDirectlyAfterSubscribe()
+    public void CreateDefaultAssets_PutsFixedDisabledAssetDirectlyAfterSubscribe()
     {
         var configuration = new Configuration();
 
@@ -25,8 +25,25 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
         var disabled = configuration.Assets[1];
         Assert.Equal(SystemAssetDefinitions.GmodDisabledName, disabled.Name);
         Assert.True(disabled.IsSystem);
-        Assert.Equal(AddonState.Excluded, disabled.GetWholeState());
+        Assert.Equal(AddonState.Disabled, SystemAssetDefinitions.GmodDisabledDefaultState);
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, disabled.GetWholeState());
         Assert.Empty(disabled.Addons);
+    }
+
+    [Fact]
+    public void EnsureSystemAsset_RecreatesMissingFixedAssetWithDefaultOff()
+    {
+        var configuration = CreateConfiguration();
+        configuration.Assets.Remove(DisabledAsset(configuration));
+
+        var result = service.EnsureSystemAsset(
+            configuration,
+            absorbUntouchedLegacyImport: false);
+
+        Assert.True(result.Changed);
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledId, result.Asset.Id);
+        Assert.Equal(AddonState.Disabled, result.Asset.GetWholeState());
+        Assert.Same(result.Asset, DisabledAsset(configuration));
     }
 
     [Theory]
@@ -48,7 +65,7 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
     }
 
     [Fact]
-    public void EnsureSystemAsset_RepairsUnknownWholeAssetStateToExcluded()
+    public void EnsureSystemAsset_RepairsUnknownWholeAssetStateToDefaultOff()
     {
         var configuration = CreateConfiguration();
         DisabledAsset(configuration).State = (AddonState)999;
@@ -58,7 +75,7 @@ public sealed class GmodDisabledAddonReconciliationServiceTests
             absorbUntouchedLegacyImport: false);
 
         Assert.True(result.Changed);
-        Assert.Equal(AddonState.Excluded, result.Asset.GetWholeState());
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, result.Asset.GetWholeState());
     }
 
     [Fact]

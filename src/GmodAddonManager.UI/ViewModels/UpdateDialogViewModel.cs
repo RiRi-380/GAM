@@ -15,17 +15,27 @@ namespace GmodAddonManager.UI.ViewModels
     {
         private readonly UpdateService updateService;
         private readonly UpdateInfo updateInfo;
+        private readonly Func<Task> deferUpdateCheckAsync;
         private bool isUpdating;
         private string updateProgress = string.Empty;
         private bool disposed;
         
         public UpdateDialogViewModel(UpdateService updateService, UpdateInfo updateInfo)
+            : this(updateService, updateInfo, updateService.DeferUpdateCheckAsync)
+        {
+        }
+
+        internal UpdateDialogViewModel(
+            UpdateService updateService,
+            UpdateInfo updateInfo,
+            Func<Task> deferUpdateCheckAsync)
         {
             this.updateService = updateService;
             this.updateInfo = updateInfo;
+            this.deferUpdateCheckAsync = deferUpdateCheckAsync;
             
             UpdateCommand = ReactiveCommand.CreateFromTask(UpdateAsync);
-            RemindLaterCommand = ReactiveCommand.Create(() => RequestClose(false));
+            RemindLaterCommand = ReactiveCommand.CreateFromTask(RemindLaterAsync);
             LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
         }
         
@@ -54,6 +64,12 @@ namespace GmodAddonManager.UI.ViewModels
         public ReactiveCommand<Unit, Unit> UpdateCommand { get; }
         public ReactiveCommand<Unit, Unit> RemindLaterCommand { get; }
         public event EventHandler<bool?>? CloseRequested;
+
+        private async Task RemindLaterAsync()
+        {
+            await deferUpdateCheckAsync();
+            RequestClose(false);
+        }
         
         private async Task UpdateAsync()
         {

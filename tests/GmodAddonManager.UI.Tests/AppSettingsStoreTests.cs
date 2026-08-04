@@ -63,6 +63,111 @@ public sealed class AppSettingsStoreTests : IDisposable
         Assert.Empty(Directory.GetFiles(root, "settings.json.corrupt-*.bak"));
     }
 
+    [Theory]
+    [InlineData("{ \"Language\": null }")]
+    [InlineData("{ \"Language\": \"fr-FR\" }")]
+    [InlineData("{ \"Language\": \"\" }")]
+    public void LoadFrom_NormalizesUnsupportedLanguageWithoutWritingDuringStartup(
+        string persistedJson)
+    {
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, $"language-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, persistedJson);
+
+        var loaded = AppSettings.LoadFrom(path);
+
+        Assert.Equal("ja-JP", loaded.Language);
+        Assert.Equal(persistedJson, File.ReadAllText(path));
+        Assert.False(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void SaveTo_RepairsUnsupportedLanguageOnTheNormalPersistencePath()
+    {
+        var path = Path.Combine(root, "repaired-language.json");
+        var settings = new AppSettings { Language = "fr-FR" };
+
+        settings.SaveTo(path);
+
+        Assert.Equal("ja-JP", settings.Language);
+        Assert.Equal("ja-JP", AppSettings.LoadFrom(path).Language);
+        Assert.DoesNotContain("fr-FR", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en-us", "en-US")]
+    [InlineData(" EN-US ", "en-US")]
+    [InlineData("JA-jp", "ja-JP")]
+    public void LoadFrom_NormalizesSupportedLanguageCaseAndWhitespace(
+        string persistedLanguage,
+        string expectedLanguage)
+    {
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, $"canonical-language-{Guid.NewGuid():N}.json");
+        File.WriteAllText(
+            path,
+            Newtonsoft.Json.JsonConvert.SerializeObject(new { Language = persistedLanguage }));
+
+        var loaded = AppSettings.LoadFrom(path);
+
+        Assert.Equal(expectedLanguage, loaded.Language);
+    }
+
+    [Fact]
+    public void LocalAddonDiscovery_IsDisabledByDefaultAndRequiresExplicitOptIn()
+    {
+        Directory.CreateDirectory(root);
+        var defaultPath = Path.Combine(root, "default-settings.json");
+        File.WriteAllText(defaultPath, "{ \"Language\": \"ja-JP\" }");
+
+        Assert.False(AppSettings.LoadFrom(defaultPath).EnableLocalAddonDiscoveryExperimental);
+
+        var enabledPath = Path.Combine(root, "enabled-settings.json");
+        new AppSettings { EnableLocalAddonDiscoveryExperimental = true }.SaveTo(enabledPath);
+
+        Assert.True(AppSettings.LoadFrom(enabledPath).EnableLocalAddonDiscoveryExperimental);
+    }
+
+    [Fact]
+    public void LocalAddonDiscovery_DoesNotInheritTheRetiredManagementSwitch()
+    {
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "legacy-settings.json");
+        File.WriteAllText(path, "{ \"EnableLocalAddonsExperimental\": true }");
+
+        Assert.False(AppSettings.LoadFrom(path).EnableLocalAddonDiscoveryExperimental);
+    }
+
+    [Fact]
+    public void MemberHistory_IsHiddenByDefaultAndPersistsExplicitOptIn()
+    {
+        Directory.CreateDirectory(root);
+        var defaultPath = Path.Combine(root, "history-default-settings.json");
+        File.WriteAllText(defaultPath, "{ \"Language\": \"ja-JP\" }");
+
+        Assert.False(AppSettings.LoadFrom(defaultPath).EnableMemberHistoryExperimental);
+
+        var enabledPath = Path.Combine(root, "history-enabled-settings.json");
+        new AppSettings { EnableMemberHistoryExperimental = true }.SaveTo(enabledPath);
+
+        Assert.True(AppSettings.LoadFrom(enabledPath).EnableMemberHistoryExperimental);
+    }
+
+    [Fact]
+    public void GmodDisabledCard_IsExpandedByDefaultAndPersistsCollapseChoice()
+    {
+        Directory.CreateDirectory(root);
+        var legacyPath = Path.Combine(root, "legacy-collapse-settings.json");
+        File.WriteAllText(legacyPath, "{ \"Language\": \"ja-JP\" }");
+
+        Assert.False(AppSettings.LoadFrom(legacyPath).CollapseGmodDisabledAddons);
+
+        var collapsedPath = Path.Combine(root, "collapsed-settings.json");
+        new AppSettings { CollapseGmodDisabledAddons = true }.SaveTo(collapsedPath);
+
+        Assert.True(AppSettings.LoadFrom(collapsedPath).CollapseGmodDisabledAddons);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))

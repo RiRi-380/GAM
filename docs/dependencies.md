@@ -23,6 +23,7 @@
 
 ## Tests (net10.0)
 - Microsoft.NET.Test.Sdk (18.5.1): Test host and discovery runner for `dotnet test`.
+- Avalonia.Headless.XUnit (11.3.14): Headless Avalonia application host for deterministic UI rendering and interaction tests.
 - xUnit (2.9.3): Unit test framework for deterministic core regression tests.
 - xunit.runner.visualstudio (3.1.5): VSTest adapter for xUnit execution.
 - coverlet.collector (10.0.0): Code coverage data collector for CI/reporting.
@@ -38,7 +39,7 @@
 - Exact production package inventory and redistributed notices are validated by `scripts/verify-release-notices.ps1`.
 
 ## Dependency audit snapshot
-- Snapshot date: 2026-08-02
+- Snapshot date: 2026-08-04
 - Command:
   - `dotnet list GmodAddonManager.sln package --include-transitive --vulnerable`
 - Status:

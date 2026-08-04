@@ -311,7 +311,7 @@ public sealed class ConfigurationMigrationServiceTests
     }
 
     [Fact]
-    public void Migrate_Schema3To4PreservesSubscriptionAttributionAndPendingJournal()
+    public void Migrate_Schema3To6PreservesSubscriptionAttributionAndPendingJournal()
     {
         var firstSeenAt = new DateTime(2026, 7, 31, 1, 2, 3, DateTimeKind.Utc);
         var gamAppliedAt = new DateTime(2026, 7, 31, 2, 3, 4, DateTimeKind.Utc);
@@ -378,7 +378,7 @@ public sealed class ConfigurationMigrationServiceTests
             removeLegacyJunctionAsset: true);
 
         Assert.True(result.Changed);
-        Assert.Equal(4, configuration.SchemaVersion);
+        Assert.Equal(Configuration.CurrentSchemaVersion, configuration.SchemaVersion);
         Assert.True(configuration.InitialRuntimeImportCompleted);
         Assert.Equal(firstSeenAt, configuration.InitialRuntimeImportCompletedAtUtc);
         Assert.True(configuration.SubscriptionBaselineInitialized);
@@ -418,18 +418,307 @@ public sealed class ConfigurationMigrationServiceTests
     }
 
     [Fact]
-    public void RequiresMigration_RejectsFutureSchemaInsteadOfDowngradingIt()
+    public void RequiresMigration_RecognizesSchema7AndRejectsFutureSchema()
     {
         var service = new ConfigurationMigrationService();
 
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":1}")));
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":2}")));
         Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":3}")));
-        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":4}")));
+        Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":4}")));
+        Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":5}")));
+        Assert.True(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":6}")));
+        Assert.False(service.RequiresMigration(JObject.Parse("{\"schemaVersion\":7}")));
         var exception = Assert.Throws<UnsupportedConfigurationSchemaException>(
-            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":5}")));
-        Assert.Equal(5, exception.FoundVersion);
+            () => service.RequiresMigration(JObject.Parse("{\"schemaVersion\":8}")));
+        Assert.Equal(8, exception.FoundVersion);
         Assert.Equal(Configuration.CurrentSchemaVersion, exception.SupportedVersion);
+    }
+
+    [Fact]
+    public void Migrate_Schema6To7AddsNestedDefaultsWithoutReorderingExistingEntries()
+    {
+        var raw = JObject.Parse(
+            """
+            {
+              "schemaVersion": 6,
+              "assets": [
+                {
+                  "id": "normal-b",
+                  "name": "Bravo",
+                  "isSystem": false,
+                  "state": 0,
+                  "sortOrder": 0,
+                  "addons": [],
+                  "addonStates": {},
+                  "versionHistory": []
+                },
+                {
+                  "id": "normal-a",
+                  "name": "Alpha",
+                  "isSystem": false,
+                  "state": 0,
+                  "sortOrder": 1,
+                  "addons": [],
+                  "addonStates": {},
+                  "versionHistory": []
+                }
+              ],
+              "assetGroups": [
+                {
+                  "id": "group-z",
+                  "name": "Zulu Group",
+                  "defaultChildState": 0,
+                  "sortOrder": 2
+                }
+              ]
+            }
+            """);
+        var configuration = raw.ToObject<Configuration>()!;
+
+        new ConfigurationMigrationService().Migrate(
+            raw,
+            configuration,
+            removeLegacyJunctionAsset: true);
+
+        Assert.Equal(7, configuration.SchemaVersion);
+        Assert.Equal(1, configuration.MaxNestedGroupDepth);
+        Assert.Equal(
+            ["normal-b", "normal-a", "group-z"],
+            configuration.Assets
+                .Where(asset => !asset.IsSystem)
+                .Select(asset => new { asset.Id, asset.SortOrder })
+                .Concat(configuration.AssetGroups.Select(group =>
+                    new { Id = group.Id, group.SortOrder }))
+                .OrderBy(item => item.SortOrder)
+                .Select(item => item.Id));
+        Assert.All(configuration.Assets, asset =>
+            Assert.Equal(string.Empty, asset.Memo));
+        var group = Assert.Single(configuration.AssetGroups);
+        Assert.Null(group.ParentGroupId);
+        Assert.Equal(string.Empty, group.Memo);
+    }
+
+    [Fact]
+    public void NormalizeCurrentSchema_RepairsMissingParentsCyclesAndExcessDepthDeterministically()
+    {
+        var configuration = new Configuration
+        {
+            MaxNestedGroupDepth = 1
+        };
+        configuration.CreateDefaultAssets();
+        var a = new AssetGroup("A") { Id = "a", ParentGroupId = "b", Memo = null! };
+        var b = new AssetGroup("B") { Id = "b", ParentGroupId = "a" };
+        var c = new AssetGroup("C") { Id = "c", ParentGroupId = "a" };
+        var missing = new AssetGroup("Missing")
+        {
+            Id = "missing",
+            ParentGroupId = "does-not-exist"
+        };
+        configuration.AssetGroups.AddRange([a, b, c, missing]);
+        configuration.Assets.Single(asset =>
+            asset.Id == SystemAssetDefinitions.SubscribeId).ParentGroupId = a.Id;
+
+        var migration = new ConfigurationMigrationService();
+        migration.NormalizeCurrentSchema(configuration);
+
+        Assert.Equal("b", a.ParentGroupId);
+        Assert.Null(b.ParentGroupId);
+        Assert.Equal("a", c.ParentGroupId);
+        Assert.Null(missing.ParentGroupId);
+        Assert.Equal(2, configuration.MaxNestedGroupDepth);
+        Assert.Equal(string.Empty, a.Memo);
+        Assert.All(configuration.Assets.Where(asset => asset.IsSystem), asset =>
+            Assert.Null(asset.ParentGroupId));
+
+        var snapshot = configuration.AssetGroups
+            .OrderBy(group => group.Id, StringComparer.Ordinal)
+            .Select(group => $"{group.Id}:{group.ParentGroupId ?? "root"}:{group.SortOrder}")
+            .ToArray();
+        migration.NormalizeCurrentSchema(configuration);
+        Assert.Equal(
+            snapshot,
+            configuration.AssetGroups
+                .OrderBy(group => group.Id, StringComparer.Ordinal)
+                .Select(group => $"{group.Id}:{group.ParentGroupId ?? "root"}:{group.SortOrder}"));
+    }
+
+    [Fact]
+    public void NormalizeCurrentSchema_PreservesSupportedTreeAndRepairsOnlyBeyondHardMaximum()
+    {
+        var configuration = new Configuration
+        {
+            MaxNestedGroupDepth = Configuration.MinimumNestedGroupDepth
+        };
+        configuration.CreateDefaultAssets();
+        var groups = Enumerable.Range(
+                0,
+                Configuration.MaximumNestedGroupDepth + 2)
+            .Select(index => new AssetGroup($"Group {index}")
+            {
+                Id = $"group-{index:D2}",
+                ParentGroupId = index == 0 ? null : $"group-{index - 1:D2}"
+            })
+            .ToArray();
+        configuration.AssetGroups.AddRange(groups);
+
+        new ConfigurationMigrationService().NormalizeCurrentSchema(configuration);
+
+        Assert.Equal(
+            Configuration.MaximumNestedGroupDepth,
+            configuration.MaxNestedGroupDepth);
+        Assert.Null(groups[0].ParentGroupId);
+        for (var index = 1; index <= Configuration.MaximumNestedGroupDepth; index++)
+        {
+            Assert.Equal(groups[index - 1].Id, groups[index].ParentGroupId);
+        }
+        Assert.Null(groups[^1].ParentGroupId);
+    }
+
+    [Fact]
+    public void Migrate_Schema4To6PreservesRuntimeTruthAndFixedAssetState()
+    {
+        var observedAt = new DateTime(2026, 8, 1, 1, 2, 3, DateTimeKind.Utc);
+        var configuration = new Configuration
+        {
+            SchemaVersion = 4,
+            SubscriptionBaselineInitialized = true,
+            KnownSubscribedAddonIds = ["100", "200"],
+            SubscriptionFirstSeenAtUtc = new Dictionary<string, DateTime>
+            {
+                ["200"] = observedAt
+            },
+            GamAppliedRuntimeBaselineInitialized = true,
+            LastGamAppliedAddonStates = new Dictionary<string, bool>
+            {
+                ["100"] = false,
+                ["200"] = true
+            },
+            GmodObservationBaselineInitialized = true,
+            LastObservedGmodAddonStates = new Dictionary<string, bool>
+            {
+                ["100"] = false,
+                ["200"] = true
+            },
+            RetainMissingAssetReferences = true
+        };
+        configuration.CreateDefaultAssets();
+        configuration.Assets.Add(new Asset("Fixed")
+        {
+            Id = "fixed",
+            State = AddonState.Excluded,
+            Addons = ["100"],
+            RetainMissingReferences = true
+        });
+        var raw = JObject.FromObject(configuration);
+        raw["schemaVersion"] = 4;
+
+        var result = new ConfigurationMigrationService().Migrate(
+            raw,
+            configuration,
+            removeLegacyJunctionAsset: true);
+
+        Assert.True(result.Changed);
+        Assert.Equal(Configuration.CurrentSchemaVersion, configuration.SchemaVersion);
+        Assert.True(configuration.SubscriptionBaselineInitialized);
+        Assert.Equal(["100", "200"], configuration.KnownSubscribedAddonIds);
+        Assert.Equal(observedAt, configuration.SubscriptionFirstSeenAtUtc["200"]);
+        Assert.True(configuration.GamAppliedRuntimeBaselineInitialized);
+        Assert.False(configuration.LastGamAppliedAddonStates["100"]);
+        Assert.True(configuration.GmodObservationBaselineInitialized);
+        Assert.False(configuration.LastObservedGmodAddonStates["100"]);
+        Assert.True(configuration.RetainMissingAssetReferences);
+        var fixedAsset = Assert.Single(
+            configuration.Assets,
+            asset => asset.Id == "fixed");
+        Assert.Equal(AddonState.Excluded, fixedAsset.State);
+        Assert.Equal(["100"], fixedAsset.Addons);
+        Assert.True(fixedAsset.RetainMissingReferences);
+        Assert.False(fixedAsset.IsSmart);
+    }
+
+    [Fact]
+    public void Migrate_Schema5To6_PersistsPriorVisibleOrder()
+    {
+        var configuration = new Configuration
+        {
+            SchemaVersion = 5
+        };
+        configuration.CreateDefaultAssets();
+        configuration.Assets.AddRange(
+        [
+            new Asset("Zulu normal") { Id = "normal-z" },
+            new Asset("Bravo favorite") { Id = "favorite-b", IsFavorite = true },
+            new Asset("Alpha normal") { Id = "normal-a" },
+            new Asset("Alpha favorite") { Id = "favorite-a", IsFavorite = true }
+        ]);
+        var raw = JObject.FromObject(configuration);
+        raw["schemaVersion"] = 5;
+        raw.Remove("assetGroups");
+        foreach (var rawAsset in raw["assets"]!.Children<JObject>())
+        {
+            rawAsset.Remove("parentGroupId");
+            rawAsset.Remove("sortOrder");
+        }
+
+        new ConfigurationMigrationService().Migrate(
+            raw,
+            configuration,
+            removeLegacyJunctionAsset: true);
+
+        Assert.Equal(Configuration.CurrentSchemaVersion, configuration.SchemaVersion);
+        Assert.Empty(configuration.AssetGroups);
+        Assert.Equal(
+            ["favorite-a", "favorite-b"],
+            configuration.Assets
+                .Where(asset => !asset.IsSystem && asset.IsFavorite)
+                .OrderBy(asset => asset.SortOrder)
+                .Select(asset => asset.Id));
+        Assert.Equal(
+            ["normal-a", "normal-z"],
+            configuration.Assets
+                .Where(asset => !asset.IsSystem && !asset.IsFavorite)
+                .OrderBy(asset => asset.SortOrder)
+                .Select(asset => asset.Id));
+        Assert.All(configuration.Assets.Where(asset => asset.IsSystem), asset =>
+            Assert.Null(asset.ParentGroupId));
+    }
+
+    [Fact]
+    public void NormalizeCurrentSchema_NormalizesValidSmartRuleAndFreezesInvalidRule()
+    {
+        var configuration = new Configuration();
+        configuration.CreateDefaultAssets();
+        var valid = new Asset("Valid")
+        {
+            MembershipRule = new AssetMembershipRule(
+                AssetMembershipRuleKind.Tag,
+                "ROLEPLAY"),
+            Addons = ["200", "100"],
+            CurrentVersion = 1,
+            VersionHistory = [new AssetVersion(1, ["100"])]
+        };
+        var invalid = new Asset("Invalid")
+        {
+            MembershipRule = new AssetMembershipRule(
+                AssetMembershipRuleKind.Type,
+                "NotAType"),
+            Addons = ["300"]
+        };
+        configuration.Assets.Add(valid);
+        configuration.Assets.Add(invalid);
+
+        new ConfigurationMigrationService().NormalizeCurrentSchema(configuration);
+
+        Assert.Equal("Roleplay", valid.MembershipRule!.Value);
+        Assert.Equal(SmartAssetAutomationStatus.Active, valid.SmartAutomationState!.Status);
+        Assert.Empty(valid.VersionHistory);
+        Assert.Equal(0, valid.CurrentVersion);
+        Assert.Equal(["100", "200"], valid.Addons);
+        Assert.Equal(
+            SmartAssetAutomationStatus.FrozenInvalidRule,
+            invalid.SmartAutomationState!.Status);
+        Assert.Equal(["300"], invalid.Addons);
     }
 
     [Fact]
@@ -446,6 +735,7 @@ public sealed class ConfigurationMigrationServiceTests
         var disabled = Assert.Single(
             config.Assets,
             asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+        Assert.Equal(AddonState.Disabled, disabled.GetWholeState());
         Assert.Equal(["100", "200"], disabled.Addons);
         Assert.DoesNotContain(config.Assets, asset => asset.Id == "legacy-import");
     }

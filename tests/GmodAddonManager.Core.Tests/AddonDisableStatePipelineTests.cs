@@ -145,7 +145,7 @@ public sealed class AddonDisableStatePipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateAddonStatesAsync_ImportsExternalDisableAndPreservesUnknownIds()
+    public async Task UpdateAddonStatesAsync_RecordsExternalDisableButDefaultOffAssetDoesNotVetoEnabledSource()
     {
         using var manager = CreateManager();
         await manager.InitializeAsync();
@@ -158,10 +158,12 @@ public sealed class AddonDisableStatePipelineTests : IDisposable
         Assert.True(await manager.UpdateAddonStatesAsync());
 
         var content = File.ReadAllText(NoMountPath);
-        Assert.Contains(AddonId, content, StringComparison.Ordinal);
+        Assert.True(manager.GetFinalAddonStates()[AddonId]);
+        Assert.DoesNotContain(AddonId, content, StringComparison.Ordinal);
         Assert.Contains("999999999", content, StringComparison.Ordinal);
         var gmodDisabled = manager.GetConfiguration().Assets.Single(
             asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+        Assert.Equal(AddonState.Disabled, gmodDisabled.GetWholeState());
         Assert.Contains(AddonId, gmodDisabled.Addons);
     }
 

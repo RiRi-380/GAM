@@ -275,6 +275,144 @@ public sealed class NewSubscriptionRuntimeApplicationTests : IDisposable
         Assert.False(restarted.GetConfiguration().LastGamAppliedAddonStates[NewAddonId]);
     }
 
+    [Theory]
+    [InlineData(AddonState.Disabled, true)]
+    [InlineData(AddonState.Excluded, false)]
+    public async Task WorkshopRefresh_NewMatchingSubscriptionUsesSmartAssetStateBeforeResolver(
+        AddonState smartState,
+        bool expectedEnabled)
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var smart = await manager.CreateSmartAssetAsync(
+            "Fun Smart Asset",
+            new AssetMembershipRule(AssetMembershipRuleKind.Tag, "Fun"));
+        await manager.ApplyAssetDefaultStateAsync(smart.Id, smartState);
+
+        WriteAddonJson(NewAddonId, "weapon", ["Fun"]);
+        SubscribeNewAddon();
+        manager.InvalidateWorkshopScanCache();
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.Contains(NewAddonId, smart.Addons);
+        Assert.Equal(expectedEnabled, manager.GetFinalAddonStates()[NewAddonId]);
+        Assert.Equal(expectedEnabled, manager.GetActualAddonEnabledState(NewAddonId));
+        Assert.Equal(
+            expectedEnabled,
+            manager.GetConfiguration().LastGamAppliedAddonStates[NewAddonId]);
+    }
+
+    [Fact]
+    public async Task WorkshopRefresh_ConfirmedConditionLossRemovesMemberAndReappliesState()
+    {
+        WriteAddonJson(ExistingAddonId, "weapon", ["Fun"]);
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        await SetSubscribeStateAsync(manager, AddonState.Disabled);
+        manager.InvalidateWorkshopScanCache();
+        await manager.ScanWorkshopFolderAsync();
+        var smart = await manager.CreateSmartAssetAsync(
+            "Fun Smart Asset",
+            new AssetMembershipRule(AssetMembershipRuleKind.Tag, "Fun"));
+
+        Assert.Contains(ExistingAddonId, smart.Addons);
+        Assert.True(manager.GetActualAddonEnabledState(ExistingAddonId));
+
+        var addonJsonPath = Path.Combine(
+            workshopPath,
+            ExistingAddonId,
+            "addon.json");
+        File.WriteAllText(addonJsonPath, "{}", new UTF8Encoding(false));
+        File.SetLastWriteTimeUtc(
+            addonJsonPath,
+            DateTime.UtcNow.AddSeconds(2));
+        manager.InvalidateWorkshopScanCache();
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.DoesNotContain(ExistingAddonId, smart.Addons);
+        Assert.False(manager.GetFinalAddonStates()[ExistingAddonId]);
+        Assert.False(manager.GetActualAddonEnabledState(ExistingAddonId));
+    }
+
+    [Fact]
+    public async Task WorkshopRefresh_ExcludedSmartNewSubscriptionWritesFinalStateOnce()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var smart = await manager.CreateSmartAssetAsync(
+            "Fun Smart Asset",
+            new AssetMembershipRule(AssetMembershipRuleKind.Tag, "Fun"));
+        await manager.ApplyAssetDefaultStateAsync(smart.Id, AddonState.Excluded);
+        var writesForNewAddon = new List<bool>();
+        manager.RuntimeWriteObserver = states =>
+        {
+            if (states.TryGetValue(NewAddonId, out var enabled))
+            {
+                writesForNewAddon.Add(enabled);
+            }
+        };
+
+        WriteAddonJson(NewAddonId, "weapon", ["Fun"]);
+        SubscribeNewAddon();
+        manager.InvalidateWorkshopScanCache();
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.Equal([false], writesForNewAddon);
+        Assert.False(manager.GetActualAddonEnabledState(NewAddonId));
+        Assert.False(manager.GetConfiguration().LastGamAppliedAddonStates[NewAddonId]);
+    }
+
+    [Fact]
+    public async Task SmartAsset_ManualMembershipAndVersionMutationsAreRejected()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var smart = await manager.CreateSmartAssetAsync(
+            "Maps",
+            new AssetMembershipRule(AssetMembershipRuleKind.Type, "Map"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => manager.AddAddonToAsset(smart.Id, ExistingAddonId));
+        Assert.Throws<InvalidOperationException>(
+            () => manager.AddAddonsToAssetBatch(smart.Id, [ExistingAddonId]));
+        Assert.Throws<InvalidOperationException>(
+            () => manager.RemoveAddonFromAsset(smart.Id, ExistingAddonId));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.CreateAssetVersionAsync(smart.Id));
+    }
+
+    [Fact]
+    public async Task WorkshopRefresh_PerAssetRetentionKeepsOnlyImportedStyleMissingReferences()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var retained = new Asset("Imported fixed")
+        {
+            Id = "imported-fixed",
+            Addons = ["999"],
+            RetainMissingReferences = true
+        };
+        var ordinary = new Asset("Ordinary")
+        {
+            Id = "ordinary",
+            Addons = ["998"]
+        };
+        manager.GetConfiguration().RetainMissingAssetReferences = false;
+        manager.GetConfiguration().Assets.Add(retained);
+        manager.GetConfiguration().Assets.Add(ordinary);
+        await manager.SaveConfigurationImmediatelyAsync();
+
+        manager.InvalidateWorkshopScanCache();
+        await manager.ScanWorkshopFolderAsync();
+
+        Assert.Equal(["999"], retained.Addons);
+        Assert.Empty(ordinary.Addons);
+        var placeholder = manager.GetConfiguration().AddonMetadata["999"];
+        Assert.False(placeholder.IsAvailable);
+        Assert.False(placeholder.IsDownloadPending);
+        Assert.False(manager.GetConfiguration().AddonMetadata.ContainsKey("998"));
+    }
+
     private AddonManager CreateManager()
     {
         return new AddonManager(new AddonManagerOptions
@@ -319,6 +457,26 @@ public sealed class NewSubscriptionRuntimeApplicationTests : IDisposable
             "payload.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(payloadPath)!);
         File.WriteAllText(payloadPath, "payload", new UTF8Encoding(false));
+    }
+
+    private string WriteAddonJson(
+        string addonId,
+        string type,
+        IEnumerable<string> tags)
+    {
+        var addonJsonPath = Path.Combine(
+            workshopPath,
+            addonId,
+            "addon.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(addonJsonPath)!);
+        var json = JsonConvert.SerializeObject(new
+        {
+            title = "Test addon",
+            type,
+            tags = tags.ToArray()
+        });
+        File.WriteAllText(addonJsonPath, json, new UTF8Encoding(false));
+        return addonJsonPath;
     }
 
     private void WriteDisabledIds(params string[] addonIds)

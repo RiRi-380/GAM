@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using GmodAddonManager.Core.Models;
-using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using System;
 using System.Collections.Generic;
@@ -14,82 +13,26 @@ namespace GmodAddonManager.UI.Views;
 
 public partial class AssetEditDialog : Window
 {
-    private readonly Asset? asset;
-    private readonly AddonManager? addonManager;
-    private readonly bool allowRename = true;
-    private readonly string originalName = string.Empty;
-
     private string? existingImagePath;
     private string? selectedImagePath;
     private AssetImageCrop? selectedCrop;
     private bool removeImageRequested;
-    private IDisposable? _assetNameSubscription;
 
     public AssetEditDialog()
     {
         InitializeComponent();
-        InitializeDialog();
+        UpdateImageStatus();
     }
 
-    public AssetEditDialog(Asset asset, AddonManager addonManager, bool allowRename = true)
+    public AssetEditDialog(string? imagePath)
     {
         InitializeComponent();
-        this.asset = asset;
-        this.addonManager = addonManager;
-        this.allowRename = allowRename;
-        originalName = asset.Name;
-
-        InitializeDialog();
-    }
-
-    private void InitializeDialog()
-    {
-        if (asset != null)
+        if (!string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath))
         {
-            if (allowRename)
-            {
-                AssetNameTextBox.Text = asset.Name;
-            }
-            else
-            {
-                AssetNameTextBox.Text = asset.Id switch
-                {
-                    "subscribe-system-asset" => L.Get("Asset.SubscribeAsset"),
-                    _ => asset.Name
-                };
-                AssetNameTextBox.IsEnabled = false;
-            }
-
-            if (addonManager != null)
-            {
-                existingImagePath = addonManager.ResolveAssetImagePath(asset);
-                if (!string.IsNullOrWhiteSpace(existingImagePath) && !File.Exists(existingImagePath))
-                {
-                    existingImagePath = null;
-                }
-            }
+            existingImagePath = imagePath;
         }
-        else
-        {
-            AssetNameTextBox.Text = string.Empty;
-        }
-
-        _assetNameSubscription?.Dispose();
-        _assetNameSubscription = AssetNameTextBox.GetObservable(TextBox.TextProperty)
-            .Subscribe(_ =>
-            {
-                UpdateSaveState();
-                UpdateImageStatus();
-            });
 
         UpdateImageStatus();
-        UpdateSaveState();
-    }
-
-    private void UpdateSaveState()
-    {
-        var name = AssetNameTextBox.Text?.Trim();
-        SaveButton.IsEnabled = !string.IsNullOrWhiteSpace(name);
     }
 
     private void UpdateImageStatus()
@@ -194,19 +137,11 @@ public partial class AssetEditDialog : Window
         Close();
     }
 
-    protected override void OnClosed(EventArgs e)
-    {
-        _assetNameSubscription?.Dispose();
-        _assetNameSubscription = null;
-        base.OnClosed(e);
-    }
-
     private void OnSave(object? sender, RoutedEventArgs e)
     {
         var result = new AssetEditResult
         {
             IsSaved = true,
-            Name = allowRename ? (AssetNameTextBox.Text?.Trim() ?? string.Empty) : originalName,
             RemoveImage = removeImageRequested,
             SourceImagePath = selectedImagePath,
             Crop = removeImageRequested ? null : selectedCrop
@@ -219,7 +154,6 @@ public partial class AssetEditDialog : Window
 public class AssetEditResult
 {
     public bool IsSaved { get; set; }
-    public string Name { get; set; } = string.Empty;
     public bool RemoveImage { get; set; }
     public string? SourceImagePath { get; set; }
     public AssetImageCrop? Crop { get; set; }

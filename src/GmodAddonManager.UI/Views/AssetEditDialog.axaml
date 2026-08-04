@@ -3,22 +3,15 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:loc="clr-namespace:GmodAddonManager.UI.Localization"
-        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="560"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="330"
         x:Class="GmodAddonManager.UI.Views.AssetEditDialog"
         Title="{loc:Localize AssetEdit.Title}"
-        Width="560"
-        Height="560"
+        Width="500"
+        Height="330"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
 
     <DockPanel Margin="20">
-        <StackPanel DockPanel.Dock="Top" Spacing="6">
-            <TextBlock Text="{loc:Localize AssetEdit.NameLabel}"
-                       FontWeight="Bold"/>
-            <TextBox x:Name="AssetNameTextBox"
-                     Watermark="{loc:Localize AssetEdit.NamePlaceholder}"/>
-        </StackPanel>
-
         <StackPanel DockPanel.Dock="Bottom"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
@@ -34,7 +27,7 @@
                     Content="{loc:Localize Dialog.Save}"/>
         </StackPanel>
 
-        <StackPanel Spacing="8" Margin="0,20,0,0">
+        <StackPanel Spacing="8">
             <TextBlock Text="{loc:Localize AssetEdit.ImageLabel}"
                        FontWeight="Bold"/>
             <TextBlock Text="{loc:Localize AssetEdit.ImageDescription}"

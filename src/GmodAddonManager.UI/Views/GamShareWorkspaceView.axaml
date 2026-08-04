@@ -1,0 +1,138 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:GmodAddonManager.UI.ViewModels"
+             xmlns:loc="using:GmodAddonManager.UI.Localization"
+             mc:Ignorable="d"
+             d:DesignWidth="760"
+             d:DesignHeight="620"
+             x:Class="GmodAddonManager.UI.Views.GamShareWorkspaceView"
+             x:DataType="vm:AssetListViewModel">
+
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+        <Grid Margin="24"
+              MaxWidth="760"
+              HorizontalAlignment="Center"
+              RowDefinitions="Auto,Auto,Auto,Auto">
+            <StackPanel Grid.Row="0" Spacing="7">
+                <TextBlock Text="{Binding ShareWorkspaceTitle}"
+                           FontSize="25"
+                           FontWeight="Bold"
+                           TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding ShareWorkspaceDescription}"
+                           Opacity="0.76"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Margin="0,20,0,0"
+                    Padding="18"
+                    CornerRadius="10"
+                    Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{Binding ShareSelectionSummary}"
+                               FontSize="20"
+                               FontWeight="SemiBold"/>
+                    <TextBlock Text="{loc:Localize GamShare.GroupIncludesChildren}"
+                               FontSize="12"
+                               Opacity="0.72"
+                               TextWrapping="Wrap"/>
+                    <Border BorderThickness="1"
+                            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                            CornerRadius="6"
+                            Padding="8"
+                            MaxHeight="210">
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding ShareSelectionItems}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ShareSelectionItemViewModel">
+                                        <Grid ColumnDefinitions="*,Auto"
+                                              Margin="4,3">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Name}"
+                                                       MaxLines="1"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip.Tip="{Binding Name}"/>
+                                            <Border Grid.Column="1"
+                                                    Margin="8,0,0,0"
+                                                    Padding="5,1"
+                                                    CornerRadius="4"
+                                                    Background="#334A90E2">
+                                                <TextBlock Text="{Binding Kind}"
+                                                           FontSize="9"
+                                                           Foreground="#9BC8F5"/>
+                                            </Border>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                    <TextBlock Text="{loc:Localize GamShare.EmptySelection}"
+                               IsVisible="{Binding !HasShareSelection}"
+                               Opacity="0.7"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2"
+                    Margin="0,14,0,0"
+                    Padding="18"
+                    CornerRadius="10"
+                    Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                <StackPanel Spacing="9">
+                    <CheckBox Content="{loc:Localize GamShare.IncludeImages}"
+                              IsChecked="{Binding IncludeImagesInShare, Mode=TwoWay}"/>
+                    <TextBlock Text="{loc:Localize GamShare.ImageCompressionDescription}"
+                               Margin="26,0,0,0"
+                               FontSize="12"
+                               Opacity="0.72"
+                               TextWrapping="Wrap"/>
+                    <CheckBox x:Name="IncludeMemoCheckBox"
+                              Margin="0,6,0,0"
+                              Content="{loc:Localize GamShare.IncludeMemos}"
+                              IsChecked="{Binding IncludeMemosInShare, Mode=TwoWay}"/>
+                    <TextBlock Text="{loc:Localize GamShare.MemoDescription}"
+                               Margin="26,0,0,0"
+                               FontSize="12"
+                               Opacity="0.72"
+                               TextWrapping="Wrap"/>
+                    <TextBlock Text="{loc:Localize GamShare.SavePickerDescription}"
+                               Margin="0,7,0,0"
+                               FontSize="12"
+                               Opacity="0.76"
+                               TextWrapping="Wrap"/>
+                    <Border Margin="0,8,0,0"
+                            Padding="12"
+                            CornerRadius="6"
+                            Background="#172532">
+                        <TextBlock Text="{loc:Localize GamAssetFile.NoSteamChanges}"
+                                   TextWrapping="Wrap"/>
+                    </Border>
+                    <TextBlock Text="{Binding ShareErrorText}"
+                               IsVisible="{Binding HasShareError}"
+                               Foreground="#F08A8A"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <WrapPanel Grid.Row="3"
+                       Margin="0,18,0,24"
+                       Orientation="Horizontal"
+                       HorizontalAlignment="Right">
+                <Button Command="{Binding CancelShareModeCommand}"
+                        Margin="0,0,10,8"
+                        Content="{loc:Localize Dialog.Cancel}"/>
+                <Button Command="{Binding ExportShareSelectionCommand}"
+                        IsEnabled="{Binding CanExportShareSelection}"
+                        Margin="0,0,0,8"
+                        Classes="accent"
+                        Content="{loc:Localize GamShare.Export}"/>
+            </WrapPanel>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

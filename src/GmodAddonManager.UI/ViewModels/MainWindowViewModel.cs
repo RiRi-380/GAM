@@ -50,6 +50,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         this.processWatcher = processWatcher;
         this.pendingChangeManager = pendingChangeManager;
 
+        AssetItemViewModel.ApplyGlobalSettings(AppSettings.Load());
+
         // ViewModel縺ｮ蛻晄悄蛹・
         assetListViewModel = new AssetListViewModel(
             addonManager, pendingChangeManager, processWatcher);
@@ -424,8 +426,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         catch (Exception ex)
         {
             progressDialog?.Close();
+            SafeFileLogger.TryLogException("MainWindowViewModel.RefreshAddonsAsync", ex);
             var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.UpdateFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.UpdateFailed", ex.Message));
         }
         finally
         {
@@ -646,8 +651,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
+            SafeFileLogger.TryLogException("MainWindowViewModel.UndoLastActionAsync", ex);
             var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.UndoOperationFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.UndoOperationFailed", ex.Message));
         }
     }
 
@@ -786,7 +794,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             var dialogService = new DialogService();
             await dialogService.ShowErrorAsync(
                 L.Get("Error.Title"),
-                L.Get("Error.ResetFailed"));
+                L.Format("Error.ResetFailed", ex.Message));
         }
     }
 
@@ -828,20 +836,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 dialog.PathRecoveryRequested -= pathRecoveryRequestedHandler;
             }
 
+            var updatedSettings = AppSettings.Load();
+            AssetItemViewModel.ApplyGlobalSettings(updatedSettings);
+            foreach (var asset in AssetListViewModel.Assets)
+            {
+                asset.NotifySettingsChanged();
+            }
+            AddonGridViewModel.ReloadSettings(updatedSettings);
+
             if (dialog.WasSaved)
             {
                 await RefreshAddonsAsync(showProgress: false);
             }
-
-            // 險ｭ螳壼､画峩繧貞渚譏
-            var updatedSettings = AppSettings.Load();
-            AddonGridViewModel.ReloadSettings(updatedSettings);
         }
         catch (Exception ex)
         {
+            SafeFileLogger.TryLogException("MainWindowViewModel.OpenSettingsAsync", ex);
             var dialogService = new DialogService();
             await dialogService.ShowErrorAsync(L.Get("Error.Title"), 
-                L.Get("Error.SettingsDialogFailed"));
+                L.Format("Error.SettingsDialogFailed", ex.Message));
         }
     }
 
@@ -1014,10 +1027,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
+            SafeFileLogger.TryLogException("MainWindowViewModel.ResetManagerAsync", ex);
             var dialogService = new DialogService();
             await dialogService.ShowErrorAsync(
                 L.Get("Error.Title"), 
-                L.Get("Error.ResetFailed"));
+                L.Format("Error.ResetFailed", ex.Message));
         }
     }
 }

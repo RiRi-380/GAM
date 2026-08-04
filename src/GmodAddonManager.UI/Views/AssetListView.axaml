@@ -1,309 +1,577 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:GmodAddonManager.UI.ViewModels"
              xmlns:loc="using:GmodAddonManager.UI.Localization"
+             xmlns:shapes="using:Avalonia.Controls.Shapes"
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="450"
+             x:Name="AssetListRoot"
              x:Class="GmodAddonManager.UI.Views.AssetListView"
              x:DataType="vm:AssetListViewModel">
-    
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        
-        <!-- ヘッダー -->
-        <Border Grid.Row="0" 
+
+    <Grid RowDefinitions="Auto,*">
+        <Border Grid.Row="0"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
-                Padding="15"
-                MinHeight="70">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                
-                <TextBlock Grid.Column="0" 
-                           Text="{loc:Localize AssetList.Header}" 
-                           FontSize="16" 
-                           FontWeight="Bold"
-                           VerticalAlignment="Center"/>
-                
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            Spacing="8"
-                            VerticalAlignment="Center">
+                Padding="12"
+                MinHeight="94"
+                ClipToBounds="True">
+            <Grid RowDefinitions="Auto,Auto"
+                  RowSpacing="8"
+                  ClipToBounds="True"
+                  Classes="assetHeaderLayout">
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="Auto,*"
+                      ClipToBounds="True"
+                      Classes="breadcrumbRow">
+                    <Button Grid.Column="0"
+                            Command="{Binding BackCommand}"
+                            IsVisible="{Binding IsInsideGroup}"
+                            Width="34"
+                            Height="34"
+                            Margin="0,0,8,0"
+                            Padding="0"
+                            Background="Transparent"
+                            ToolTip.Tip="{loc:Localize AssetGroup.BackTooltip}"
+                            AutomationProperties.Name="{loc:Localize AssetGroup.BackTooltip}">
+                        <TextBlock Text="←"
+                                   FontSize="19"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+
+                    <ScrollViewer x:Name="BreadcrumbScrollViewer"
+                                  Grid.Column="1"
+                                  Height="34"
+                                  HorizontalScrollBarVisibility="Hidden"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  VerticalAlignment="Center"
+                                  ClipToBounds="True"
+                                  PointerWheelChanged="OnBreadcrumbPointerWheelChanged">
+                        <ItemsControl ItemsSource="{Binding Breadcrumbs}"
+                                      VerticalAlignment="Center">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:AssetBreadcrumbItemViewModel">
+                                    <StackPanel Orientation="Horizontal"
+                                                Height="34"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text=" / "
+                                                   FontSize="14"
+                                                   Opacity="0.45"
+                                                   VerticalAlignment="Center"
+                                                   IsVisible="{Binding HasSeparator}"/>
+                                        <Button Command="{Binding NavigateCommand}"
+                                                IsVisible="{Binding !IsCurrent}"
+                                                MaxWidth="140"
+                                                Height="30"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Padding="3,2"
+                                                VerticalContentAlignment="Center"
+                                                ToolTip.Tip="{Binding Name}">
+                                            <TextBlock Text="{Binding Name}"
+                                                       MaxWidth="128"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       MaxLines="1"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </Button>
+                                        <TextBlock Text="{Binding Name}"
+                                                   IsVisible="{Binding IsCurrent}"
+                                                   MaxWidth="168"
+                                                   FontSize="15"
+                                                   FontWeight="Bold"
+                                                   MaxLines="1"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="{Binding Name}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+
+                <WrapPanel Grid.Row="1"
+                           Orientation="Horizontal"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center">
+                    <Button Command="{Binding ImportGamAssetCommand}"
+                            IsVisible="{Binding IsAtRoot}"
+                            IsEnabled="{Binding IsAssetMutationEnabled}"
+                            Width="30"
+                            Height="30"
+                            Margin="0,0,8,0"
+                            Padding="6"
+                            ToolTip.Tip="{loc:Localize GamAssetFile.ImportTooltip}"
+                            AutomationProperties.Name="{loc:Localize GamAssetFile.Import}">
+                        <PathIcon Data="{StaticResource FileIcon}"
+                                  Width="14"
+                                  Height="14"/>
+                    </Button>
                     <Button Command="{Binding CreateAssetCommand}"
-                            Content="{loc:Localize AssetList.CreateNew}"
-                            ToolTip.Tip="{loc:Localize AssetList.CreateNewTooltip}"
+                            IsEnabled="{Binding IsAssetMutationEnabled}"
+                            Content="{Binding CreateActionText}"
+                            ToolTip.Tip="{Binding CreateActionTooltip}"
                             Classes="accent"
-                            Padding="12,4"/>
-                </StackPanel>
+                            Padding="10,4"/>
+                </WrapPanel>
             </Grid>
         </Border>
-        
-        <!-- アセットリスト -->
-        <ScrollViewer Grid.Row="1"
-                      Name="AssetScrollViewer"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-            <ItemsRepeater ItemsSource="{Binding Assets}" Margin="5">
-                <ItemsRepeater.Layout>
-                    <StackLayout Orientation="Vertical" Spacing="4"/>
-                </ItemsRepeater.Layout>
-                <ItemsRepeater.ItemTemplate>
-                    <DataTemplate x:DataType="vm:AssetItemViewModel">
-                        <Border Margin="0,2" 
-                                Padding="10,2"
-                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
-                                CornerRadius="4"
-                                BorderThickness="2"
-                                BorderBrush="{Binding BorderColor}"
-                                Classes.selected="{Binding IsSelected}"
-                                PointerPressed="OnAssetPointerPressed"
-                                >
-                            
-                            <Border.Styles>
-                                <Style Selector="Border.selected">
-                                    <Setter Property="Background" Value="#3A3A3A"/>
-                                </Style>
-                                <Style Selector="Border:pointerover">
-                                    <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
-                                </Style>
-                            </Border.Styles>
-                            
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                    
-                                <!-- アセットサムネイル -->
-                                <Border Grid.Column="0"
-                                        Grid.RowSpan="2"
-                                        Width="64"
-                                        Height="64"
-                                        Margin="0,0,8,0"
-                                        BoxShadow="0 2 6 0 #20000000"
-                                        ClipToBounds="True"
-                                        VerticalAlignment="Center"
-                                        Classes="assetImage"
-                                        Classes.hasImage="{Binding HasCustomImage}"
-                                        PointerPressed="OnAssetImagePointerPressed"
-                                        Cursor="Hand"
-                                        ToolTip.Tip="{loc:Localize AssetList.Edit}"
-                                        IsHitTestVisible="{Binding CanEditImage}">
-                                    <Border.Styles>
-                                        <Style Selector="Border.assetImage">
-                                            <Setter Property="CornerRadius" Value="10"/>
-                                            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumBrush}"/>
-                                            <Setter Property="BorderThickness" Value="1"/>
-                                            <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"/>
-                                        </Style>
-                                        <Style Selector="Border.assetImage.hasImage">
-                                            <Setter Property="CornerRadius" Value="10"/>
-                                            <Setter Property="BorderThickness" Value="0"/>
-                                            <Setter Property="Background" Value="Transparent"/>
-                                        </Style>
-                                    </Border.Styles>
-                                    <Grid>
-                                        <Image Source="{Binding AssetImageBitmap}"
-                                               Stretch="UniformToFill"
-                                               IsVisible="{Binding HasCustomImage}"/>
-                                        <Border IsVisible="{Binding HasNoCustomImage}"
-                                                Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-                                            <Grid>
+
+        <Grid Grid.Row="1">
+            <ScrollViewer Name="AssetScrollViewer"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <ItemsRepeater x:Name="EntryRepeater"
+                               ItemsSource="{Binding Entries}"
+                               Margin="5">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Orientation="Vertical" Spacing="4"/>
+                    </ItemsRepeater.Layout>
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate x:DataType="vm:AssetListEntryViewModel">
+                            <Border Margin="0,2"
+                                    Padding="10,4"
+                                    Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                    CornerRadius="4"
+                                    BorderThickness="2"
+                                     BorderBrush="{Binding BorderColor}"
+                                     Classes="assetEntryCard"
+                                     Classes.group="{Binding IsGroup}"
+                                     Classes.selected="{Binding IsSelected}"
+                                    Classes.shareSelected="{Binding IsShareSelected}"
+                                    PointerPressed="OnEntryPointerPressed"
+                                    PointerMoved="OnEntryPointerMoved"
+                                    PointerReleased="OnEntryPointerReleased"
+                                    PointerCaptureLost="OnEntryPointerCaptureLost">
+                                <Border.Styles>
+                                    <Style Selector="Border.selected">
+                                        <Setter Property="Background" Value="#3A3A3A"/>
+                                    </Style>
+                                    <Style Selector="Border:pointerover">
+                                        <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}"/>
+                                    </Style>
+                                    <Style Selector="Border.dragging">
+                                        <Setter Property="Opacity" Value="0.68"/>
+                                    </Style>
+                                     <Style Selector="Border.shareSelected">
+                                         <Setter Property="Background" Value="#243F6488"/>
+                                     </Style>
+                                     <Style Selector="Border.group">
+                                         <Setter Property="Background" Value="#202A34"/>
+                                     </Style>
+                                     <Style Selector="Border.group:pointerover">
+                                         <Setter Property="Background" Value="#283747"/>
+                                     </Style>
+                                </Border.Styles>
+
+                                <Grid RowDefinitions="Auto,Auto"
+                                      ColumnDefinitions="Auto,*,Auto">
+                                    <Border Grid.Column="0"
+                                            Grid.RowSpan="2"
+                                            Width="60"
+                                            Height="60"
+                                            Margin="0,0,8,0"
+                                            BoxShadow="0 2 6 0 #20000000"
+                                            ClipToBounds="True"
+                                            VerticalAlignment="Center"
+                                             Classes="assetImage"
+                                             Classes.hasImage="{Binding HasCustomImage}"
+                                             IsVisible="{Binding IsAsset}"
+                                            PointerPressed="OnEntryImagePointerPressed"
+                                            Cursor="Hand"
+                                            ToolTip.Tip="{loc:Localize AssetList.Edit}"
+                                            AutomationProperties.Name="{loc:Localize AssetList.Edit}"
+                                            IsHitTestVisible="{Binding CanEditImage}">
+                                        <Border.Styles>
+                                            <Style Selector="Border.assetImage">
+                                                <Setter Property="CornerRadius" Value="10"/>
+                                                <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumBrush}"/>
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"/>
+                                            </Style>
+                                            <Style Selector="Border.assetImage.hasImage">
+                                                <Setter Property="BorderThickness" Value="0"/>
+                                                <Setter Property="Background" Value="Transparent"/>
+                                            </Style>
+                                        </Border.Styles>
+                                        <Grid>
+                                            <Image Source="{Binding AssetImageBitmap}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding HasCustomImage}"/>
+                                            <Border IsVisible="{Binding HasNoCustomImage}"
+                                                    Background="{DynamicResource SystemControlBackgroundListLowBrush}">
                                                 <TextBlock Text="{Binding Name, Converter={StaticResource FirstCharacterConverter}}"
                                                            HorizontalAlignment="Center"
                                                            VerticalAlignment="Center"
                                                            FontSize="22"
                                                            FontWeight="Bold"
                                                            Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
-                                                           Opacity="0.9"/>
-                                            </Grid>
-                                        </Border>
-                                    </Grid>
-                                </Border>
+                                                           Opacity="0.92"/>
+                                            </Border>
 
-                                <!-- アセット情報 -->
-                                <Grid Grid.Column="1"
-                                      Grid.Row="0"
-                                      ColumnDefinitions="Auto,*"
-                                      RowDefinitions="Auto,Auto"
-                                      VerticalAlignment="Center">
-                                    <Border Grid.Row="0"
-                                            Grid.Column="0"
-                                            Width="10"
-                                            Height="10"
-                                            Margin="0,0,8,0"
-                                            Background="Transparent"
-                                            VerticalAlignment="Center">
-                                        <Ellipse Width="10"
-                                                Height="10"
-                                                Fill="{Binding AssetStateColor}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center"/>
+                                        </Grid>
                                     </Border>
-                                    <TextBlock Grid.Row="0"
-                                              Grid.Column="1"
-                                              Text="{Binding Name}" 
-                                              FontSize="16"
-                                              FontWeight="Bold"
-                                              MaxLines="1"
-                                              TextTrimming="CharacterEllipsis"
-                                              ToolTip.Tip="{Binding Name}"
-                                              Classes.selected="{Binding IsSelected}">
-                                        <TextBlock.Styles>
-                                            <Style Selector="TextBlock.selected">
-                                                <Setter Property="Foreground" Value="White"/>
-                                            </Style>
-                                        </TextBlock.Styles>
-                                    </TextBlock>
-                                        
-                                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                                        <TextBlock FontSize="11" 
-                                                  Opacity="0.7"
-                                                  Classes.selected="{Binding IsSelected}"
-                                                  Text="{Binding AddonCountDisplay}">
-                                            <TextBlock.Styles>
-                                                <Style Selector="TextBlock.selected">
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                    <Setter Property="Opacity" Value="0.9"/>
-                                                </Style>
-                                            </TextBlock.Styles>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </Grid>
 
-                                <!-- アセット状態 -->
-                                <Grid Grid.Column="1"
-                                      Grid.Row="1"
-                                      Grid.ColumnSpan="{Binding StateColumnSpan}"
-                                      ColumnDefinitions="Auto,*"
-                                      VerticalAlignment="Center">
-                                    <StackPanel Grid.Column="0"
-                                               Orientation="Horizontal"
-                                               IsVisible="{Binding CanEditAddonDefaultState}">
-                                        <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{Binding EnabledStateLabel}"
-                                                    IsChecked="{Binding IsEnabledState}"
-                                                    Command="{Binding SetEnabledCommand}"
-                                                    ToolTip.Tip="{Binding EnabledStateTooltip}"
-                                                    AutomationProperties.HelpText="{Binding EnabledStateTooltip}"
-                                                    Margin="0,0,8,0"
-                                                    FontSize="11">
-                                            <RadioButton.Styles>
-                                                <Style Selector="RadioButton:checked">
-                                                    <Setter Property="Foreground" Value="#4CAF50"/>
+                                    <Border Grid.Column="0"
+                                            Grid.RowSpan="2"
+                                            Width="60"
+                                            Height="60"
+                                            Margin="0,0,8,0"
+                                            CornerRadius="10"
+                                            BorderThickness="1"
+                                            BorderBrush="#446C94"
+                                            Background="#1D3348"
+                                            BoxShadow="0 2 6 0 #30000000"
+                                            ClipToBounds="True"
+                                            VerticalAlignment="Center"
+                                            IsVisible="{Binding IsGroup}"
+                                            PointerPressed="OnEntryImagePointerPressed"
+                                            Cursor="Hand"
+                                            ToolTip.Tip="{loc:Localize AssetList.Edit}"
+                                            AutomationProperties.Name="{loc:Localize AssetList.Edit}"
+                                            IsHitTestVisible="{Binding CanEditImage}">
+                                        <Grid>
+                                            <Image Source="{Binding AssetImageBitmap}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding HasCustomImage}"/>
+                                            <Grid Width="44"
+                                                  Height="44"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Classes="groupDefaultIcon"
+                                                  IsHitTestVisible="False"
+                                                  IsVisible="{Binding HasNoCustomImage}">
+                                                <Viewbox Width="44"
+                                                         Height="44"
+                                                         Stretch="Uniform">
+                                                    <Canvas Width="44"
+                                                            Height="44">
+                                                        <shapes:Path Data="M5,28 L22,38 L39,28 L22,18 Z"
+                                                                     Fill="Transparent"
+                                                                     Stroke="#3E78BC"
+                                                                     StrokeThickness="2"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupLayerBack"/>
+                                                        <shapes:Path Data="M5,21 L22,31 L39,21 L22,11 Z"
+                                                                     Fill="#182C40"
+                                                                     Stroke="#4C91E6"
+                                                                     StrokeThickness="2"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupLayerMiddle"/>
+                                                        <shapes:Path Data="M5,14 L22,4 L39,14 L22,24 Z"
+                                                                     Fill="#5DA8FF"
+                                                                     Stroke="#82C1FF"
+                                                                     StrokeThickness="1"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupLayerFront"/>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Grid>
+
+                                            <Border Width="22"
+                                                    Height="22"
+                                                    Margin="0,0,4,4"
+                                                    Padding="2"
+                                                    HorizontalAlignment="Right"
+                                                    VerticalAlignment="Bottom"
+                                                    CornerRadius="6"
+                                                    BorderThickness="1"
+                                                    BorderBrush="#805DA8FF"
+                                                    Background="#D91C1E24"
+                                                    BoxShadow="0 2 5 0 #80000000"
+                                                    Classes="groupImageBadge"
+                                                    IsHitTestVisible="False"
+                                                    IsVisible="{Binding HasCustomImage}">
+                                                <Viewbox Width="16"
+                                                         Height="16"
+                                                         Stretch="Uniform">
+                                                    <Canvas Width="44"
+                                                            Height="44">
+                                                        <shapes:Path Data="M5,28 L22,38 L39,28 L22,18 Z"
+                                                                     Fill="Transparent"
+                                                                     Stroke="#D7EEFF"
+                                                                     StrokeThickness="3"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupBadgeLayerBack"/>
+                                                        <shapes:Path Data="M5,21 L22,31 L39,21 L22,11 Z"
+                                                                     Fill="#1C1E24"
+                                                                     Stroke="#A8D7FF"
+                                                                     StrokeThickness="3"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupBadgeLayerMiddle"/>
+                                                        <shapes:Path Data="M5,14 L22,4 L39,14 L22,24 Z"
+                                                                     Fill="#5DA8FF"
+                                                                     Stroke="#D7EEFF"
+                                                                     StrokeThickness="1.5"
+                                                                     StrokeJoin="Round"
+                                                                     Classes="groupBadgeLayerFront"/>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+
+                                    <Grid Grid.Column="1"
+                                          Grid.Row="0"
+                                          ColumnDefinitions="Auto,*"
+                                          RowDefinitions="Auto,Auto"
+                                          VerticalAlignment="Center">
+                                        <Border Grid.Row="0"
+                                                Grid.Column="0"
+                                                Width="10"
+                                                Height="10"
+                                                Margin="0,0,8,0"
+                                                Background="Transparent"
+                                                VerticalAlignment="Center">
+                                            <Ellipse Width="10"
+                                                     Height="10"
+                                                     Fill="{Binding AssetStateColor}"/>
+                                        </Border>
+                                        <Grid Grid.Row="0"
+                                              Grid.Column="1"
+                                              ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Name}"
+                                                       FontSize="15"
+                                                       FontWeight="Bold"
+                                                       MaxLines="1"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip.Tip="{Binding Name}"
+                                                       Classes.selected="{Binding IsSelected}">
+                                                <TextBlock.Styles>
+                                                    <Style Selector="TextBlock.selected">
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                    </Style>
+                                                </TextBlock.Styles>
+                                            </TextBlock>
+                                            <WrapPanel Grid.Column="1"
+                                                       Orientation="Horizontal"
+                                                       Margin="7,0,0,0">
+                                                <Border Padding="5,1"
+                                                        CornerRadius="4"
+                                                        Background="#335C86B5"
+                                                        VerticalAlignment="Center"
+                                                        IsVisible="{Binding IsSmart}"
+                                                        ToolTip.Tip="{Binding SmartRuleText}">
+                                                    <TextBlock Text="{Binding SmartBadgeText}"
+                                                               FontSize="9"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="#9BC8F5"/>
+                                                </Border>
+                                            </WrapPanel>
+                                        </Grid>
+
+                                        <Grid Grid.Row="1"
+                                              Grid.Column="1"
+                                              ColumnDefinitions="*,Auto,Auto"
+                                              ClipToBounds="True">
+                                            <TextBlock Grid.Column="0"
+                                                       FontSize="11"
+                                                       Opacity="0.7"
+                                                       Classes.selected="{Binding IsSelected}"
+                                                       Text="{Binding AddonCountDisplay}"
+                                                       MaxLines="1"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip.Tip="{Binding AddonCountDisplay}">
+                                                <TextBlock.Styles>
+                                                    <Style Selector="TextBlock.selected">
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="Opacity" Value="0.9"/>
+                                                    </Style>
+                                                </TextBlock.Styles>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="1"
+                                                       Text=" · "
+                                                       FontSize="11"
+                                                       Opacity="0.6"
+                                                       IsVisible="{Binding IsMixedState}"/>
+                                            <TextBlock Grid.Column="2"
+                                                       Text="{Binding MixedStateText}"
+                                                       FontSize="11"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#BDBDBD"
+                                                       IsVisible="{Binding IsMixedState}"/>
+                                        </Grid>
+                                    </Grid>
+
+                                    <Grid Grid.Column="1"
+                                          Grid.Row="1"
+                                          Grid.ColumnSpan="{Binding StateColumnSpan}"
+                                          VerticalAlignment="Center">
+                                        <WrapPanel Orientation="Horizontal"
+                                                   IsVisible="{Binding CanEditAddonDefaultState}">
+                                            <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
+                                                         Content="{Binding EnabledStateLabel}"
+                                                         IsChecked="{Binding IsEnabledState, Mode=OneWay}"
+                                                         Command="{Binding SetEnabledCommand}"
+                                                         ToolTip.Tip="{Binding EnabledStateTooltip}"
+                                                         AutomationProperties.HelpText="{Binding EnabledStateTooltip}"
+                                                         Margin="0,0,7,2"
+                                                         FontSize="11">
+                                                <RadioButton.Styles>
+                                                    <Style Selector="RadioButton:checked">
+                                                        <Setter Property="Foreground" Value="#4CAF50"/>
+                                                    </Style>
+                                                </RadioButton.Styles>
+                                            </RadioButton>
+                                            <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
+                                                         Content="{Binding DisabledStateLabel}"
+                                                         IsChecked="{Binding IsDisabledState, Mode=OneWay}"
+                                                         Command="{Binding SetDisabledCommand}"
+                                                         ToolTip.Tip="{Binding DisabledStateTooltip}"
+                                                         AutomationProperties.HelpText="{Binding DisabledStateTooltip}"
+                                                         Margin="0,0,7,2"
+                                                         FontSize="11">
+                                                <RadioButton.Styles>
+                                                    <Style Selector="RadioButton:checked">
+                                                        <Setter Property="Foreground" Value="#FF9800"/>
+                                                    </Style>
+                                                </RadioButton.Styles>
+                                            </RadioButton>
+                                            <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
+                                                         Content="{Binding ExcludedStateLabel}"
+                                                         IsChecked="{Binding IsExcludedState, Mode=OneWay}"
+                                                         Command="{Binding SetExcludedCommand}"
+                                                         IsVisible="{Binding CanSetExcluded}"
+                                                         ToolTip.Tip="{Binding ExcludedStateTooltip}"
+                                                         AutomationProperties.HelpText="{Binding ExcludedStateTooltip}"
+                                                         Margin="0,0,7,2"
+                                                         FontSize="11">
+                                                <RadioButton.Styles>
+                                                    <Style Selector="RadioButton:checked">
+                                                        <Setter Property="Foreground" Value="#F44336"/>
+                                                    </Style>
+                                                </RadioButton.Styles>
+                                            </RadioButton>
+                                        </WrapPanel>
+                                    </Grid>
+
+                                    <StackPanel Grid.Column="2"
+                                                Grid.Row="0"
+                                                Orientation="Horizontal"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Center"
+                                                Spacing="5">
+                                        <Button Command="{Binding ShowDetailsCommand}"
+                                                IsEnabled="{Binding CanShowDetails}"
+                                                Width="24" Height="24"
+                                                Padding="4"
+                                                ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}">
+                                            <PathIcon Data="{StaticResource InfoIcon}" Width="12" Height="12"/>
+                                        </Button>
+                                        <ToggleButton IsChecked="{Binding IsFavorite, Mode=OneWay}"
+                                                      Command="{Binding ToggleFavoriteCommand}"
+                                                      Width="24" Height="24"
+                                                      Padding="0"
+                                                      Background="Transparent"
+                                                      BorderThickness="0"
+                                                      ToolTip.Tip="{Binding FavoriteButtonText}"
+                                                      IsVisible="{Binding CanFavorite}">
+                                            <TextBlock Text="♥"
+                                                       FontSize="14"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Styles>
+                                                    <Style Selector="TextBlock">
+                                                        <Setter Property="Foreground" Value="#777777"/>
+                                                    </Style>
+                                                    <Style Selector="ToggleButton:checked TextBlock">
+                                                        <Setter Property="Foreground" Value="#E85D75"/>
+                                                    </Style>
+                                                </TextBlock.Styles>
+                                            </TextBlock>
+                                         </ToggleButton>
+                                     </StackPanel>
+
+                                    <StackPanel Grid.Column="2"
+                                                Grid.Row="1"
+                                                Orientation="Horizontal"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Center"
+                                                Spacing="5">
+                                        <ToggleButton IsVisible="{Binding IsSubscribeAsset}"
+                                                      IsChecked="{Binding #AssetListRoot.DataContext.IsGmodDisabledCollapsed, Mode=OneWay}"
+                                                      Click="OnToggleGmodDisabledCollapse"
+                                                      Width="24"
+                                                      Height="24"
+                                                      Padding="0"
+                                                      ToolTip.Tip="{Binding #AssetListRoot.DataContext.GmodDisabledCollapseTooltip}">
+                                            <Grid>
+                                                <TextBlock Text="▤"
+                                                           FontSize="13"
+                                                           IsVisible="{Binding #AssetListRoot.DataContext.IsGmodDisabledExpanded}"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                                <TextBlock Text="▥"
+                                                           FontSize="13"
+                                                           IsVisible="{Binding #AssetListRoot.DataContext.IsGmodDisabledCollapsed}"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </ToggleButton>
+                                        <Button IsVisible="{Binding CanShare}"
+                                                Classes.shareSelected="{Binding IsShareSelected}"
+                                                Click="OnToggleShareSelection"
+                                                Width="24"
+                                                Height="24"
+                                                Padding="4"
+                                                ToolTip.Tip="{loc:Localize GamShare.ToggleSelection}">
+                                            <Button.Styles>
+                                                <Style Selector="Button.shareSelected">
+                                                    <Setter Property="Background" Value="#4A90E2"/>
+                                                    <Setter Property="Foreground" Value="White"/>
                                                 </Style>
-                                            </RadioButton.Styles>
-                                        </RadioButton>
-                                        <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{Binding DisabledStateLabel}"
-                                                    IsChecked="{Binding IsDisabledState}"
-                                                    Command="{Binding SetDisabledCommand}"
-                                                    ToolTip.Tip="{Binding DisabledStateTooltip}"
-                                                    AutomationProperties.HelpText="{Binding DisabledStateTooltip}"
-                                                    Margin="0,0,8,0"
-                                                    FontSize="11">
-                                            <RadioButton.Styles>
-                                                <Style Selector="RadioButton:checked">
-                                                    <Setter Property="Foreground" Value="#FF9800"/>
-                                                </Style>
-                                            </RadioButton.Styles>
-                                        </RadioButton>
-                                        <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
-                                                    Content="{Binding ExcludedStateLabel}"
-                                                    IsChecked="{Binding IsExcludedState}"
-                                                    Command="{Binding SetExcludedCommand}"
-                                                    IsVisible="{Binding CanSetExcluded}"
-                                                    ToolTip.Tip="{Binding ExcludedStateTooltip}"
-                                                    AutomationProperties.HelpText="{Binding ExcludedStateTooltip}"
-                                                    Margin="0,0,8,0"
-                                                    FontSize="11">
-                                            <RadioButton.Styles>
-                                                <Style Selector="RadioButton:checked">
-                                                    <Setter Property="Foreground" Value="#F44336"/>
-                                                </Style>
-                                            </RadioButton.Styles>
-                                        </RadioButton>
+                                            </Button.Styles>
+                                            <PathIcon Width="13"
+                                                      Height="13"
+                                                      Data="M18,16.08 C17.24,16.08 16.56,16.38 16.05,16.85 L8.91,12.7 C8.96,12.47 9,12.24 9,12 C9,11.76 8.96,11.53 8.91,11.3 L15.97,7.19 C16.5,7.69 17.2,8 18,8 C19.66,8 21,6.66 21,5 C21,3.34 19.66,2 18,2 C16.34,2 15,3.34 15,5 C15,5.24 15.04,5.47 15.09,5.7 L8.03,9.81 C7.5,9.31 6.8,9 6,9 C4.34,9 3,10.34 3,12 C3,13.66 4.34,15 6,15 C6.8,15 7.5,14.69 8.03,14.19 L15.16,18.35 C15.11,18.56 15.08,18.78 15.08,19 C15.08,20.61 16.39,21.92 18,21.92 C19.61,21.92 20.92,20.61 20.92,19 C20.92,17.39 19.61,16.08 18,16.08 Z"/>
+                                        </Button>
+                                        <Button Command="{Binding DeleteCommand}"
+                                                Width="24" Height="24"
+                                                ToolTip.Tip="{loc:Localize AssetList.DeleteTooltip}"
+                                                IsVisible="{Binding CanDelete}">
+                                            <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
+                                        </Button>
                                     </StackPanel>
                                 </Grid>
-                                    
-                                <!-- バージョン + 共有ボタン -->
-                                <StackPanel Grid.Column="2"
-                                            Grid.Row="0"
-                                            Orientation="Horizontal"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"
-                                            Spacing="6">
-                                    <Button Command="{Binding ShowDetailsCommand}"
-                                            Width="24" Height="24"
-                                            Padding="4"
-                                            ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}">
-                                        <PathIcon Data="{StaticResource InfoIcon}" Width="12" Height="12"/>
-                                    </Button>
-                                    <Button Content="{Binding VersionDisplay}"
-                                            Command="{Binding VersionManageCommand}"
-                                            IsVisible="{Binding CanManageVersions}"
-                                            MinWidth="40"
-                                            Height="26"
-                                            FontSize="12"
-                                            Padding="8,4"
-                                            HorizontalContentAlignment="Center"
-                                            VerticalContentAlignment="Center"
-                                            ToolTip.Tip="{loc:Localize AssetList.ManageVersionsTooltip}"/>
-                                    <ToggleButton IsChecked="{Binding IsFavorite, Mode=OneWay}"
-                                                  Command="{Binding ToggleFavoriteCommand}"
-                                                  Width="24" Height="24"
-                                                  Padding="0"
-                                                  Background="Transparent"
-                                                  BorderThickness="0"
-                                                  ToolTip.Tip="{Binding FavoriteButtonText}"
-                                                  IsVisible="{Binding CanFavorite}">
-                                        <TextBlock Text="♥"
-                                                   FontSize="14"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center">
-                                            <TextBlock.Styles>
-                                                <Style Selector="TextBlock">
-                                                    <Setter Property="Foreground" Value="#777777"/>
-                                                </Style>
-                                                <Style Selector="ToggleButton:checked TextBlock">
-                                                    <Setter Property="Foreground" Value="#E85D75"/>
-                                                </Style>
-                                            </TextBlock.Styles>
-                                        </TextBlock>
-                                    </ToggleButton>
-                                </StackPanel>
-                                    
-                                <!-- 削除ボタン -->
-                                <StackPanel Grid.Column="2"
-                                            Grid.Row="1"
-                                            Orientation="Horizontal"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"
-                                            Spacing="6">
-                                    <Button Command="{Binding DeleteCommand}"
-                                            Width="24" Height="24"
-                                            ToolTip.Tip="{loc:Localize AssetList.DeleteTooltip}"
-                                            IsVisible="{Binding CanDelete}">
-                                        <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsRepeater.ItemTemplate>
-            </ItemsRepeater>
-        </ScrollViewer>
-        
+                            </Border>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
+            </ScrollViewer>
+
+            <Border x:Name="InsertionMarker"
+                    Height="3"
+                    Margin="10,0"
+                    CornerRadius="2"
+                    Background="#4A90E2"
+                    VerticalAlignment="Top"
+                    HorizontalAlignment="Stretch"
+                    IsVisible="False"
+                    IsHitTestVisible="False"/>
+
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Margin="22"
+                        Spacing="8"
+                        IsVisible="{Binding IsCurrentGroupEmpty}">
+                <TextBlock Text="▱"
+                           FontSize="34"
+                           Opacity="0.48"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding CurrentGroupEmptyText}"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap"
+                           Opacity="0.7"/>
+            </StackPanel>
+        </Grid>
     </Grid>
 </UserControl>

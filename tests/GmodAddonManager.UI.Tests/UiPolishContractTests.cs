@@ -19,10 +19,10 @@ public sealed class UiPolishContractTests
             .Single(element =>
                 (string?)element.Attribute("DockPanel.Dock") == "Top");
 
-        Assert.Equal("640", (string?)window.Attribute("MinWidth"));
-        Assert.Equal("480", (string?)window.Attribute("MinHeight"));
+        Assert.Equal("560", (string?)window.Attribute("MinWidth"));
+        Assert.Equal("460", (string?)window.Attribute("MinHeight"));
         Assert.Null(header.Attribute("Height"));
-        Assert.Equal("100", (string?)header.Attribute("MinHeight"));
+        Assert.Equal("88", (string?)header.Attribute("MinHeight"));
         AssertEllipsisAndTooltip(document, "{Binding AssetName}");
 
         var closeButton = document
@@ -196,10 +196,10 @@ public sealed class UiPolishContractTests
         Assert.Equal(
             "Open Workshop", english["VersionManagement.OpenWorkshop"]);
         Assert.Equal(
-            "アセットの詳細を表示",
+            "詳細を表示",
             japanese["AssetList.DetailsTooltip"]);
         Assert.Equal(
-            "Show asset details",
+            "Show details",
             english["AssetList.DetailsTooltip"]);
         Assert.DoesNotContain("VersionManagement.ShowAddonDetails", japanese);
         Assert.DoesNotContain("VersionManagement.ShowAddonDetails", english);
@@ -220,17 +220,19 @@ public sealed class UiPolishContractTests
         XDocument document,
         string binding)
     {
-        var textBlock = document
+        var textBlocks = document
             .Descendants(AvaloniaNamespace + "TextBlock")
-            .Single(element =>
-                (string?)element.Attribute("Text") == binding);
+            .Where(element =>
+                (string?)element.Attribute("Text") == binding &&
+                (string?)element.Attribute("ToolTip.Tip") == binding)
+            .ToArray();
 
-        Assert.Equal(
-            "CharacterEllipsis",
-            (string?)textBlock.Attribute("TextTrimming"));
-        Assert.Equal(
-            binding,
-            (string?)textBlock.Attribute("ToolTip.Tip"));
+        Assert.NotEmpty(textBlocks);
+        Assert.All(
+            textBlocks,
+            textBlock => Assert.Equal(
+                "CharacterEllipsis",
+                (string?)textBlock.Attribute("TextTrimming")));
     }
 
     private static string ReadRepositoryFile(

@@ -31,6 +31,7 @@ namespace GmodAddonManager.Core.Services
         private const string SubscribeSystemAssetId = SystemAssetDefinitions.SubscribeId;
         private const string JunctionSystemAssetId = SystemAssetDefinitions.JunctionId;
         private const int GmodAttributionSchemaVersion = 3;
+        private const int AssetGroupOrderSchemaVersion = 6;
         private readonly GmodDisabledAddonReconciliationService gmodDisabledService =
             new GmodDisabledAddonReconciliationService();
 
@@ -75,12 +76,16 @@ namespace GmodAddonManager.Core.Services
 
             var result = new ConfigurationMigrationResult();
             var sourceSchemaVersion = GetSchemaVersion(rawConfiguration);
-            if (sourceSchemaVersion == GmodAttributionSchemaVersion)
+            if (sourceSchemaVersion >= GmodAttributionSchemaVersion)
             {
-                // Schema 3 already owns the subscription and GMod attribution
-                // truth. Schema 4 only adds a valid Subscribe state, so reusing
-                // the legacy migration would destructively reset those baselines.
-                NormalizeCurrentSchema(configuration, removeLegacyJunctionAsset);
+                // Schemas 3-5 already own the subscription and GMod attribution
+                // truth. Schema 6 adds Groups/order and schema 7 adds bounded
+                // nested Groups/memos; reusing the legacy
+                // migration would destructively reset those baselines.
+                NormalizeCurrentSchema(
+                    configuration,
+                    removeLegacyJunctionAsset,
+                    legacyVisibleOrder: sourceSchemaVersion < AssetGroupOrderSchemaVersion);
                 result.Changed = true;
                 return result;
             }
@@ -90,6 +95,7 @@ namespace GmodAddonManager.Core.Services
                 .ToList() ?? new List<JObject>();
 
             configuration.Assets ??= new List<Asset>();
+            configuration.AssetGroups ??= new List<AssetGroup>();
             configuration.AddonMetadata ??= new Dictionary<string, WorkshopAddon>();
             configuration.JunctionHistory ??= new Dictionary<string, List<string>>();
             configuration.PathState ??= new PathState();
@@ -128,6 +134,7 @@ namespace GmodAddonManager.Core.Services
                 else
                 {
                     NormalizeCustomAsset(asset, rawAsset, result);
+                    ClearSmartAssetFields(asset);
                 }
 
                 NormalizeVersions(asset);
@@ -140,6 +147,14 @@ namespace GmodAddonManager.Core.Services
             gmodDisabledService.EnsureSystemAsset(
                 configuration,
                 absorbUntouchedLegacyImport: false);
+            foreach (var systemAsset in configuration.Assets.Where(asset => asset.IsSystem))
+            {
+                ClearSmartAssetFields(systemAsset);
+            }
+            NormalizeClassificationMetadata(configuration.AddonMetadata.Values);
+            new AssetGroupService().NormalizeConfiguration(
+                configuration,
+                legacyVisibleOrder: true);
 
             configuration.SchemaVersion = Configuration.CurrentSchemaVersion;
             configuration.Version = "2.0";
@@ -183,7 +198,8 @@ namespace GmodAddonManager.Core.Services
 
         public void NormalizeCurrentSchema(
             Configuration configuration,
-            bool removeLegacyJunctionAsset = true)
+            bool removeLegacyJunctionAsset = true,
+            bool legacyVisibleOrder = false)
         {
             if (configuration == null)
             {
@@ -191,6 +207,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             configuration.Assets ??= new List<Asset>();
+            configuration.AssetGroups ??= new List<AssetGroup>();
             configuration.AddonMetadata ??= new Dictionary<string, WorkshopAddon>();
             configuration.JunctionHistory ??= new Dictionary<string, List<string>>();
             configuration.PathState ??= new PathState();
@@ -198,6 +215,8 @@ namespace GmodAddonManager.Core.Services
             configuration.SubscriptionFirstSeenAtUtc ??= new Dictionary<string, DateTime>();
             configuration.LastGamAppliedAddonStates ??= new Dictionary<string, bool>();
             configuration.LastObservedGmodAddonStates ??= new Dictionary<string, bool>();
+
+            NormalizeClassificationMetadata(configuration.AddonMetadata.Values);
 
             NormalizeAttributionState(configuration);
 
@@ -214,11 +233,13 @@ namespace GmodAddonManager.Core.Services
                     }
 
                     NormalizeSubscribeAsset(asset, rawAsset: null);
+                    ClearSmartAssetFields(asset);
                     subscribeSeen = true;
                 }
                 else if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(asset.Id))
                 {
                     // Normalized after duplicate handling and legacy conversion.
+                    ClearSmartAssetFields(asset);
                 }
                 else
                 {
@@ -233,19 +254,36 @@ namespace GmodAddonManager.Core.Services
                     {
                         asset.SetWholeState(AddonState.Disabled);
                     }
+
+                    NormalizeSmartAsset(asset);
                 }
 
                 asset.Addons = NormalizeIds(asset.Addons, allowWildcard: asset.Id == SubscribeSystemAssetId);
                 asset.AddonStates.Clear();
                 asset.WorkshopCollectionId = null;
                 asset.AutoUpdateCollection = false;
-                NormalizeVersions(asset);
+                if (asset.IsSmart)
+                {
+                    asset.VersionHistory.Clear();
+                    asset.CurrentVersion = 0;
+                }
+                else
+                {
+                    NormalizeVersions(asset);
+                }
             }
 
             EnsureSubscribeAsset(configuration);
             gmodDisabledService.EnsureSystemAsset(
                 configuration,
                 absorbUntouchedLegacyImport: false);
+            foreach (var systemAsset in configuration.Assets.Where(asset => asset.IsSystem))
+            {
+                ClearSmartAssetFields(systemAsset);
+            }
+            new AssetGroupService().NormalizeConfiguration(
+                configuration,
+                legacyVisibleOrder);
             configuration.SchemaVersion = Configuration.CurrentSchemaVersion;
             configuration.Version = "2.0";
         }
@@ -281,6 +319,7 @@ namespace GmodAddonManager.Core.Services
             asset.IsSystem = true;
             asset.IsFavorite = false;
             asset.NeedsMigrationReview = false;
+            ClearSmartAssetFields(asset);
             asset.SetWholeState(normalizedState);
             asset.SetAllAddons();
         }
@@ -356,6 +395,88 @@ namespace GmodAddonManager.Core.Services
                      version => version.Version != asset.CurrentVersion)))
             {
                 asset.CurrentVersion = 0;
+            }
+        }
+
+        private static void NormalizeSmartAsset(Asset asset)
+        {
+            if (asset.MembershipRule == null)
+            {
+                asset.SmartAutomationState = null;
+                return;
+            }
+
+            // Rule-driven membership represents only the current authoritative
+            // Workshop inventory, never an imported missing-reference snapshot.
+            asset.RetainMissingReferences = false;
+            if (AddonClassificationService.TryNormalizeRule(
+                    asset.MembershipRule,
+                    out var normalizedRule,
+                    out var error))
+            {
+                asset.MembershipRule = normalizedRule;
+                asset.SmartAutomationState = new SmartAssetAutomationState
+                {
+                    SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                    Status = SmartAssetAutomationStatus.Active,
+                    Message = null
+                };
+                return;
+            }
+
+            // Preserve malformed/future rules and their materialized members.
+            // Freezing is fail-safe: startup never silently turns the Asset into
+            // a fixed list or removes members it cannot classify.
+            asset.SmartAutomationState = new SmartAssetAutomationState
+            {
+                SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
+                Status = SmartAssetAutomationStatus.FrozenInvalidRule,
+                Message = error
+            };
+        }
+
+        private static void ClearSmartAssetFields(Asset asset)
+        {
+            asset.MembershipRule = null;
+            asset.SmartAutomationState = null;
+            asset.RetainMissingReferences = false;
+        }
+
+        private static void NormalizeClassificationMetadata(
+            IEnumerable<WorkshopAddon> addons)
+        {
+            foreach (var addon in addons ?? Enumerable.Empty<WorkshopAddon>())
+            {
+                addon.Type ??= string.Empty;
+                addon.Tags ??= Array.Empty<string>();
+                addon.Tags = addon.Tags
+                    .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                    .Select(tag => tag.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                if (!Enum.IsDefined(
+                        typeof(AddonClassificationMetadataStatus),
+                        addon.TypeMetadataStatus))
+                {
+                    addon.TypeMetadataStatus = AddonClassificationMetadataStatus.Unknown;
+                }
+                if (!Enum.IsDefined(
+                        typeof(AddonClassificationMetadataStatus),
+                        addon.TagsMetadataStatus))
+                {
+                    addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Unknown;
+                }
+
+                if (!string.IsNullOrWhiteSpace(addon.Type))
+                {
+                    addon.Type = addon.Type.Trim();
+                    addon.TypeMetadataStatus = AddonClassificationMetadataStatus.Known;
+                }
+                if (addon.Tags.Length > 0)
+                {
+                    addon.TagsMetadataStatus = AddonClassificationMetadataStatus.Known;
+                }
             }
         }
 
@@ -435,6 +556,9 @@ namespace GmodAddonManager.Core.Services
             asset.Addons ??= new List<string>();
             asset.AddonStates ??= new Dictionary<string, AddonState>();
             asset.VersionHistory ??= new List<AssetVersion>();
+            asset.SmartAutomationState ??= asset.MembershipRule == null
+                ? null
+                : new SmartAssetAutomationState();
         }
 
         private static List<string> NormalizeIds(IEnumerable<string>? ids, bool allowWildcard)

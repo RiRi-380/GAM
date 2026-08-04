@@ -89,7 +89,7 @@ namespace GmodAddonManager.Core.Services
             }
             if (!Enum.IsDefined(typeof(AddonState), systemAsset.GetWholeState()))
             {
-                systemAsset.SetWholeState(AddonState.Excluded);
+                systemAsset.SetWholeState(SystemAssetDefinitions.GmodDisabledDefaultState);
                 changed = true;
             }
             if (systemAsset.IsFavorite)
@@ -549,7 +549,7 @@ namespace GmodAddonManager.Core.Services
             {
                 Id = SystemAssetId
             };
-            asset.SetWholeState(AddonState.Excluded);
+            asset.SetWholeState(SystemAssetDefinitions.GmodDisabledDefaultState);
             return asset;
         }
 

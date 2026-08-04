@@ -61,8 +61,7 @@ namespace GmodAddonManager.Core.Services
                     sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
                     onRetry: (outcome, timespan, retryCount, context) =>
                     {
-                        var result = outcome.Result;
-                        var exception = outcome.Exception;
+                        outcome.Result?.Dispose();
                         // Log retry attempt
                     });
         }
@@ -474,12 +473,14 @@ namespace GmodAddonManager.Core.Services
 
                 // Download with retry policy
                 using var response = await _retryPolicy.ExecuteAsync(async () =>
-                    await _httpClient.GetAsync(url));
+                    await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead));
 
                 if (!response.IsSuccessStatusCode)
                     return null;
 
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                var imageBytes = await BoundedHttpContentReader.ReadAsync(
+                    response.Content,
+                    BoundedHttpContentReader.DefaultImageLimitBytes);
                 
                 // Process and save as PNG using SkiaSharp
                 using var bitmap = SKBitmap.Decode(imageBytes);
@@ -527,13 +528,15 @@ namespace GmodAddonManager.Core.Services
                 try
                 {
                     using var response = await _retryPolicy.ExecuteAsync(async () =>
-                        await _httpClient.GetAsync(url));
+                        await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead));
                     if (!response.IsSuccessStatusCode)
                     {
                         return;
                     }
 
-                    var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                    var imageBytes = await BoundedHttpContentReader.ReadAsync(
+                        response.Content,
+                        BoundedHttpContentReader.DefaultImageLimitBytes);
                     using var bitmap = SKBitmap.Decode(imageBytes);
                     if (bitmap == null)
                     {

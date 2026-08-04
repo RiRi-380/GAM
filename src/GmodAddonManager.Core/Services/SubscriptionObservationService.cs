@@ -47,6 +47,10 @@ namespace GmodAddonManager.Core.Services
                     .OrderBy(id => id, StringComparer.Ordinal)
                     .ToList();
                 configuration.SubscriptionFirstSeenAtUtc.Clear();
+                foreach (var metadata in configuration.AddonMetadata.Values)
+                {
+                    metadata.FirstSeenSubscribedAtUtc = null;
+                }
                 result.Changed = true;
                 return result;
             }
@@ -78,12 +82,33 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
-            foreach (var addonId in current)
+            var repairedFirstSeenState = false;
+            foreach (var staleAddonId in configuration.SubscriptionFirstSeenAtUtc.Keys
+                         .Where(addonId => !current.Contains(addonId))
+                         .ToList())
             {
-                if (configuration.AddonMetadata.TryGetValue(addonId, out var metadata) &&
-                    configuration.SubscriptionFirstSeenAtUtc.TryGetValue(addonId, out var firstSeen))
+                configuration.SubscriptionFirstSeenAtUtc.Remove(staleAddonId);
+                repairedFirstSeenState = true;
+            }
+
+            // SubscriptionFirstSeenAtUtc is the canonical history. Metadata is a
+            // projection used by scan/sort paths and must never retain a timestamp
+            // that the canonical dictionary no longer owns.
+            foreach (var (addonId, metadata) in configuration.AddonMetadata)
+            {
+                DateTime? canonicalFirstSeen = null;
+                if (current.Contains(addonId) &&
+                    configuration.SubscriptionFirstSeenAtUtc.TryGetValue(
+                        addonId,
+                        out var firstSeen))
                 {
-                    metadata.FirstSeenSubscribedAtUtc = firstSeen;
+                    canonicalFirstSeen = firstSeen;
+                }
+
+                if (metadata.FirstSeenSubscribedAtUtc != canonicalFirstSeen)
+                {
+                    metadata.FirstSeenSubscribedAtUtc = canonicalFirstSeen;
+                    repairedFirstSeenState = true;
                 }
             }
 
@@ -93,7 +118,9 @@ namespace GmodAddonManager.Core.Services
 
             result.NewlySubscribedIds = newlySubscribed;
             result.UnsubscribedIds = unsubscribed;
-            result.Changed = newlySubscribed.Count > 0 || unsubscribed.Count > 0;
+            result.Changed = newlySubscribed.Count > 0 ||
+                unsubscribed.Count > 0 ||
+                repairedFirstSeenState;
             return result;
         }
     }

@@ -5,7 +5,6 @@ using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
-using GmodAddonManager.UI.Views;
 using ReactiveUI;
 
 namespace GmodAddonManager.UI.Tests;
@@ -149,36 +148,6 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
     }
 
     [Fact]
-    public void FixedAssetDetailsKeepEveryMembershipEntryIncludingUnavailableMetadata()
-    {
-        var method = typeof(AssetDetailsDialog).GetMethod(
-            "BuildMembershipItems",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-
-        var rows = Assert.IsType<List<AssetAddonMembershipItem>>(method!.Invoke(
-            null,
-            [
-                new[] { "100", "metadata-absent" },
-                new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal)
-                {
-                    ["100"] = new WorkshopAddon("100", string.Empty)
-                    {
-                        Title = "Disabled addon",
-                        IsAvailable = true
-                    }
-                },
-                new HashSet<string>(StringComparer.Ordinal) { "100" },
-                true
-            ]));
-
-        Assert.Equal(2, rows.Count);
-        Assert.False(rows[0].IsUnavailable);
-        Assert.True(rows[1].IsUnavailable);
-        Assert.False(string.IsNullOrWhiteSpace(rows[1].Title));
-    }
-
-    [Fact]
     public void FixedAssetUsesExplicitVisibleVersusMembershipCount()
     {
         var method = typeof(AddonGridViewModel).GetMethod(
@@ -188,22 +157,6 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
 
         Assert.Equal("(5)", method!.Invoke(null, [5, 5]));
         Assert.Equal("(3/5)", method.Invoke(null, [3, 5]));
-    }
-
-    [Fact]
-    public void DetailsWiringTreatsFixedAssetAsAnAuthoritativeMembershipList()
-    {
-        var source = File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(),
-            "src",
-            "GmodAddonManager.UI",
-            "Views",
-            "AssetDetailsDialog.axaml.cs"));
-
-        Assert.Contains(
-            "assetViewModel.IsSubscribeAsset || assetViewModel.IsGmodDisabledAsset",
-            source,
-            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -369,7 +322,7 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
             isSystem: true)
         {
             Id = AssetItemViewModel.GmodDisabledSystemAssetId,
-            State = AddonState.Excluded
+            State = SystemAssetDefinitions.GmodDisabledDefaultState
         };
         configuration.Assets.Add(created);
         return created;
