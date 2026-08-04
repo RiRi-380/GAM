@@ -128,7 +128,7 @@ public sealed class AddonManagerWorkflowTests : IDisposable
         Assert.Equal(AddonState.Enabled, subscribe.GetWholeState());
         var gmodDisabled = manager.GetConfiguration().Assets[1];
         Assert.Equal(SystemAssetDefinitions.GmodDisabledId, gmodDisabled.Id);
-        Assert.Equal(AddonState.Excluded, gmodDisabled.GetWholeState());
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, gmodDisabled.GetWholeState());
         Assert.Empty(gmodDisabled.Addons);
         Assert.False(manager.GetConfiguration().AddonMetadata["100"].IsFavorite);
         Assert.True(File.Exists(payloadPath));

@@ -16,6 +16,9 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("imagePath")]
         public string? ImagePath { get; set; }
 
+        [JsonProperty("memo")]
+        public string Memo { get; set; }
+
         [JsonProperty("isSystem")]
         public bool IsSystem { get; set; }
 
@@ -32,6 +35,20 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         [JsonProperty("isFavorite")]
         public bool IsFavorite { get; set; }
+
+        /// <summary>
+        /// The single owning Asset Group. Null means this Asset is shown at the
+        /// root. System Assets are always root entries.
+        /// </summary>
+        [JsonProperty("parentGroupId")]
+        public string? ParentGroupId { get; set; }
+
+        /// <summary>
+        /// User-controlled order inside the Asset's current container and
+        /// favorite band. System Asset placement is fixed independently.
+        /// </summary>
+        [JsonProperty("sortOrder")]
+        public int SortOrder { get; set; }
 
         /// <summary>
         /// 旧構成の個別状態が混在しており、移行後の確認が必要か。
@@ -64,6 +81,27 @@ namespace GmodAddonManager.Core.Models
 
         [JsonProperty("addons")]
         public List<string> Addons { get; set; }
+
+        /// <summary>
+        /// Non-null for a Smart Asset. The rule owns the materialized Addons
+        /// membership and is evaluated only from authoritative Workshop inventory.
+        /// </summary>
+        [JsonProperty("membershipRule")]
+        public AssetMembershipRule? MembershipRule { get; set; }
+
+        [JsonProperty("smartAutomationState")]
+        public SmartAssetAutomationState? SmartAutomationState { get; set; }
+
+        /// <summary>
+        /// Keeps unavailable Workshop references for this Asset even when the
+        /// profile-wide retention setting is disabled. Intended for imported
+        /// fixed Assets; Smart Assets always derive current membership from rules.
+        /// </summary>
+        [JsonProperty("retainMissingReferences")]
+        public bool RetainMissingReferences { get; set; }
+
+        [JsonIgnore]
+        public bool IsSmart => MembershipRule != null;
         
         /// <summary>
         /// アドオンごとの状態を管理するディクショナリ
@@ -125,11 +163,17 @@ namespace GmodAddonManager.Core.Models
             Id = Guid.NewGuid().ToString();
             Name = string.Empty;
             ImagePath = null;
+            Memo = string.Empty;
             IsSystem = false;
             State = AddonState.Enabled;
             IsFavorite = false;
+            ParentGroupId = null;
+            SortOrder = int.MaxValue;
             NeedsMigrationReview = false;
             Addons = new List<string>();
+            MembershipRule = null;
+            SmartAutomationState = null;
+            RetainMissingReferences = false;
             AddonStates = new Dictionary<string, AddonState>();
             WorkshopCollectionId = null;
             AutoUpdateCollection = false;

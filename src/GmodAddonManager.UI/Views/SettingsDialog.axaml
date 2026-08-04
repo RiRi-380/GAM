@@ -8,8 +8,8 @@
         Title="{loc:Localize Settings.Title}"
         Width="700"
         Height="600"
-        MinWidth="700"
-        MinHeight="600"
+        MinWidth="480"
+        MinHeight="480"
         WindowStartupLocation="CenterOwner"
         CanResize="True">
     
@@ -17,7 +17,10 @@
         <!-- ヘッダー -->
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
             <TextBlock Text="{loc:Localize Settings.Header}" FontSize="24" FontWeight="Bold"/>
-            <TextBlock Text="{loc:Localize Settings.Description}" Opacity="0.7" Margin="0,5,0,0"/>
+            <TextBlock Text="{loc:Localize Settings.Description}"
+                       Opacity="0.7"
+                       Margin="0,5,0,0"
+                       TextWrapping="Wrap"/>
             <TextBlock Name="VersionText" Opacity="0.65" FontSize="12" Margin="0,8,0,0"/>
         </StackPanel>
         
@@ -39,7 +42,10 @@
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.LanguageDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.LanguageDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
                         
                         <StackPanel Spacing="5">
@@ -60,13 +66,17 @@
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.AdvancedDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.AdvancedDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" Spacing="10">
+                        <WrapPanel Orientation="Horizontal">
                             <Button Click="OnPathRecovery"
                                     Width="220"
-                                    HorizontalAlignment="Left">
+                                    HorizontalAlignment="Left"
+                                    Margin="0,0,10,10">
                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                     <PathIcon Data="{StaticResource FolderIcon}" Width="16" Height="16"/>
                                     <TextBlock Text="{loc:Localize Settings.PathRecoveryButton}"/>
@@ -75,18 +85,40 @@
 
                             <Button Click="OnPathHealth"
                                     Width="220"
-                                    HorizontalAlignment="Left">
+                                    HorizontalAlignment="Left"
+                                    Margin="0,0,0,10">
                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                     <PathIcon Data="{StaticResource WarningIcon}" Width="16" Height="16"/>
                                     <TextBlock Text="{loc:Localize Settings.PathHealthButton}"/>
                                 </StackPanel>
                             </Button>
-                        </StackPanel>
+                        </WrapPanel>
 
                         <CheckBox Name="RetainMissingAssetReferencesCheckBox"
                                   Content="{loc:Localize Settings.RetainMissingAssetReferences}"
                                   ToolTip.Tip="{loc:Localize Settings.RetainMissingAssetReferencesDescription}"
                                   Margin="0,5,0,0"/>
+
+                        <StackPanel Spacing="6" Margin="0,8,0,0">
+                            <TextBlock Text="{loc:Localize Settings.MaxNestedGroupDepth}"
+                                       FontWeight="SemiBold"/>
+                            <TextBlock Text="{loc:Localize Settings.MaxNestedGroupDepthDescription}"
+                                       Opacity="0.75"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
+                            <NumericUpDown x:Name="MaxNestedGroupDepthNumericUpDown"
+                                           Minimum="1"
+                                           Maximum="10"
+                                           Increment="1"
+                                           Value="1"
+                                           Width="120"
+                                           HorizontalAlignment="Left"/>
+                            <TextBlock x:Name="MaxNestedGroupDepthErrorTextBlock"
+                                       IsVisible="False"
+                                       Foreground="#F08A8A"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
@@ -95,7 +127,10 @@
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.PerformanceHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.PerformanceDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.PerformanceDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
                         
                         <StackPanel Spacing="10">
@@ -106,13 +141,48 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
+
+                <!-- 試験的設定 -->
+                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                    <StackPanel Spacing="15">
+                        <StackPanel Spacing="5">
+                            <TextBlock Text="{loc:Localize Settings.ExperimentalHeader}"
+                                       FontSize="18"
+                                       FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.ExperimentalDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox Name="MemberHistoryExperimentalCheckBox"
+                                      Content="{loc:Localize Settings.MemberHistoryExperimental}"/>
+                            <TextBlock Text="{loc:Localize Settings.MemberHistoryExperimentalDescription}"
+                                       Margin="26,0,0,6"
+                                       Opacity="0.75"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
+                            <CheckBox Name="LocalAddonDiscoveryExperimentalCheckBox"
+                                      Content="{loc:Localize Settings.LocalAddonDiscoveryExperimental}"/>
+                            <TextBlock Text="{loc:Localize Settings.LocalAddonDiscoveryExperimentalDescription}"
+                                       Margin="26,0,0,0"
+                                       Opacity="0.75"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
                 
                 <!-- ログ設定 -->
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.LogHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.LogDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.LogDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
                         
                         <StackPanel Spacing="5">
@@ -142,7 +212,10 @@
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.UpdateDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.UpdateDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
 
                         <Button Click="OnCheckForUpdate" Width="200" HorizontalAlignment="Left">
@@ -159,7 +232,10 @@
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
                             <TextBlock Text="{loc:Localize Settings.DangerZoneHeader}" FontSize="18" FontWeight="Bold" Foreground="#FF4444"/>
-                            <TextBlock Text="{loc:Localize Settings.DangerZoneDescription}" Opacity="0.7" FontSize="12"/>
+                            <TextBlock Text="{loc:Localize Settings.DangerZoneDescription}"
+                                       Opacity="0.7"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
                         
                         <Border Background="#1F0A0A" CornerRadius="4" Padding="15">
@@ -167,13 +243,13 @@
                                 <StackPanel Orientation="Horizontal" Spacing="10">
                                     <PathIcon Data="{StaticResource WarningIcon}" Width="20" Height="20" Foreground="#FF4444"/>
                                     <TextBlock Name="ResetManagerTitleText"
-                                               Text="GAMを初期化"
+                                               Text="{loc:Localize Settings.ResetManagerTitle}"
                                                FontWeight="Bold"
                                                FontSize="14"
                                                Foreground="#FF4444"/>
                                 </StackPanel>
                                 <TextBlock x:Name="ResetManagerDescriptionText"
-                                           Text="Custom Asset・お気に入り・Version・共通除外を初期化します。Steamの購読とWorkshopのアドオン本体は削除しません。"
+                                           Text="{loc:Localize Settings.ResetManagerDescriptionSoft}"
                                            TextWrapping="Wrap" 
                                            Opacity="0.8"
                                            FontSize="12"/>
@@ -196,7 +272,8 @@
                                     </Button.Styles>
                                     <StackPanel Orientation="Horizontal" Spacing="5">
                                         <PathIcon Data="{StaticResource DeleteIcon}" Width="16" Height="16"/>
-                                        <TextBlock Name="ResetManagerButtonText" Text="GAMを初期化"/>
+                                        <TextBlock Name="ResetManagerButtonText"
+                                                   Text="{loc:Localize Settings.ResetManagerButton}"/>
                                     </StackPanel>
                                 </Button>
                             </StackPanel>

@@ -7,7 +7,9 @@ namespace GmodAddonManager.Core.Models
 {
     public class Configuration
     {
-        public const int CurrentSchemaVersion = 4;
+        public const int CurrentSchemaVersion = 7;
+        public const int MinimumNestedGroupDepth = 1;
+        public const int MaximumNestedGroupDepth = 10;
 
         [JsonProperty("schemaVersion")]
         public int SchemaVersion { get; set; }
@@ -20,6 +22,16 @@ namespace GmodAddonManager.Core.Models
 
         [JsonProperty("assets")]
         public List<Asset> Assets { get; set; }
+
+        [JsonProperty("assetGroups")]
+        public List<AssetGroup> AssetGroups { get; set; }
+
+        /// <summary>
+        /// Maximum nesting below a root Asset Group. Root Groups have depth 0,
+        /// their child Groups depth 1, and so on.
+        /// </summary>
+        [JsonProperty("maxNestedGroupDepth")]
+        public int MaxNestedGroupDepth { get; set; }
 
         [JsonProperty("addonMetadata")]
         public Dictionary<string, WorkshopAddon> AddonMetadata { get; set; }
@@ -104,6 +116,8 @@ namespace GmodAddonManager.Core.Models
             Version = "2.0";
             LastUpdated = DateTime.UtcNow;
             Assets = new List<Asset>();
+            AssetGroups = new List<AssetGroup>();
+            MaxNestedGroupDepth = MinimumNestedGroupDepth;
             AddonMetadata = new Dictionary<string, WorkshopAddon>();
             JunctionHistory = new Dictionary<string, List<string>>();
             PathState = new PathState();
@@ -136,11 +150,13 @@ namespace GmodAddonManager.Core.Models
             subscribeAsset.Id = SystemAssetDefinitions.SubscribeId;
             subscribeAsset.SetWholeState(AddonState.Enabled);
             subscribeAsset.SetAllAddons();
+            subscribeAsset.SortOrder = 0;
             Assets.Add(subscribeAsset);
 
             var gmodDisabledAsset = new Asset(SystemAssetDefinitions.GmodDisabledName, true);
             gmodDisabledAsset.Id = SystemAssetDefinitions.GmodDisabledId;
-            gmodDisabledAsset.SetWholeState(AddonState.Excluded);
+            gmodDisabledAsset.SetWholeState(SystemAssetDefinitions.GmodDisabledDefaultState);
+            gmodDisabledAsset.SortOrder = 1;
             Assets.Add(gmodDisabledAsset);
 
             if (includeJunction)
@@ -148,6 +164,7 @@ namespace GmodAddonManager.Core.Models
                 var junctionAsset = new Asset(SystemAssetDefinitions.JunctionName, true);
                 junctionAsset.Id = SystemAssetDefinitions.JunctionId;
                 junctionAsset.SetWholeState(AddonState.Disabled);
+                junctionAsset.SortOrder = 2;
                 Assets.Add(junctionAsset);
             }
         }

@@ -3,25 +3,133 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
-        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="200"
+        xmlns:views="using:GmodAddonManager.UI.Views"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="600"
         x:Class="GmodAddonManager.UI.Views.SimpleAssetCreateDialog"
         Title="{loc:Localize Dialog.CreateAsset}"
-        Width="400"
-        Height="200"
-        CanResize="False"
+        Width="500"
+        Height="610"
+        MinWidth="400"
+        MinHeight="320"
+        CanResize="True"
         WindowStartupLocation="CenterOwner">
 
-    <StackPanel Margin="20" Spacing="10">
-        <TextBlock Text="{loc:Localize Dialog.AssetName}"
-                   FontWeight="Bold"/>
-        <TextBox x:Name="AssetNameTextBox"
-                 Watermark="{loc:Localize Dialog.AssetNamePlaceholder}"
-                 TextChanged="OnNameChanged"
-                 KeyUp="OnNameKeyUp"/>
-        <StackPanel Orientation="Horizontal"
+    <Grid Margin="20" RowDefinitions="*,Auto">
+        <ScrollViewer Grid.Row="0"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="10">
+                <StackPanel x:Name="CreationTargetPanel" Spacing="7">
+                    <TextBlock Text="{loc:Localize AssetGroup.CreateKindLabel}"
+                               FontWeight="Bold"/>
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <RadioButton x:Name="AssetTargetRadio"
+                                     Grid.Column="0"
+                                     GroupName="CreationTarget"
+                                     Content="{loc:Localize AssetGroup.Kind.Asset}"
+                                     Checked="OnCreationTargetChanged"/>
+                        <RadioButton x:Name="GroupTargetRadio"
+                                     Grid.Column="1"
+                                     GroupName="CreationTarget"
+                                     Content="{loc:Localize AssetGroup.Kind.Group}"
+                                     Checked="OnCreationTargetChanged"/>
+                    </Grid>
+                </StackPanel>
+
+                <TextBlock Text="{loc:Localize Dialog.AssetName}"
+                           FontWeight="Bold"
+                           Margin="0,4,0,0"/>
+                <TextBox x:Name="AssetNameTextBox"
+                         MaxLength="200"
+                         Watermark="{loc:Localize Dialog.AssetNamePlaceholder}"
+                         TextChanged="OnNameChanged"
+                         KeyUp="OnNameKeyUp"/>
+                <TextBlock x:Name="NameValidationText"
+                           IsVisible="False"
+                           Foreground="#EF6C6C"
+                           FontSize="11"
+                           TextWrapping="Wrap"/>
+
+                <StackPanel x:Name="AssetModePanel" Spacing="10">
+                    <TextBlock x:Name="CreationModeLabel"
+                               Text="{loc:Localize SmartAsset.CreateModeLabel}"
+                               FontWeight="Bold"
+                               Margin="0,6,0,0"/>
+                    <ComboBox x:Name="CreationModeComboBox"
+                              SelectionChanged="OnCreationModeChanged">
+                        <ComboBoxItem Content="{loc:Localize SmartAsset.Mode.Fixed}"/>
+                        <ComboBoxItem Content="{loc:Localize SmartAsset.Mode.Type}"/>
+                        <ComboBoxItem Content="{loc:Localize SmartAsset.Mode.Tag}"/>
+                    </ComboBox>
+
+                    <StackPanel x:Name="SmartRulePanel"
+                                IsVisible="False"
+                                Spacing="6">
+                        <TextBlock x:Name="RuleValueLabel"
+                                   Text="{loc:Localize SmartAsset.RuleValueLabel}"
+                                   FontWeight="Bold"/>
+                        <ComboBox x:Name="RuleValueComboBox"
+                                  SelectionChanged="OnRuleValueChanged"/>
+                        <TextBlock x:Name="SmartRuleDescription"
+                                   Text="{loc:Localize SmartAsset.CreateDescription}"
+                                   FontSize="11"
+                                   Opacity="0.72"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel x:Name="GroupMemberPanel"
+                            IsVisible="False"
+                            Spacing="7">
+                    <TextBlock Text="{loc:Localize AssetGroup.InitialMembers}"
+                               FontWeight="Bold"
+                               Margin="0,6,0,0"/>
+                    <TextBlock Text="{loc:Localize AssetGroup.InitialMembersDescription}"
+                               FontSize="11"
+                               Opacity="0.72"
+                               TextWrapping="Wrap"/>
+                    <Border BorderThickness="1"
+                            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                            CornerRadius="4"
+                            Padding="8"
+                            MinHeight="120">
+                        <ItemsControl x:Name="GroupMemberItemsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="views:AssetCreationGroupMemberOption">
+                                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                              Margin="2,3">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Name}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <Border Grid.Column="1"
+                                                    Padding="5,1"
+                                                    CornerRadius="4"
+                                                    Background="#293D55"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding KindText}"
+                                                           FontSize="9"
+                                                           Foreground="#A9CFF3"/>
+                                            </Border>
+                                        </Grid>
+                                    </CheckBox>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                    <TextBlock Text="{loc:Localize AssetGroup.EmptyAllowed}"
+                               FontSize="11"
+                               Opacity="0.65"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Spacing="10"
-                    Margin="0,10,0,0">
+                    Margin="0,14,0,0">
             <Button Content="{loc:Localize Dialog.Cancel}"
                     Click="OnCancel"/>
             <Button x:Name="CreateButton"
@@ -30,5 +138,5 @@
                     Click="OnCreate"
                     Classes="accent"/>
         </StackPanel>
-    </StackPanel>
+    </Grid>
 </Window>

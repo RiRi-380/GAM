@@ -41,6 +41,7 @@ namespace GmodAddonManager.Core.Services
         private const int MinRequestInterval = 50; // インターバルを短縮
         private const string SteamApiUrl = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
         private const string SteamCollectionApiUrl = "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/";
+        internal const int MaximumSteamApiJsonBytes = 16 * 1024 * 1024;
         private const long MaxCacheSizeBytes = 100L * 1024 * 1024; // 100MB
         private static readonly TimeSpan MetadataCacheTtl = TimeSpan.FromHours(6);
         private static readonly TimeSpan MetadataNegativeTtl = TimeSpan.FromMinutes(5);
@@ -125,18 +126,17 @@ namespace GmodAddonManager.Core.Services
                     Directory.CreateDirectory(directory);
                 }
 
-                using var response = await httpClient.GetAsync(url);
+                using var response = await httpClient.GetAsync(
+                    url,
+                    HttpCompletionOption.ResponseHeadersRead);
                 if (!response.IsSuccessStatusCode)
                 {
                     return false;
                 }
 
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
-                
-                // 画像が大きすぎる場合の警告（1MB以上）
-                if (imageBytes.Length > 1024 * 1024)
-                {
-                }
+                var imageBytes = await BoundedHttpContentReader.ReadAsync(
+                    response.Content,
+                    BoundedHttpContentReader.DefaultImageLimitBytes);
                 
                 // キャッシュサイズをチェックしてクリーンアップ
                 var cacheDir = Path.GetDirectoryName(cachePath);
@@ -622,8 +622,14 @@ namespace GmodAddonManager.Core.Services
                     parameters.Add(new KeyValuePair<string, string>($"publishedfileids[{i}]", ids[i]));
                 }
 
-                using var content = new FormUrlEncodedContent(parameters);
-                using var response = await httpClient.PostAsync(SteamApiUrl, content, cancellationToken);
+                using var request = new HttpRequestMessage(HttpMethod.Post, SteamApiUrl)
+                {
+                    Content = new FormUrlEncodedContent(parameters)
+                };
+                using var response = await httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
                 lastRequestTime = DateTime.Now;
 
                 if (!response.IsSuccessStatusCode)
@@ -631,7 +637,9 @@ namespace GmodAddonManager.Core.Services
                     return results;
                 }
 
-                var json = await response.Content.ReadAsStringAsync();
+                var json = await ReadSteamApiJsonAsync(
+                    response.Content,
+                    cancellationToken);
                 var jsonObject = JObject.Parse(json);
 
                 var fileDetailsArray = jsonObject["response"]?["publishedfiledetails"] as JArray;
@@ -666,6 +674,10 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 return results;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {
@@ -734,6 +746,21 @@ namespace GmodAddonManager.Core.Services
             return result.Count == 0 ? null : result.ToArray();
         }
 
+        internal static async Task<string> ReadSteamApiJsonAsync(
+            HttpContent content,
+            CancellationToken cancellationToken = default,
+            int maximumBytes = MaximumSteamApiJsonBytes)
+        {
+            var bytes = await BoundedHttpContentReader.ReadAsync(
+                content,
+                maximumBytes,
+                cancellationToken).ConfigureAwait(false);
+            var json = Encoding.UTF8.GetString(bytes);
+            return json.Length > 0 && json[0] == '\uFEFF'
+                ? json.Substring(1)
+                : json;
+        }
+
         private async Task<CollectionChildrenFetchResult> FetchCollectionChildrenAsync(
             List<string> collectionIds,
             CancellationToken cancellationToken)
@@ -763,8 +790,14 @@ namespace GmodAddonManager.Core.Services
                     parameters.Add(new KeyValuePair<string, string>($"publishedfileids[{i}]", collectionIds[i]));
                 }
 
-                using var content = new FormUrlEncodedContent(parameters);
-                using var response = await httpClient.PostAsync(SteamCollectionApiUrl, content, cancellationToken);
+                using var request = new HttpRequestMessage(HttpMethod.Post, SteamCollectionApiUrl)
+                {
+                    Content = new FormUrlEncodedContent(parameters)
+                };
+                using var response = await httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
                 lastRequestTime = DateTime.Now;
 
                 if (!response.IsSuccessStatusCode)
@@ -772,7 +805,9 @@ namespace GmodAddonManager.Core.Services
                     return new CollectionChildrenFetchResult(CollectionChildrenFetchStatus.Unavailable, results);
                 }
 
-                var json = await response.Content.ReadAsStringAsync();
+                var json = await ReadSteamApiJsonAsync(
+                    response.Content,
+                    cancellationToken);
                 var jsonObject = JObject.Parse(json);
                 var collections = jsonObject["response"]?["collectiondetails"] as JArray;
                 if (collections == null)
@@ -812,6 +847,10 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 return new CollectionChildrenFetchResult(CollectionChildrenFetchStatus.Success, results);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {

@@ -42,7 +42,7 @@ public sealed class AddonManagerInitializationTests : IDisposable
             var imported = Assert.Single(
                 manager.GetConfiguration().Assets,
                 asset => asset.Name == InitialAddonStateImportService.ImportedAssetName);
-            Assert.Equal(AddonState.Excluded, imported.GetWholeState());
+            Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, imported.GetWholeState());
             Assert.Equal(["100"], imported.Addons);
             Assert.True(manager.GetConfiguration().InitialRuntimeImportCompleted);
 
@@ -316,14 +316,49 @@ public sealed class AddonManagerInitializationTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadConfiguration_CurrentSchemaPersistsNormalizedGroupTopology()
+    {
+        var existingConfiguration = new Configuration
+        {
+            InitialRuntimeImportCompleted = true,
+            InitialRuntimeImportCompletedAtUtc = DateTime.UtcNow
+        };
+        existingConfiguration.CreateDefaultAssets();
+        existingConfiguration.AssetGroups.Add(new AssetGroup("Orphaned group")
+        {
+            Id = "orphaned-group",
+            ParentGroupId = "missing-parent"
+        });
+
+        var configPath = Path.Combine(appDataPath, "config.json");
+        File.WriteAllText(
+            configPath,
+            JsonConvert.SerializeObject(existingConfiguration, Formatting.Indented),
+            new UTF8Encoding(false));
+
+        using var manager = CreateManager();
+        await manager.LoadConfigurationAsync();
+
+        Assert.Null(manager.GetConfiguration().AssetGroups.Single(
+            group => group.Id == "orphaned-group").ParentGroupId);
+
+        var persisted = JsonConvert.DeserializeObject<Configuration>(
+            File.ReadAllText(configPath, Encoding.UTF8));
+        Assert.NotNull(persisted);
+        Assert.Null(persisted.AssetGroups.Single(
+            group => group.Id == "orphaned-group").ParentGroupId);
+    }
+
+    [Fact]
     public async Task Initialize_FutureSchemaFailsClosedWithoutRewritingConfigurationOrRuntimeState()
     {
         WriteManifest(("100", true));
         var originalNoMount = BuildNoMount("100");
         File.WriteAllText(noMountPath, originalNoMount, new UTF8Encoding(false));
         var configPath = Path.Combine(appDataPath, "config.json");
-        const string futureJson =
-            "{\"schemaVersion\":5,\"version\":\"5.0\",\"futureOnly\":{\"preserve\":true},\"assets\":[]}";
+        var futureSchemaVersion = Configuration.CurrentSchemaVersion + 1;
+        var futureJson =
+            $"{{\"schemaVersion\":{futureSchemaVersion},\"version\":\"{futureSchemaVersion}.0\",\"futureOnly\":{{\"preserve\":true}},\"assets\":[]}}";
         File.WriteAllText(configPath, futureJson, new UTF8Encoding(false));
 
         using var manager = CreateManager();
@@ -366,7 +401,9 @@ public sealed class AddonManagerInitializationTests : IDisposable
         Assert.False(restarted.GetFinalAddonStates()["100"]);
         Assert.Empty(restarted.GetConfiguration().Assets.Single(
             asset => asset.Id == SystemAssetDefinitions.GmodDisabledId).Addons);
-        Assert.Equal(4, restarted.GetConfiguration().SchemaVersion);
+        Assert.Equal(
+            Configuration.CurrentSchemaVersion,
+            restarted.GetConfiguration().SchemaVersion);
     }
 
     [Fact]

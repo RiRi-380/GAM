@@ -40,6 +40,8 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentNullException(nameof(asset));
             }
 
+            ThrowIfSmart(asset);
+
             asset.VersionHistory ??= new List<AssetVersion>();
 
             var snapshot = new AssetVersion
@@ -68,6 +70,8 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentNullException(nameof(asset));
             }
 
+            ThrowIfSmart(asset);
+
             var snapshot = asset.VersionHistory?.FirstOrDefault(item => item.Version == version);
             if (snapshot == null)
             {
@@ -86,6 +90,8 @@ namespace GmodAddonManager.Core.Services
             {
                 throw new ArgumentNullException(nameof(asset));
             }
+
+            ThrowIfSmart(asset);
 
             var snapshot = asset.VersionHistory?.FirstOrDefault(item => item.Version == version);
             if (snapshot == null)
@@ -109,6 +115,8 @@ namespace GmodAddonManager.Core.Services
             {
                 throw new ArgumentNullException(nameof(asset));
             }
+
+            ThrowIfSmart(asset);
 
             var removedCount = asset.VersionHistory?.Count ?? 0;
             asset.VersionHistory?.Clear();
@@ -202,6 +210,15 @@ namespace GmodAddonManager.Core.Services
                 DateTimeKind.Local => value.ToUniversalTime(),
                 _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
             };
+        }
+
+        private static void ThrowIfSmart(Asset asset)
+        {
+            if (asset.IsSmart)
+            {
+                throw new InvalidOperationException(
+                    "Smart Asset version history is unavailable because membership is owned by its rule.");
+            }
         }
     }
 }

@@ -99,7 +99,7 @@ public sealed class LegacyProductionWiringContractTests
     }
 
     [Fact]
-    public void AppSettingsDoesNotPersistRetiredProductSwitches()
+    public void AppSettingsPersistsReadOnlyLocalDiscoveryButNotRetiredManagementSwitches()
     {
         var source = ReadRepositoryFile(
             "src",
@@ -110,6 +110,7 @@ public sealed class LegacyProductionWiringContractTests
         Assert.DoesNotContain("DisableMode", source, StringComparison.Ordinal);
         Assert.DoesNotContain("StrictLinkMode", source, StringComparison.Ordinal);
         Assert.DoesNotContain("EnableLocalAddonsExperimental", source, StringComparison.Ordinal);
+        Assert.Contains("EnableLocalAddonDiscoveryExperimental", source, StringComparison.Ordinal);
         Assert.DoesNotContain("EnableDisableManifestImport", source, StringComparison.Ordinal);
         Assert.DoesNotContain("DeveloperModePhrase", source, StringComparison.Ordinal);
     }
@@ -219,7 +220,7 @@ public sealed class LegacyProductionWiringContractTests
     }
 
     [Fact]
-    public void RetainedMissingReferencesHaveVisibleBadges()
+    public void RetainedMissingReferencesHaveVisibleBadgesInTheAddonGrid()
     {
         var addonItem = ReadRepositoryFile(
             "src",
@@ -231,23 +232,9 @@ public sealed class LegacyProductionWiringContractTests
             "GmodAddonManager.UI",
             "Views",
             "AddonGridView.axaml");
-        var assetDetailsCode = ReadRepositoryFile(
-            "src",
-            "GmodAddonManager.UI",
-            "Views",
-            "AssetDetailsDialog.axaml.cs");
-        var assetDetailsXaml = ReadRepositoryFile(
-            "src",
-            "GmodAddonManager.UI",
-            "Views",
-            "AssetDetailsDialog.axaml");
-
         Assert.Contains("public bool IsMissing", addonItem, StringComparison.Ordinal);
         Assert.Contains("IsVisible=\"{Binding IsMissing}\"", addonGrid, StringComparison.Ordinal);
         Assert.Contains("Addon.Missing", addonGrid, StringComparison.Ordinal);
-        Assert.Contains("IsMissing =", assetDetailsCode, StringComparison.Ordinal);
-        Assert.Contains("IsVisible=\"{Binding IsMissing}\"", assetDetailsXaml, StringComparison.Ordinal);
-        Assert.Contains("Addon.Missing", assetDetailsXaml, StringComparison.Ordinal);
     }
 
     [Theory]

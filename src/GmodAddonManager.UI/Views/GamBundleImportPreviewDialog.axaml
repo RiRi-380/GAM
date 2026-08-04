@@ -1,0 +1,127 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d"
+        d:DesignWidth="620"
+        d:DesignHeight="650"
+        x:Class="GmodAddonManager.UI.Views.GamBundleImportPreviewDialog"
+        Title="{loc:Localize GamBundleImport.Title}"
+        Width="620"
+        Height="650"
+        MinWidth="440"
+        MinHeight="400"
+        CanResize="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <Grid Margin="24" RowDefinitions="*,Auto">
+        <ScrollViewer Grid.Row="0"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14">
+                <TextBlock Text="{loc:Localize GamBundleImport.Description}"
+                           Opacity="0.78"
+                           TextWrapping="Wrap"/>
+
+                <Border Padding="16"
+                        CornerRadius="8"
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                          ColumnSpacing="18"
+                          RowSpacing="10">
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.FormatLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="FormatTextBlock" Grid.Row="0" Grid.Column="1"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="{loc:Localize GamBundleImport.AssetCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="AssetCountTextBlock" Grid.Row="1" Grid.Column="1"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                   Text="{loc:Localize GamBundleImport.GroupCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="GroupCountTextBlock" Grid.Row="2" Grid.Column="1"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0"
+                                   Text="{loc:Localize GamBundleImport.ImageCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="ImageCountTextBlock" Grid.Row="3" Grid.Column="1"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0"
+                                   Text="{loc:Localize GamBundleImport.ReferenceCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="ReferenceCountTextBlock" Grid.Row="4" Grid.Column="1"/>
+                        <TextBlock Grid.Row="5" Grid.Column="0"
+                                   Text="{loc:Localize GamBundleImport.MissingCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="MissingCountTextBlock"
+                                   Grid.Row="5"
+                                   Grid.Column="1"
+                                   TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="NestedDepthIncreaseBorder"
+                        IsVisible="False"
+                        Padding="14"
+                        CornerRadius="8"
+                        Background="#352B18"
+                        BorderBrush="#B88927"
+                        BorderThickness="1">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="{loc:Localize GamBundleImport.NestedDepthIncreaseTitle}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"/>
+                        <Grid ColumnDefinitions="Auto,*"
+                              RowDefinitions="Auto,Auto"
+                              ColumnSpacing="18"
+                              RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="{loc:Localize GamBundleImport.CurrentNestedDepthLabel}"
+                                       Opacity="0.72"/>
+                            <TextBlock x:Name="CurrentNestedDepthTextBlock"
+                                       Grid.Row="0"
+                                       Grid.Column="1"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0"
+                                       Text="{loc:Localize GamBundleImport.RequiredNestedDepthLabel}"
+                                       Opacity="0.72"/>
+                            <TextBlock x:Name="RequiredNestedDepthTextBlock"
+                                       Grid.Row="1"
+                                       Grid.Column="1"
+                                       FontWeight="SemiBold"/>
+                        </Grid>
+                        <TextBlock x:Name="NestedDepthIncreaseConfirmationTextBlock"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Padding="14"
+                        CornerRadius="8"
+                        Background="#172532">
+                    <StackPanel Spacing="7">
+                        <TextBlock Text="{loc:Localize GamBundleImport.HierarchyDescription}"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Text="{loc:Localize GamAssetFile.NoSteamChanges}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <WrapPanel Grid.Row="1"
+                   Orientation="Horizontal"
+                   HorizontalAlignment="Right"
+                   Margin="0,18,0,0">
+            <Button Content="{loc:Localize Dialog.Cancel}"
+                    IsCancel="True"
+                    Margin="0,0,10,0"
+                    Click="OnCancel"/>
+            <Button Content="{loc:Localize GamAssetFile.Import}"
+                    Classes="accent"
+                    IsDefault="True"
+                    Click="OnImport"/>
+        </WrapPanel>
+    </Grid>
+</Window>

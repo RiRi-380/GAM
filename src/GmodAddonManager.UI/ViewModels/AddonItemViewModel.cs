@@ -6,12 +6,14 @@ using ReactiveUI;
 using System;
 using System.IO;
 using System.Reactive;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Globalization;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
@@ -40,6 +42,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     private bool? actualEnabled;
     private bool isRuntimeApplyPending;
     private bool isFileSizeCalculated;
+    private AddonSortMode sortPresentationMode = AddonSortMode.RecentlySubscribed;
+    private readonly SemaphoreSlim detailsLoadGate = new(1, 1);
+    private CancellationTokenSource? thumbnailLoadCts;
+    private int thumbnailLoadGeneration;
     private bool disposed;
 
     private static readonly IReadOnlyDictionary<string, string> TypeKeyMap =
@@ -106,6 +112,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 if (!isFileSizeCalculated)
                 {
                     FileSize = fileInfo.Length;
+                    addon.Size = fileInfo.Length;
                     isFileSizeCalculated = true;
                 }
             }
@@ -124,6 +131,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
         LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
     }
+
+    public event EventHandler? SortSourceChanged;
 
     public string AddonId { get; }
     public string Title 
@@ -168,6 +177,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     // タイトルを外部から更新するためのメソッド
     public void UpdateTitle(string? newTitle)
     {
+        var previousDisplayTitle = Title;
+        var previousSortTitle = addon.Title;
+
         Title = ResolveDisplayTitle(AddonId, newTitle);
         if (!string.IsNullOrWhiteSpace(newTitle))
         {
@@ -178,12 +190,24 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             addon.NeedsTitleUpdate = false;
         }
+
+        if (!string.Equals(previousDisplayTitle, Title, StringComparison.Ordinal) ||
+            !string.Equals(previousSortTitle, addon.Title, StringComparison.Ordinal))
+        {
+            NotifySortSourceChanged();
+        }
     }
 
     // WorkshopAddonから情報を更新するメソッド
     public void UpdateFromWorkshopAddon(WorkshopAddon workshopAddon)
     {
         var previousThumbnailUrl = addon.ThumbnailUrl;
+        var sortSourceChanged =
+            !string.Equals(addon.Title, workshopAddon.Title, StringComparison.Ordinal) ||
+            addon.Size != workshopAddon.Size ||
+            addon.LastUpdated != workshopAddon.LastUpdated ||
+            addon.FirstSeenSubscribedAtUtc != workshopAddon.FirstSeenSubscribedAtUtc ||
+            addon.WorkshopUpdatedAtUtc != workshopAddon.WorkshopUpdatedAtUtc;
 
         // タイトルの更新
         if (!string.IsNullOrEmpty(workshopAddon.Title))
@@ -195,20 +219,26 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         
         // 内部のaddonオブジェクトを更新
         addon.Size = workshopAddon.Size;
-        if (!isFileSizeCalculated && workshopAddon.Size > 0)
+        if (FileSize != workshopAddon.Size)
         {
             FileSize = workshopAddon.Size;
-            isFileSizeCalculated = true;
         }
+        isFileSizeCalculated = workshopAddon.Size > 0;
         addon.LastUpdated = workshopAddon.LastUpdated;
         addon.FirstSeenSubscribedAtUtc = workshopAddon.FirstSeenSubscribedAtUtc;
         addon.WorkshopUpdatedAtUtc = workshopAddon.WorkshopUpdatedAtUtc;
         addon.IsAvailable = workshopAddon.IsAvailable;
         addon.IsDownloadPending = workshopAddon.IsDownloadPending;
+        addon.IsEnabled = workshopAddon.IsEnabled;
+        addon.IsGmaFile = workshopAddon.IsGmaFile;
+        addon.IsLocal = workshopAddon.IsLocal;
+        addon.LocalMountPath = workshopAddon.LocalMountPath;
+        addon.LocalManagedPath = workshopAddon.LocalManagedPath;
         addon.Description = workshopAddon.Description;
         addon.Author = workshopAddon.Author;
         addon.ThumbnailUrl = workshopAddon.ThumbnailUrl;
         addon.Tags = workshopAddon.Tags;
+        FolderPath = workshopAddon.FolderPath;
         if (!string.IsNullOrWhiteSpace(workshopAddon.Type))
         {
             addon.Type = workshopAddon.Type;
@@ -225,14 +255,22 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(TagsDisplay));
         this.RaisePropertyChanged(nameof(IsAvailable));
         this.RaisePropertyChanged(nameof(IsMissing));
+        this.RaisePropertyChanged(nameof(IsLocal));
         this.RaisePropertyChanged(nameof(CardOpacity));
+
+        if (sortSourceChanged)
+        {
+            NotifySortSourceChanged();
+        }
         
         // サムネイルURLが変更された場合は再読み込み
-        if (!string.IsNullOrEmpty(workshopAddon.ThumbnailUrl) &&
-            !string.Equals(workshopAddon.ThumbnailUrl, previousThumbnailUrl, StringComparison.Ordinal))
+        if (!string.Equals(
+                workshopAddon.ThumbnailUrl,
+                previousThumbnailUrl,
+                StringComparison.Ordinal))
         {
             ThumbnailUrl = workshopAddon.ThumbnailUrl;
-            IsThumbnailLoading = true;
+            ReleaseThumbnailBitmap();
             _ = LoadThumbnailAsync();
         }
     }
@@ -254,7 +292,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public string? FolderPath { get; }
+    public string? FolderPath { get; private set; }
     
     public bool IsGmaFile => addon.IsGmaFile;
     public bool IsLocal => addon.IsLocal;
@@ -267,7 +305,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         !addon.IsDownloadPending &&
         !addon.IsLocal;
 
-    public double CardOpacity => addon.IsAvailable ? 1.0 : 0.55;
+    public double CardOpacity => addon.IsLocal || addon.IsAvailable ? 1.0 : 0.55;
 
     public bool IsSelected
     {
@@ -309,12 +347,6 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         private set
         {
             SetAndRaise(ref thumbnailUrl, value);
-            
-            // URLが設定されたら画像をダウンロード
-            if (!string.IsNullOrEmpty(value))
-            {
-                _ = LoadBitmapFromUrlAsync(value);
-            }
         }
     }
     
@@ -341,6 +373,52 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     public string FileSizeText => FormatFileSize(FileSize);
     public string LastModifiedText => LastModified.ToString("yyyy/MM/dd HH:mm");
+
+    public string SortValueText
+    {
+        get
+        {
+            if (sortPresentationMode == AddonSortMode.RecentlySubscribed)
+            {
+                var firstSeenUtc = AddonSortService.GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.RecentlySubscribed);
+                return firstSeenUtc.HasValue
+                    ? FormatSortTimestamp(firstSeenUtc.Value)
+                    : L.Get("AddonGrid.SubscriptionTimeUnknown");
+            }
+
+            if (sortPresentationMode == AddonSortMode.WorkshopUpdated)
+            {
+                var updatedUtc = AddonSortService.GetSortTimestampUtc(
+                    addon,
+                    AddonSortMode.WorkshopUpdated);
+                return updatedUtc.HasValue
+                    ? FormatSortTimestamp(updatedUtc.Value)
+                    : string.Empty;
+            }
+
+            // The title and size are already visible elsewhere on the card.
+            // Do not show an unrelated file timestamp as if it were the active key.
+            return string.Empty;
+        }
+    }
+
+    public void SetSortPresentationMode(AddonSortMode mode)
+    {
+        if (!Enum.IsDefined(mode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown addon sort mode.");
+        }
+
+        if (sortPresentationMode == mode)
+        {
+            return;
+        }
+
+        sortPresentationMode = mode;
+        this.RaisePropertyChanged(nameof(SortValueText));
+    }
 
     public ReactiveCommand<Unit, Unit> LoadDetailsCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenFolderCommand { get; }
@@ -399,6 +477,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     public void SetCurrentAsset(AssetItemViewModel? asset)
     {
         currentAsset = asset;
+
+        this.RaisePropertyChanged(nameof(AssetContextNoticeText));
+        this.RaisePropertyChanged(nameof(HasAssetContextNotice));
+        this.RaisePropertyChanged(nameof(RuntimeStateTooltip));
         
         // 詳細が読み込まれている場合は、アセット情報を更新
         if (IsDetailsLoaded)
@@ -421,9 +503,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         bool? actualState,
         bool hasQueuedRuntimeApply)
     {
-        resolvedState = state;
-        actualEnabled = actualState;
+        resolvedState = IsLocal ? null : state;
+        actualEnabled = IsLocal ? addon.IsEnabled : actualState;
         isRuntimeApplyPending =
+            !IsLocal &&
             hasQueuedRuntimeApply &&
             state?.IsRuntimeTarget == true &&
             (!actualState.HasValue || actualState.Value != state.DesiredEnabled);
@@ -432,8 +515,12 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(IsExcludedAnywhere));
         this.RaisePropertyChanged(nameof(StateText));
         this.RaisePropertyChanged(nameof(ActualStateText));
+        this.RaisePropertyChanged(nameof(ActualStateBadgeText));
         this.RaisePropertyChanged(nameof(DesiredStateText));
         this.RaisePropertyChanged(nameof(StateReasonText));
+        this.RaisePropertyChanged(nameof(RuntimeStateTooltip));
+        this.RaisePropertyChanged(nameof(AssetContextNoticeText));
+        this.RaisePropertyChanged(nameof(HasAssetContextNotice));
         this.RaisePropertyChanged(nameof(PendingStateText));
         this.RaisePropertyChanged(nameof(ActualStateBadgeBackground));
         this.RaisePropertyChanged(nameof(CardOpacity));
@@ -451,11 +538,16 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             this.RaisePropertyChanged(nameof(StateText));
             this.RaisePropertyChanged(nameof(ActualStateText));
+            this.RaisePropertyChanged(nameof(ActualStateBadgeText));
             this.RaisePropertyChanged(nameof(DesiredStateText));
             this.RaisePropertyChanged(nameof(StateReasonText));
+            this.RaisePropertyChanged(nameof(RuntimeStateTooltip));
+            this.RaisePropertyChanged(nameof(AssetContextNoticeText));
+            this.RaisePropertyChanged(nameof(HasAssetContextNotice));
             this.RaisePropertyChanged(nameof(PendingStateText));
             this.RaisePropertyChanged(nameof(TypeDisplay));
             this.RaisePropertyChanged(nameof(TagsDisplay));
+            this.RaisePropertyChanged(nameof(SortValueText));
 
             if (addon.NeedsTitleUpdate || AddonTitleHelper.IsPlaceholderTitle(Title) || IsLoadingTitle(Title))
             {
@@ -570,6 +662,56 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         _ => L.Get("Common.Unknown")
     };
 
+    /// <summary>
+    /// The card badge is deliberately explicit about its authority. It shows
+    /// GMod's current mount state, not the state of the Asset currently used to
+    /// filter the grid.
+    /// </summary>
+    public string ActualStateBadgeText =>
+        L.Format("AddonGrid.GmodActualStateBadge", ActualStateText);
+
+    public string RuntimeStateTooltip => L.Format(
+        "AddonGrid.RuntimeStateTooltip",
+        ActualStateText,
+        DesiredStateText,
+        StateReasonText);
+
+    public string AssetContextNoticeText
+    {
+        get
+        {
+            if (IsLocal || currentAsset == null || resolvedState == null)
+            {
+                return string.Empty;
+            }
+
+            if (isRuntimeApplyPending)
+            {
+                return L.Get("AddonGrid.RuntimeStatePendingShort");
+            }
+
+            if (!currentAsset.IsSubscribeAsset &&
+                currentAsset.IsDisabledState &&
+                actualEnabled == true &&
+                resolvedState.DesiredEnabled)
+            {
+                return L.Get("AddonGrid.EnabledByOtherAsset");
+            }
+
+            if (currentAsset.IsEnabledState &&
+                actualEnabled == false &&
+                resolvedState.Reason == AddonStateResolutionReason.Excluded)
+            {
+                return L.Get("AddonGrid.ExclusionOverridesAsset");
+            }
+
+            return string.Empty;
+        }
+    }
+
+    public bool HasAssetContextNotice =>
+        !string.IsNullOrWhiteSpace(AssetContextNoticeText);
+
     public string ActualStateBadgeBackground => actualEnabled switch
     {
         true => "#2E7D32",
@@ -582,6 +724,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
+            if (IsLocal)
+            {
+                return L.Get("AddonGrid.LocalManagedByGmod");
+            }
+
             if (resolvedState == null || !resolvedState.IsRuntimeTarget)
             {
                 return L.Get("Common.Unknown");
@@ -600,6 +747,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     {
         get
         {
+            if (IsLocal)
+            {
+                return L.Get("AddonGrid.LocalReadOnlyReason");
+            }
+
             if (resolvedState == null)
             {
                 return L.Get("Common.Unknown");
@@ -696,13 +848,14 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
     private async Task LoadDetailsAsyncInternal(bool treatAsHot)
     {
-        if (disposed || IsDetailsLoaded)
-        {
-            return;
-        }
-
+        await detailsLoadGate.WaitAsync();
         try
         {
+            if (disposed || IsDetailsLoaded)
+            {
+                return;
+            }
+
             if (!isNotesLoaded)
             {
                 LoadNotes();
@@ -727,9 +880,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 {
                     if (!string.IsNullOrWhiteSpace(details.Title))
                     {
-                        Title = ResolveDisplayTitle(AddonId, details.Title);
-                        addon.Title = details.Title;
-                        addon.NeedsTitleUpdate = !IsConcreteTitle(details.Title);
+                        UpdateTitle(details.Title);
                     }
                     addon.Author = details.Author;
                     addon.Description = details.Description;
@@ -764,9 +915,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
                     if (workshopDetails != null && !string.IsNullOrWhiteSpace(workshopDetails.Title))
                     {
-                        Title = ResolveDisplayTitle(AddonId, workshopDetails.Title);
-                        addon.Title = workshopDetails.Title;
-                        addon.NeedsTitleUpdate = !IsConcreteTitle(workshopDetails.Title);
+                        UpdateTitle(workshopDetails.Title);
                         if (!string.IsNullOrWhiteSpace(workshopDetails.Description))
                         {
                             addon.Description = workshopDetails.Description;
@@ -810,6 +959,10 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             SafeFileLogger.TryLogException($"AddonItemViewModel.LoadDetailsAsyncInternal(AddonId={AddonId})", ex);
         }
+        finally
+        {
+            detailsLoadGate.Release();
+        }
     }
     
     private async Task LoadWorkshopDetailsAsync(bool treatAsHot)
@@ -828,6 +981,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             {
                 TimeCreated = DateTimeOffset.FromUnixTimeSeconds(details.TimeCreated).DateTime;
                 TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(details.TimeUpdated).DateTime;
+                if (details.TimeUpdated > 0)
+                {
+                    var updatedAtUtc = DateTimeOffset
+                        .FromUnixTimeSeconds(details.TimeUpdated)
+                        .UtcDateTime;
+                    if (addon.WorkshopUpdatedAtUtc != updatedAtUtc)
+                    {
+                        addon.WorkshopUpdatedAtUtc = updatedAtUtc;
+                        NotifySortSourceChanged();
+                    }
+                }
                 this.RaisePropertyChanged(nameof(TimeCreated));
                 this.RaisePropertyChanged(nameof(TimeUpdated));
                 this.RaisePropertyChanged(nameof(TimeCreatedText));
@@ -976,6 +1140,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = addon.Size > 0 ? addon.Size : 0;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -983,6 +1148,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = new FileInfo(FolderPath).Length;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -990,6 +1156,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         {
             FileSize = addon.Size > 0 ? addon.Size : 0;
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
             return;
         }
 
@@ -1013,7 +1180,19 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         finally
         {
             isFileSizeCalculated = true;
+            CommitCalculatedFileSize();
         }
+    }
+
+    private void CommitCalculatedFileSize()
+    {
+        if (addon.Size == FileSize)
+        {
+            return;
+        }
+
+        addon.Size = FileSize;
+        NotifySortSourceChanged();
     }
 
     private void OpenFolder()
@@ -1050,18 +1229,43 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         return $"{len:0.##} {sizes[order]}";
     }
 
-    internal Task LoadThumbnailAsync(bool allowRemote)
+    private static string FormatSortTimestamp(DateTime timestampUtc)
     {
-        return LoadThumbnailInternalAsync(allowRemote);
+        return timestampUtc.ToLocalTime().ToString(
+            "yyyy/MM/dd HH:mm:ss",
+            CultureInfo.InvariantCulture);
+    }
+
+    private void NotifySortSourceChanged()
+    {
+        this.RaisePropertyChanged(nameof(SortValueText));
+        SortSourceChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    internal Task LoadThumbnailAsync(
+        bool allowRemote,
+        CancellationToken cancellationToken = default)
+    {
+        return LoadThumbnailInternalAsync(allowRemote, cancellationToken);
     }
 
     private Task LoadThumbnailAsync()
     {
-        return LoadThumbnailInternalAsync(allowRemote: true);
+        return LoadThumbnailInternalAsync(
+            allowRemote: true,
+            CancellationToken.None);
     }
 
-    private async Task LoadThumbnailInternalAsync(bool allowRemote)
+    private async Task LoadThumbnailInternalAsync(
+        bool allowRemote,
+        CancellationToken cancellationToken)
     {
+        if (disposed)
+        {
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsThumbnailLoading && ThumbnailBitmap != null)
         {
             return;
@@ -1069,17 +1273,32 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
         IsThumbnailLoading = true;
 
-        // gmpublisherと同じ方式：LoadThumbnailUrlAsyncを呼び出すだけ
-        await LoadThumbnailUrlAsync(allowRemote);
+        try
+        {
+            await LoadThumbnailUrlAsync(allowRemote, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!disposed)
+            {
+                // A newer realized range or a recycled card owns the next load.
+                IsThumbnailLoading = true;
+            }
+        }
     }
     
-    private async Task LoadThumbnailUrlAsync(bool allowRemote)
+    private async Task LoadThumbnailUrlAsync(
+        bool allowRemote,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!string.IsNullOrWhiteSpace(ThumbnailPath) && File.Exists(ThumbnailPath))
             {
-                ThumbnailUrl = new Uri(ThumbnailPath).AbsoluteUri;
+                await SetThumbnailSourceAsync(
+                    new Uri(ThumbnailPath).AbsoluteUri,
+                    cancellationToken);
                 IsThumbnailLoading = false;
                 return;
             }
@@ -1093,7 +1312,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                     if (File.Exists(jpgPath))
                     {
                         // file://スキームで設定（gmpublisherと同じ）
-                        ThumbnailUrl = new Uri(jpgPath).AbsoluteUri;
+                        await SetThumbnailSourceAsync(
+                            new Uri(jpgPath).AbsoluteUri,
+                            cancellationToken);
                         IsThumbnailLoading = false;
                         return;
                     }
@@ -1102,7 +1323,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                     var pngPath = Path.Combine(FolderPath, "addon.png");
                     if (File.Exists(pngPath))
                     {
-                        ThumbnailUrl = new Uri(pngPath).AbsoluteUri;
+                        await SetThumbnailSourceAsync(
+                            new Uri(pngPath).AbsoluteUri,
+                            cancellationToken);
                         IsThumbnailLoading = false;
                         return;
                     }
@@ -1124,11 +1347,17 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                         var iconPath = await iconResolver.GetIconAsync(workshopId);
                         if (!string.IsNullOrWhiteSpace(iconPath) && File.Exists(iconPath))
                         {
-                            ThumbnailUrl = new Uri(iconPath).AbsoluteUri;
+                            await SetThumbnailSourceAsync(
+                                new Uri(iconPath).AbsoluteUri,
+                                cancellationToken);
                             IsThumbnailLoading = false;
                             return;
                         }
                     }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception)
                 {
@@ -1144,7 +1373,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
             if (!string.IsNullOrWhiteSpace(addon.ThumbnailUrl))
             {
-                ThumbnailUrl = addon.ThumbnailUrl;
+                await SetThumbnailSourceAsync(
+                    addon.ThumbnailUrl,
+                    cancellationToken);
                 IsThumbnailLoading = false;
                 return;
             }
@@ -1164,12 +1395,18 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                             if (!string.IsNullOrEmpty(details.PreviewUrl))
                             {
                                 // CDN直リンクを設定（gmpublisherと同じ）
-                                ThumbnailUrl = details.PreviewUrl;
+                                await SetThumbnailSourceAsync(
+                                    details.PreviewUrl,
+                                    cancellationToken);
                                 IsThumbnailLoading = false;
                                 return;
                             }
                         }
                     }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception)
                 {
@@ -1178,16 +1415,34 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             }
             
             // 画像なし
-            ThumbnailUrl = null;
+            await SetThumbnailSourceAsync(null, cancellationToken);
             IsThumbnailLoading = false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("AddonItemViewModel.LoadThumbnailUrlAsync", ex);
             // エラー時は画像なし
-            ThumbnailUrl = null;
+            await SetThumbnailSourceAsync(null, CancellationToken.None);
             IsThumbnailLoading = false;
         }
+    }
+
+    private async Task SetThumbnailSourceAsync(
+        string? source,
+        CancellationToken cancellationToken)
+    {
+        ThumbnailUrl = source;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            CancelThumbnailLoad();
+            return;
+        }
+
+        await LoadBitmapFromUrlAsync(source, cancellationToken);
     }
 
     public bool MatchesFilter(string filter)
@@ -1357,8 +1612,16 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
     
-    private async Task LoadBitmapFromUrlAsync(string url)
+    private async Task LoadBitmapFromUrlAsync(
+        string url,
+        CancellationToken cancellationToken)
     {
+        var loadGeneration = Interlocked.Increment(ref thumbnailLoadGeneration);
+        var loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var loadToken = loadCts.Token;
+        var previousLoad = Interlocked.Exchange(ref thumbnailLoadCts, loadCts);
+        CancelAndDispose(previousLoad);
+
         try
         {
             if (disposed)
@@ -1378,10 +1641,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 }
             }
 
-            var bitmap = await RemoteImageLoader.LoadFromUrlAsync(uri);
+            var bitmap = await RemoteImageLoader.LoadFromUrlAsync(uri, loadToken);
             if (bitmap != null)
             {
-                if (disposed)
+                if (disposed ||
+                    loadGeneration != Volatile.Read(ref thumbnailLoadGeneration))
                 {
                     bitmap.Dispose();
                     return;
@@ -1389,7 +1653,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    if (disposed)
+                    if (disposed ||
+                        loadGeneration != Volatile.Read(ref thumbnailLoadGeneration))
                     {
                         bitmap.Dispose();
                         return;
@@ -1399,9 +1664,60 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                 });
             }
         }
+        catch (OperationCanceledException) when (loadToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException($"AddonItemViewModel.LoadBitmapFromUrlAsync(AddonId={AddonId})", ex);
+        }
+        finally
+        {
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref thumbnailLoadCts, null, loadCts),
+                    loadCts))
+            {
+                loadCts.Dispose();
+            }
+        }
+    }
+
+    internal void ReleaseThumbnailBitmap()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        // Invalidate an in-flight decode before releasing the realized card.
+        // Otherwise a late completion can repopulate an off-screen item and keep
+        // hundreds of full-size bitmaps alive while the user scrolls.
+        Interlocked.Increment(ref thumbnailLoadGeneration);
+        CancelThumbnailLoad();
+        ThumbnailBitmap = null;
+        IsThumbnailLoading = true;
+    }
+
+    private void CancelThumbnailLoad()
+    {
+        CancelAndDispose(Interlocked.Exchange(ref thumbnailLoadCts, null));
+    }
+
+    private static void CancelAndDispose(CancellationTokenSource? source)
+    {
+        if (source == null)
+        {
+            return;
+        }
+
+        try
+        {
+            source.Cancel();
+        }
+        finally
+        {
+            source.Dispose();
         }
     }
 
@@ -1413,6 +1729,8 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
 
         disposed = true;
+        Interlocked.Increment(ref thumbnailLoadGeneration);
+        CancelThumbnailLoad();
         LocalizationManager.Instance.PropertyChanged -= OnLocalizationChanged;
         thumbnailBitmap?.Dispose();
         thumbnailBitmap = null;

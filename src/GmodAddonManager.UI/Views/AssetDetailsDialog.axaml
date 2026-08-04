@@ -2,122 +2,155 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:vm="using:GmodAddonManager.UI.ViewModels"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        mc:Ignorable="d"
+        d:DesignWidth="720"
+        d:DesignHeight="560"
         x:Class="GmodAddonManager.UI.Views.AssetDetailsDialog"
         Title="{loc:Localize AssetDetails.Title}"
-        Width="800"
-        Height="600"
-        MinWidth="640"
-        MinHeight="480"
+        Width="720"
+        Height="560"
+        MinWidth="560"
+        MinHeight="460"
+        CanResize="True"
         WindowStartupLocation="CenterOwner">
-    
+
     <DockPanel>
-        <!-- ヘッダー -->
-        <Border DockPanel.Dock="Top" 
+        <Border DockPanel.Dock="Top"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 Padding="20"
-                MinHeight="100">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                
-                <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                    <TextBlock Text="{Binding AssetName}" 
-                               FontSize="24" 
+                MinHeight="88">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Margin="0,0,16,0" Spacing="5">
+                    <TextBox Text="{Binding AssetName, Mode=TwoWay}"
+                             IsVisible="{Binding CanEditName}"
+                             MaxLength="200"
+                             FontSize="20"
+                             FontWeight="Bold"
+                             Padding="8,4"
+                             Watermark="{loc:Localize AssetEdit.NamePlaceholder}"/>
+                    <TextBlock Text="{Binding AssetName}"
+                               IsVisible="{Binding !CanEditName}"
+                               FontSize="24"
                                FontWeight="Bold"
                                MaxLines="1"
                                TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding AssetName}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <TextBlock Text="{Binding AddonCountText}" 
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,10,0"/>
-                        <ComboBox SelectedIndex="{Binding AddonFilterIndex}"
-                                  MinWidth="100"
-                                  Height="26"
-                                  VerticalContentAlignment="Center">
-                            <ComboBoxItem Content="{loc:Localize AssetDetails.FilterAll}"/>
-                            <ComboBoxItem Content="{loc:Localize AssetDetails.FilterNormal}"/>
-                            <ComboBoxItem Content="{loc:Localize AssetDetails.FilterCache}"/>
-                        </ComboBox>
-                    </StackPanel>
+                    <TextBlock Text="{Binding AssetPath}"
+                               FontSize="12"
+                               Opacity="0.7"
+                               MaxLines="1"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding AssetPath}"/>
                 </StackPanel>
-                
-                <Button Grid.Column="1"
-                        Width="100"
+                <Button x:Name="MemberHistoryButton"
+                        Grid.Column="1"
+                        MinWidth="96"
                         Height="34"
                         VerticalAlignment="Center"
-                        Content="{loc:Localize Dialog.Close}"
-                        Click="OnClose"/>
+                        IsVisible="{Binding CanManageMemberHistory}"
+                        Content="{loc:Localize AssetDetails.History}"
+                        ToolTip.Tip="{loc:Localize AssetDetails.HistoryTooltip}"
+                        Click="OnMemberHistory"/>
             </Grid>
         </Border>
-        
-        <!-- アドオンリスト -->
+
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="20,12,20,20">
+            <Button x:Name="SaveDetailsButton"
+                     MinWidth="110"
+                     IsVisible="{Binding CanEditMemo}"
+                     Content="{loc:Localize Dialog.Save}"
+                     Classes="accent"
+                     Click="OnSaveDetails"/>
+            <Button Width="100"
+                    Content="{loc:Localize Dialog.Close}"
+                    Click="OnClose"/>
+        </StackPanel>
+
         <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <ItemsRepeater ItemsSource="{Binding Addons}" Margin="10">
-                <ItemsRepeater.Layout>
-                    <StackLayout Orientation="Vertical"/>
-                </ItemsRepeater.Layout>
-                <ItemsRepeater.ItemTemplate>
-                    <DataTemplate>
-                        <Border Margin="0,4"
-                                Padding="15"
-                                Background="{DynamicResource SystemControlBackgroundListLowBrush}"
-                                CornerRadius="4"
-                                Opacity="{Binding RowOpacity}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                
-                                <!-- アドオン情報 -->
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="{Binding Title}" 
-                                               FontWeight="Bold"
-                                               FontSize="14"
-                                               MaxLines="1"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip.Tip="{Binding Title}"/>
-                                    <TextBlock Text="{Binding AddonId}" 
-                                               FontSize="11"
-                                               Opacity="0.7"
-                                               Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="1"
-                                        Margin="12,0,0,0"
-                                        Padding="7,3"
-                                        Background="#C97800"
-                                        CornerRadius="4"
-                                        VerticalAlignment="Center"
-                                        IsVisible="{Binding IsMissing}">
-                                    <TextBlock Text="{loc:Localize Addon.Missing}"
-                                               FontSize="11"
-                                               FontWeight="SemiBold"
-                                               Foreground="White"/>
-                                </Border>
-                                <Border Grid.Column="1"
-                                        Margin="12,0,0,0"
-                                        Padding="7,3"
-                                        Background="#6B7280"
-                                        CornerRadius="4"
-                                        VerticalAlignment="Center"
-                                        IsVisible="{Binding IsUnavailable}">
-                                    <TextBlock Text="{Binding AvailabilityText}"
-                                               FontSize="11"
-                                               FontWeight="SemiBold"
-                                               Foreground="White"/>
-                                </Border>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsRepeater.ItemTemplate>
-            </ItemsRepeater>
+            <StackPanel Margin="20" Spacing="14">
+                <Border Padding="16"
+                        CornerRadius="8"
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                          ColumnSpacing="18"
+                          RowSpacing="9">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Localize AssetDetails.Type}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AssetTypeText}" FontWeight="SemiBold"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="{loc:Localize AssetDetails.State}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AssetStateText}" FontWeight="SemiBold"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="{loc:Localize AssetDetails.MemberCount}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding MemberCountText}"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="{loc:Localize AssetDetails.AvailableCount}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AvailableCountText}"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="{loc:Localize AssetDetails.MissingCount}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding MissingCountText}"/>
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="{loc:Localize AssetDetails.TotalSize}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding TotalSizeText}"/>
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="{loc:Localize AssetDetails.Path}" Opacity="0.7"/>
+                        <TextBlock Grid.Row="6"
+                                   Grid.Column="1"
+                                   Text="{Binding AssetPath}"
+                                   TextWrapping="Wrap"
+                                   ToolTip.Tip="{Binding AssetPath}"/>
+                    </Grid>
+                </Border>
+
+                <Border IsVisible="{Binding IsSmartAsset}"
+                        Padding="16"
+                        CornerRadius="8"
+                        Background="#243140">
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="{loc:Localize AssetDetails.SmartRule}"
+                                   FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding SmartRuleText}" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding SmartAutomationStatusText}"
+                                   Foreground="#9BC8F5"/>
+                        <TextBlock Text="{Binding SmartAutomationDescription}"
+                                   FontSize="12"
+                                   Opacity="0.75"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Padding="16"
+                        CornerRadius="8"
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{loc:Localize AssetDetails.Memo}"
+                                   FontWeight="SemiBold"/>
+                        <TextBlock Text="{loc:Localize AssetDetails.MemoDescription}"
+                                   FontSize="12"
+                                   Opacity="0.72"
+                                   TextWrapping="Wrap"/>
+                        <TextBox x:Name="MemoTextBox"
+                                 Text="{Binding MemoText, Mode=TwoWay}"
+                                 IsReadOnly="{Binding IsMemoReadOnly}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MinHeight="120"
+                                 MaxLength="4000"
+                                 Watermark="{loc:Localize AssetDetails.MemoPlaceholder}"/>
+                        <TextBlock x:Name="SaveStatusTextBlock"
+                                   IsVisible="False"
+                                   FontSize="12"
+                                   Foreground="#72C98F"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Styles>
+                                <Style Selector="TextBlock.error">
+                                    <Setter Property="Foreground" Value="#F08A8A"/>
+                                </Style>
+                            </TextBlock.Styles>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </ScrollViewer>
     </DockPanel>
 </Window>

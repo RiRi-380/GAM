@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -67,28 +68,75 @@ namespace GmodAddonManager.Core.Services
     {
         private const string DefaultGithubRepo = "RiRi-380/GAM";
         private const string UpdateCheckFile = "last_update_check.txt";
-        private const string InnoSilentInstallArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS";
+        private const string InnoSilentInstallArgs =
+            "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /LAUNCHAFTERINSTALL=1";
         private const string EnvUpdateRepo = "GAM_UPDATE_REPO";
         private const string EnvUpdateApiUrl = "GAM_UPDATE_API_URL";
         private const string EnvUpdateIncludePrerelease = "GAM_UPDATE_INCLUDE_PRERELEASE";
         private const string EnvGithubToken = "GAM_GITHUB_TOKEN";
+        private const long DefaultMaxUpdateDownloadBytes = 512L * 1024 * 1024;
+        private const long DefaultMaxApiResponseBytes = 8L * 1024 * 1024;
         private static readonly TimeSpan UpdateDownloadTimeout = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan UpdateCheckTimeout = TimeSpan.FromSeconds(30);
 
-        private static readonly HttpClient httpClient = new HttpClient();
+        private static readonly HttpClient sharedHttpClient = new HttpClient();
         private readonly string currentVersion;
         private readonly UpdateSource? configuredSource;
         private readonly string? configuredToken;
+        private readonly HttpClient client;
+        private readonly long maxUpdateDownloadBytes;
+        private readonly long maxApiResponseBytes;
+        private readonly string temporaryDirectory;
+        private readonly string updateStateDirectory;
+        private Uri? updateApiOrigin;
+        private string? selectedDownloadUrl;
+        private string? selectedAssetApiUrl;
+        private string? selectedInstallerName;
 
         static UpdateService()
         {
-            httpClient.DefaultRequestHeaders.Add("User-Agent", "GmodAddonManager");
+            sharedHttpClient.DefaultRequestHeaders.Add("User-Agent", "GmodAddonManager");
         }
 
         public UpdateService(string currentVersion, UpdateSource? source = null, string? githubToken = null)
+            : this(currentVersion, source, githubToken, sharedHttpClient)
+        {
+        }
+
+        internal UpdateService(
+            string currentVersion,
+            UpdateSource? source,
+            string? githubToken,
+            HttpClient client,
+            long maxUpdateDownloadBytes = DefaultMaxUpdateDownloadBytes,
+            long maxApiResponseBytes = DefaultMaxApiResponseBytes,
+            string? temporaryDirectory = null,
+            string? updateStateDirectory = null)
         {
             this.currentVersion = currentVersion;
             configuredSource = source;
             configuredToken = githubToken;
+            this.client = client ?? throw new ArgumentNullException(nameof(client));
+            if (maxUpdateDownloadBytes <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxUpdateDownloadBytes));
+            }
+
+            if (maxApiResponseBytes <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxApiResponseBytes));
+            }
+
+            this.maxUpdateDownloadBytes = maxUpdateDownloadBytes;
+            this.maxApiResponseBytes = maxApiResponseBytes;
+            this.temporaryDirectory = string.IsNullOrWhiteSpace(temporaryDirectory)
+                ? Path.GetTempPath()
+                : temporaryDirectory;
+            this.updateStateDirectory = string.IsNullOrWhiteSpace(updateStateDirectory)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GmodAddonManager")
+                : updateStateDirectory;
         }
 
         public async Task<UpdateCheckResult> CheckForUpdateAsync(bool forceCheck = false)
@@ -103,6 +151,7 @@ namespace GmodAddonManager.Core.Services
             try
             {
                 endpoints = BuildApiEndpoints(resolvedSource);
+                updateApiOrigin = new Uri(endpoints.ListUrl, UriKind.Absolute);
             }
             catch (ArgumentException ex)
             {
@@ -110,7 +159,31 @@ namespace GmodAddonManager.Core.Services
             }
             var token = ResolveGithubToken();
 
-            var releaseResult = await FetchLatestReleaseAsync(endpoints, token, resolvedSource.IncludePrerelease);
+            ReleaseFetchResult releaseResult;
+            try
+            {
+                releaseResult = await FetchLatestReleaseAsync(
+                    endpoints,
+                    token,
+                    resolvedSource.IncludePrerelease);
+            }
+            catch (HttpRequestException ex)
+            {
+                return UpdateCheckResult.Error($"Update check request failed: {ex.Message}");
+            }
+            catch (TaskCanceledException ex)
+            {
+                return UpdateCheckResult.Error($"Update check timed out: {ex.Message}");
+            }
+            catch (JsonException ex)
+            {
+                return UpdateCheckResult.Error($"Update check returned invalid JSON: {ex.Message}");
+            }
+            catch (InvalidDataException ex)
+            {
+                return UpdateCheckResult.Error($"Update check response was rejected: {ex.Message}");
+            }
+
             if (!releaseResult.Success)
             {
                 return UpdateCheckResult.Error(releaseResult.ErrorMessage ?? "Update check failed.");
@@ -146,17 +219,36 @@ namespace GmodAddonManager.Core.Services
                 return UpdateCheckResult.Error("The installer asset is missing a valid SHA-256 digest.");
             }
 
-            if (!Uri.TryCreate(installerAsset.BrowserDownloadUrl, UriKind.Absolute, out var installerUri) ||
-                !string.Equals(installerUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            var browserDownloadUrl = NormalizeHttpsUrl(installerAsset.BrowserDownloadUrl);
+            var assetApiUrl = NormalizeHttpsUrl(installerAsset.ApiUrl);
+            if (assetApiUrl != null &&
+                !HaveSameOrigin(assetApiUrl, endpoints.ListUrl))
+            {
+                // Never forward a repository token to an origin supplied by
+                // release JSON. Official GitHub and GitHub Enterprise asset API
+                // URLs share the release API origin.
+                assetApiUrl = null;
+            }
+            var downloadUrl = browserDownloadUrl ?? assetApiUrl;
+            if (downloadUrl == null)
             {
                 return UpdateCheckResult.Error("The installer asset download URL must use HTTPS.");
             }
+
+            // GitHub's authenticated binary-download contract uses the asset API
+            // URL with application/octet-stream. Keep the browser URL in the UI
+            // result so installer naming remains stable, and map it back to the API
+            // URL when the download starts. Public releases work through either
+            // endpoint; private releases require this authenticated API request.
+            selectedDownloadUrl = downloadUrl;
+            selectedAssetApiUrl = assetApiUrl;
+            selectedInstallerName = installerAsset.Name;
 
             return UpdateCheckResult.UpdateAvailable(new UpdateInfo
             {
                 Version = release.TagName,
                 ReleaseNotes = release.Body ?? string.Empty,
-                DownloadUrl = installerAsset.BrowserDownloadUrl,
+                DownloadUrl = downloadUrl,
                 DownloadDigest = installerAsset.Digest,
                 PublishedAt = release.PublishedAt
             });
@@ -183,8 +275,10 @@ namespace GmodAddonManager.Core.Services
 
         private string? ResolveGithubToken()
         {
-            return Environment.GetEnvironmentVariable(EnvGithubToken)
-                ?? configuredToken;
+            var environmentToken = Environment.GetEnvironmentVariable(EnvGithubToken);
+            return !string.IsNullOrWhiteSpace(environmentToken)
+                ? environmentToken
+                : configuredToken;
         }
 
         private static bool ParseBool(string value, bool defaultValue)
@@ -240,24 +334,25 @@ namespace GmodAddonManager.Core.Services
 
         private async Task<ReleaseFetchResult> FetchLatestReleaseAsync(ApiEndpoints endpoints, string? token, bool includePrerelease)
         {
+            if (includePrerelease)
+            {
+                // GitHub's /latest endpoint intentionally excludes prereleases.
+                // Query the ordered release list directly when the caller opted in.
+                return await FetchReleaseListAsync(
+                    endpoints.ListUrl,
+                    token,
+                    includePrerelease: true,
+                    "No releases found in the repository.");
+            }
+
             var latestResponse = await GetApiResponseAsync(endpoints.LatestUrl, token);
             if (latestResponse.StatusCode == HttpStatusCode.NotFound)
             {
-                var listResponse = await GetApiResponseAsync(endpoints.ListUrl, token);
-                if (!listResponse.IsSuccessStatusCode)
-                {
-                    return ReleaseFetchResult.Fail(BuildErrorMessage(endpoints.ListUrl, listResponse));
-                }
-
-                var releases = DeserializeJson<GitHubRelease[]>(listResponse.Body);
-                var release = releases?
-                    .FirstOrDefault(r => !r.Draft && (includePrerelease || !r.Prerelease));
-                if (release == null)
-                {
-                    return ReleaseFetchResult.Fail("No releases found in the repository.");
-                }
-
-                return ReleaseFetchResult.FromSuccess(release);
+                return await FetchReleaseListAsync(
+                    endpoints.ListUrl,
+                    token,
+                    includePrerelease: false,
+                    "No releases found in the repository.");
             }
 
             if (!latestResponse.IsSuccessStatusCode)
@@ -273,24 +368,34 @@ namespace GmodAddonManager.Core.Services
 
             if (latestRelease.Draft || (!includePrerelease && latestRelease.Prerelease))
             {
-                var listResponse = await GetApiResponseAsync(endpoints.ListUrl, token);
-                if (!listResponse.IsSuccessStatusCode)
-                {
-                    return ReleaseFetchResult.Fail(BuildErrorMessage(endpoints.ListUrl, listResponse));
-                }
-
-                var releases = DeserializeJson<GitHubRelease[]>(listResponse.Body);
-                var release = releases?
-                    .FirstOrDefault(r => !r.Draft && (includePrerelease || !r.Prerelease));
-                if (release == null)
-                {
-                    return ReleaseFetchResult.Fail("No non-draft releases found in the repository.");
-                }
-
-                return ReleaseFetchResult.FromSuccess(release);
+                return await FetchReleaseListAsync(
+                    endpoints.ListUrl,
+                    token,
+                    includePrerelease: false,
+                    "No non-draft releases found in the repository.");
             }
 
             return ReleaseFetchResult.FromSuccess(latestRelease);
+        }
+
+        private async Task<ReleaseFetchResult> FetchReleaseListAsync(
+            string listUrl,
+            string? token,
+            bool includePrerelease,
+            string emptyMessage)
+        {
+            var listResponse = await GetApiResponseAsync(listUrl, token);
+            if (!listResponse.IsSuccessStatusCode)
+            {
+                return ReleaseFetchResult.Fail(BuildErrorMessage(listUrl, listResponse));
+            }
+
+            var releases = DeserializeJson<GitHubRelease[]>(listResponse.Body);
+            var release = releases?
+                .FirstOrDefault(r => !r.Draft && (includePrerelease || !r.Prerelease));
+            return release == null
+                ? ReleaseFetchResult.Fail(emptyMessage)
+                : ReleaseFetchResult.FromSuccess(release);
         }
 
         private static string BuildErrorMessage(string url, ApiResponse response)
@@ -309,8 +414,24 @@ namespace GmodAddonManager.Core.Services
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             }
 
-            using var response = await httpClient.SendAsync(request);
-            var body = await response.Content.ReadAsStringAsync();
+            using var timeoutCts = new CancellationTokenSource(UpdateCheckTimeout);
+            using var response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeoutCts.Token).ConfigureAwait(false);
+            RejectDeclaredOversize(
+                response.Content.Headers.ContentLength,
+                maxApiResponseBytes,
+                "Update API response");
+            using var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var bodyStream = new MemoryStream();
+            await CopyStreamAsync(
+                contentStream,
+                bodyStream,
+                maxApiResponseBytes,
+                "Update API response",
+                timeoutCts.Token).ConfigureAwait(false);
+            var body = Encoding.UTF8.GetString(bodyStream.ToArray());
             return new ApiResponse(response.StatusCode, response.ReasonPhrase, response.IsSuccessStatusCode, body);
         }
 
@@ -322,6 +443,26 @@ namespace GmodAddonManager.Core.Services
             }
 
             return JsonConvert.DeserializeObject<T>(json);
+        }
+
+        private static string? NormalizeHttpsUrl(string? value)
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return uri.AbsoluteUri;
+        }
+
+        private static bool HaveSameOrigin(string left, string right)
+        {
+            return Uri.TryCreate(left, UriKind.Absolute, out var leftUri) &&
+                   Uri.TryCreate(right, UriKind.Absolute, out var rightUri) &&
+                   string.Equals(leftUri.Scheme, rightUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(leftUri.Host, rightUri.Host, StringComparison.OrdinalIgnoreCase) &&
+                   leftUri.Port == rightUri.Port;
         }
 
         internal static GitHubAsset? SelectInstallerAsset(GitHubAsset[]? assets)
@@ -389,16 +530,12 @@ namespace GmodAddonManager.Core.Services
         {
             try
             {
-                var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                var checkFilePath = Path.Combine(appDataPath, "GmodAddonManager", UpdateCheckFile);
+                var checkFilePath = Path.Combine(updateStateDirectory, UpdateCheckFile);
 
                 if (File.Exists(checkFilePath))
                 {
                     var lastCheck = File.ReadAllText(checkFilePath);
-                    if (DateTime.TryParse(lastCheck, out var lastCheckDate))
-                    {
-                        return Task.FromResult((DateTime.Now - lastCheckDate).TotalDays < 1);
-                    }
+                    return Task.FromResult(ShouldSkipUpdateCheck(lastCheck, DateTimeOffset.UtcNow));
                 }
             }
             catch (Exception ex)
@@ -409,16 +546,36 @@ namespace GmodAddonManager.Core.Services
             return Task.FromResult(false);
         }
 
+        internal static bool ShouldSkipUpdateCheck(string? lastCheck, DateTimeOffset now)
+        {
+            if (!DateTimeOffset.TryParse(
+                    lastCheck,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out var lastCheckDate))
+            {
+                return false;
+            }
+
+            var age = now.ToUniversalTime() - lastCheckDate.ToUniversalTime();
+            return age >= TimeSpan.Zero && age < TimeSpan.FromDays(1);
+        }
+
+        public Task DeferUpdateCheckAsync()
+        {
+            return SaveLastCheckTime();
+        }
+
         private Task SaveLastCheckTime()
         {
             try
             {
-                var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                var gamPath = Path.Combine(appDataPath, "GmodAddonManager");
-                Directory.CreateDirectory(gamPath);
+                Directory.CreateDirectory(updateStateDirectory);
 
-                var checkFilePath = Path.Combine(gamPath, UpdateCheckFile);
-                File.WriteAllText(checkFilePath, DateTime.Now.ToString("O"));
+                var checkFilePath = Path.Combine(updateStateDirectory, UpdateCheckFile);
+                File.WriteAllText(
+                    checkFilePath,
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {
@@ -430,16 +587,26 @@ namespace GmodAddonManager.Core.Services
 
         private bool IsNewerVersion(string remoteVersion)
         {
-            var remote = NormalizeVersionNumber(remoteVersion);
-            var current = NormalizeVersionNumber(currentVersion);
+            return IsRemoteVersionNewer(currentVersion, remoteVersion);
+        }
 
-            return Version.TryParse(remote, out var remoteVer) &&
-                   Version.TryParse(current, out var currentVer) &&
-                   remoteVer > currentVer;
+        internal static bool IsRemoteVersionNewer(string currentVersion, string remoteVersion)
+        {
+            return TryParseComparableVersion(currentVersion, out var current) &&
+                   TryParseComparableVersion(remoteVersion, out var remote) &&
+                   CompareVersions(remote, current) > 0;
         }
 
         public static string NormalizeVersionLabel(string? version)
         {
+            if (TryParseComparableVersion(version, out var parsed))
+            {
+                var prerelease = parsed.PrereleaseIdentifiers.Length == 0
+                    ? string.Empty
+                    : $"-{string.Join(".", parsed.PrereleaseIdentifiers)}";
+                return $"v{parsed.NormalizedCore}{prerelease}";
+            }
+
             var normalized = NormalizeVersionNumber(version);
             return string.IsNullOrWhiteSpace(normalized)
                 ? "unknown"
@@ -479,17 +646,195 @@ namespace GmodAddonManager.Core.Services
             return builder.ToString();
         }
 
+        private static bool TryParseComparableVersion(
+            string? version,
+            out ComparableVersion parsed)
+        {
+            parsed = default;
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                return false;
+            }
+
+            var normalized = version.Trim().TrimStart('v', 'V');
+            var buildSeparator = normalized.IndexOf('+');
+            if (buildSeparator >= 0)
+            {
+                var buildMetadata = normalized.Substring(buildSeparator + 1);
+                if (!AreValidIdentifiers(buildMetadata, allowNumericLeadingZero: true) ||
+                    buildMetadata.Contains('+'))
+                {
+                    return false;
+                }
+
+                normalized = normalized.Substring(0, buildSeparator);
+            }
+
+            var prereleaseSeparator = normalized.IndexOf('-');
+            var coreText = prereleaseSeparator >= 0
+                ? normalized.Substring(0, prereleaseSeparator)
+                : normalized;
+            var prereleaseText = prereleaseSeparator >= 0
+                ? normalized.Substring(prereleaseSeparator + 1)
+                : string.Empty;
+
+            var coreParts = coreText.Split('.');
+            if (coreParts.Length < 2 || coreParts.Length > 4)
+            {
+                return false;
+            }
+
+            var core = new int[coreParts.Length];
+            for (var index = 0; index < coreParts.Length; index++)
+            {
+                if (!int.TryParse(
+                        coreParts[index],
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out core[index]))
+                {
+                    return false;
+                }
+            }
+
+            var prereleaseIdentifiers = Array.Empty<string>();
+            if (prereleaseSeparator >= 0)
+            {
+                if (!AreValidIdentifiers(prereleaseText, allowNumericLeadingZero: false))
+                {
+                    return false;
+                }
+
+                prereleaseIdentifiers = prereleaseText.Split('.');
+            }
+
+            parsed = new ComparableVersion(core, prereleaseIdentifiers);
+            return true;
+        }
+
+        private static bool AreValidIdentifiers(string value, bool allowNumericLeadingZero)
+        {
+            var identifiers = value.Split('.');
+            foreach (var identifier in identifiers)
+            {
+                if (identifier.Length == 0 || identifier.Any(character =>
+                        !(character >= '0' && character <= '9') &&
+                        !(character >= 'A' && character <= 'Z') &&
+                        !(character >= 'a' && character <= 'z') &&
+                        character != '-'))
+                {
+                    return false;
+                }
+
+                if (!allowNumericLeadingZero &&
+                    identifier.Length > 1 &&
+                    identifier[0] == '0' &&
+                    identifier.All(character => character >= '0' && character <= '9'))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static int CompareVersions(ComparableVersion left, ComparableVersion right)
+        {
+            var coreCount = Math.Max(left.Core.Length, right.Core.Length);
+            for (var index = 0; index < coreCount; index++)
+            {
+                var leftPart = index < left.Core.Length ? left.Core[index] : 0;
+                var rightPart = index < right.Core.Length ? right.Core[index] : 0;
+                var coreComparison = leftPart.CompareTo(rightPart);
+                if (coreComparison != 0)
+                {
+                    return coreComparison;
+                }
+            }
+
+            var leftPrerelease = left.PrereleaseIdentifiers;
+            var rightPrerelease = right.PrereleaseIdentifiers;
+            if (leftPrerelease.Length == 0 || rightPrerelease.Length == 0)
+            {
+                return leftPrerelease.Length == rightPrerelease.Length
+                    ? 0
+                    : leftPrerelease.Length == 0 ? 1 : -1;
+            }
+
+            var identifierCount = Math.Min(leftPrerelease.Length, rightPrerelease.Length);
+            for (var index = 0; index < identifierCount; index++)
+            {
+                var identifierComparison = ComparePrereleaseIdentifiers(
+                    leftPrerelease[index],
+                    rightPrerelease[index]);
+                if (identifierComparison != 0)
+                {
+                    return identifierComparison;
+                }
+            }
+
+            return leftPrerelease.Length.CompareTo(rightPrerelease.Length);
+        }
+
+        private static int ComparePrereleaseIdentifiers(string left, string right)
+        {
+            var leftNumeric = left.All(character => character >= '0' && character <= '9');
+            var rightNumeric = right.All(character => character >= '0' && character <= '9');
+            if (leftNumeric && rightNumeric)
+            {
+                var lengthComparison = left.Length.CompareTo(right.Length);
+                return lengthComparison != 0
+                    ? lengthComparison
+                    : string.CompareOrdinal(left, right);
+            }
+
+            if (leftNumeric != rightNumeric)
+            {
+                return leftNumeric ? -1 : 1;
+            }
+
+            return string.CompareOrdinal(left, right);
+        }
+
+        private readonly struct ComparableVersion
+        {
+            public ComparableVersion(int[] core, string[] prereleaseIdentifiers)
+            {
+                Core = core;
+                PrereleaseIdentifiers = prereleaseIdentifiers;
+
+                var displayLength = core.Length == 4 && core[3] == 0
+                    ? 3
+                    : core.Length;
+                NormalizedCore = string.Join(
+                    ".",
+                    core.Take(displayLength).Select(part => part.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            public int[] Core { get; }
+            public string[] PrereleaseIdentifiers { get; }
+            public string NormalizedCore { get; }
+        }
+
         internal static string ResolveInstallerArguments(string downloadUrl)
         {
             if (TryGetFileName(downloadUrl, out var fileName) &&
-                fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-                (fileName.Contains("setup", StringComparison.OrdinalIgnoreCase) ||
-                 fileName.Contains("installer", StringComparison.OrdinalIgnoreCase)))
+                !string.IsNullOrWhiteSpace(fileName))
             {
-                return InnoSilentInstallArgs;
+                return ResolveInstallerArgumentsFromFileName(fileName);
             }
 
             return string.Empty;
+        }
+
+        private static string ResolveInstallerArgumentsFromFileName(string? fileName)
+        {
+            return !string.IsNullOrWhiteSpace(fileName) &&
+                   fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                   (fileName.Contains("setup", StringComparison.OrdinalIgnoreCase) ||
+                    fileName.Contains("installer", StringComparison.OrdinalIgnoreCase))
+                ? InnoSilentInstallArgs
+                : string.Empty;
         }
 
         private static bool TryGetFileName(string downloadUrl, out string fileName)
@@ -530,17 +875,31 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidDataException("A valid SHA-256 release-asset digest is required.");
             }
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"GAM-Update-Setup-{Guid.NewGuid():N}.exe");
-            var installerArguments = ResolveInstallerArguments(downloadUrl);
+            var tempPath = Path.Combine(
+                temporaryDirectory,
+                $"GAM-Update-Setup-{Guid.NewGuid():N}.exe");
+            var requestUrl = ResolveDownloadRequestUrl(downloadUrl);
+            if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var requestUri) ||
+                !string.Equals(requestUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Update asset API URL must use HTTPS.", nameof(downloadUrl));
+            }
+
+            var installerArguments = string.Equals(
+                    downloadUrl,
+                    selectedDownloadUrl,
+                    StringComparison.Ordinal)
+                ? ResolveInstallerArgumentsFromFileName(selectedInstallerName)
+                : ResolveInstallerArguments(downloadUrl);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(UpdateDownloadTimeout);
 
             try
             {
-                using (var response = await httpClient.GetAsync(
-                    downloadUrl,
-                    HttpCompletionOption.ResponseHeadersRead,
+                using (var request = new HttpRequestMessage(HttpMethod.Get, requestUri))
+                using (var response = await SendDownloadRequestAsync(
+                    request,
                     timeoutCts.Token).ConfigureAwait(false))
                 {
                     response.EnsureSuccessStatusCode();
@@ -550,6 +909,11 @@ namespace GmodAddonManager.Core.Services
                         throw new InvalidDataException("The update download redirected to a non-HTTPS URL.");
                     }
 
+                    RejectDeclaredOversize(
+                        response.Content.Headers.ContentLength,
+                        maxUpdateDownloadBytes,
+                        "Update installer");
+
                     using var fs = new FileStream(
                         tempPath,
                         FileMode.CreateNew,
@@ -558,7 +922,12 @@ namespace GmodAddonManager.Core.Services
                         bufferSize: 81920,
                         useAsync: true);
                     using var contentStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                    await CopyStreamAsync(contentStream, fs, timeoutCts.Token).ConfigureAwait(false);
+                    await CopyStreamAsync(
+                        contentStream,
+                        fs,
+                        maxUpdateDownloadBytes,
+                        "Update installer",
+                        timeoutCts.Token).ConfigureAwait(false);
                 }
 
                 VerifyDownloadedFileDigest(tempPath, expectedDigest);
@@ -575,7 +944,7 @@ namespace GmodAddonManager.Core.Services
             }
 
             var launcherPath = Path.Combine(
-                Path.GetTempPath(),
+                temporaryDirectory,
                 $"GAM-Update-Launcher-{Guid.NewGuid():N}.ps1");
             try
             {
@@ -596,6 +965,34 @@ namespace GmodAddonManager.Core.Services
                 TryDeleteFile(tempPath);
                 throw;
             }
+        }
+
+        private async Task<HttpResponseMessage> SendDownloadRequestAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
+            var token = ResolveGithubToken();
+            if (!string.IsNullOrWhiteSpace(token) &&
+                request.RequestUri != null &&
+                updateApiOrigin != null &&
+                HaveSameOrigin(request.RequestUri.AbsoluteUri, updateApiOrigin.AbsoluteUri))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            }
+
+            return await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        internal string ResolveDownloadRequestUrl(string downloadUrl)
+        {
+            return string.Equals(downloadUrl, selectedDownloadUrl, StringComparison.Ordinal) &&
+                   !string.IsNullOrWhiteSpace(selectedAssetApiUrl)
+                ? selectedAssetApiUrl!
+                : downloadUrl;
         }
 
         internal static void VerifyDownloadedFileDigest(string filePath, string expectedDigest)
@@ -652,16 +1049,38 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
+        private static void RejectDeclaredOversize(
+            long? contentLength,
+            long maximumBytes,
+            string description)
+        {
+            if (contentLength.HasValue && contentLength.Value > maximumBytes)
+            {
+                throw new InvalidDataException(
+                    $"{description} exceeds the {maximumBytes}-byte size limit.");
+            }
+        }
+
         private static async Task CopyStreamAsync(
             Stream source,
             Stream destination,
+            long maximumBytes,
+            string description,
             CancellationToken cancellationToken)
         {
             var buffer = new byte[81920];
+            long totalBytes = 0;
             int bytesRead;
             while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
             {
+                if (bytesRead > maximumBytes - totalBytes)
+                {
+                    throw new InvalidDataException(
+                        $"{description} exceeds the {maximumBytes}-byte size limit.");
+                }
+
                 await destination.WriteAsync(buffer, 0, bytesRead, cancellationToken).ConfigureAwait(false);
+                totalBytes += bytesRead;
             }
         }
 
@@ -689,17 +1108,34 @@ namespace GmodAddonManager.Core.Services
         {
             return string.Join(
                 Environment.NewLine,
-                "$ErrorActionPreference = 'SilentlyContinue'",
-                $"try {{ Wait-Process -Id {currentProcessId} -Timeout 60 }} catch {{ }}",
+                "$ErrorActionPreference = 'Stop'",
                 $"$installerPath = {ToPowerShellSingleQuotedString(installerPath)}",
                 $"$installerArguments = {ToPowerShellSingleQuotedString(installerArguments)}",
-                "if ([string]::IsNullOrWhiteSpace($installerArguments)) {",
-                "    Start-Process -FilePath $installerPath -Wait",
-                "} else {",
-                "    Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait",
+                @"$logPath = Join-Path $env:APPDATA 'GmodAddonManager\logs\update-installer.log'",
+                "try {",
+                $"    $currentProcess = Get-Process -Id {currentProcessId} -ErrorAction SilentlyContinue",
+                "    if ($null -ne $currentProcess) {",
+                "        $currentProcess | Wait-Process -Timeout 60",
+                "    }",
+                "    if ([string]::IsNullOrWhiteSpace($installerArguments)) {",
+                "        $installerProcess = Start-Process -FilePath $installerPath -Wait -PassThru",
+                "    } else {",
+                "        $installerProcess = Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait -PassThru",
+                "    }",
+                "    if ($installerProcess.ExitCode -ne 0) {",
+                "        throw \"Installer process exited with code $($installerProcess.ExitCode).\"",
+                "    }",
+                "    Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue",
+                "} catch {",
+                "    $failureMessage = $_.Exception.ToString()",
+                "    try {",
+                "        New-Item -ItemType Directory -Path (Split-Path -Parent $logPath) -Force | Out-Null",
+                "        Add-Content -LiteralPath $logPath -Value (\"[{0:O}] {1}\" -f (Get-Date), $failureMessage)",
+                "    } catch { }",
+                "    exit 1",
+                "} finally {",
+                "    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
                 "}",
-                "Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue",
-                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
                 string.Empty);
         }
 
@@ -793,6 +1229,9 @@ namespace GmodAddonManager.Core.Services
 
     public class GitHubAsset
     {
+        [JsonProperty("url")]
+        public string ApiUrl { get; set; } = string.Empty;
+
         [JsonProperty("name")]
         public string Name { get; set; } = string.Empty;
 

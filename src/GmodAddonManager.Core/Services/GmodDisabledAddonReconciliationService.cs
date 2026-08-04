@@ -7,7 +7,7 @@ namespace GmodAddonManager.Core.Services
 {
     /// <summary>
     /// Reconciles valid, read-only observations of addonnomount.txt with the
-    /// dedicated GMod-originated exclusion Asset. Runtime I/O and persistence
+    /// dedicated GMod-originated membership Asset. Runtime I/O and persistence
     /// transactions remain the caller's responsibility.
     /// </summary>
     public sealed class GmodDisabledAddonReconciliationService
@@ -87,9 +87,9 @@ namespace GmodAddonManager.Core.Services
                 systemAsset.IsSystem = true;
                 changed = true;
             }
-            if (systemAsset.GetWholeState() != AddonState.Excluded)
+            if (!Enum.IsDefined(typeof(AddonState), systemAsset.GetWholeState()))
             {
-                systemAsset.SetWholeState(AddonState.Excluded);
+                systemAsset.SetWholeState(SystemAssetDefinitions.GmodDisabledDefaultState);
                 changed = true;
             }
             if (systemAsset.IsFavorite)
@@ -549,7 +549,7 @@ namespace GmodAddonManager.Core.Services
             {
                 Id = SystemAssetId
             };
-            asset.SetWholeState(AddonState.Excluded);
+            asset.SetWholeState(SystemAssetDefinitions.GmodDisabledDefaultState);
             return asset;
         }
 

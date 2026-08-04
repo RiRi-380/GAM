@@ -16,6 +16,16 @@ namespace GmodAddonManager.Core.Services
         public TimeSpan ScanCacheTtl { get; set; } = TimeSpan.FromSeconds(15);
         public int? MaxParallelAddonStateUpdates { get; set; }
         public int? MaxParallelWorkshopScans { get; set; }
+        /// <summary>
+        /// Discovers local addons for read-only presentation. This never enables
+        /// the legacy payload move/link management paths.
+        /// </summary>
+        public bool EnableLocalAddonDiscoveryExperimental { get; set; } = false;
+
+        /// <summary>
+        /// Legacy test/experiment switch for physical local-addon management.
+        /// Production UI must not set this option.
+        /// </summary>
         public bool EnableLocalAddonsExperimental { get; set; } = false;
     }
 }

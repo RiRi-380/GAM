@@ -6,6 +6,8 @@ using GmodAddonManager.UI.Services;
 
 using GmodAddonManager.UI.Views;
 
+using GmodAddonManager.UI.Models;
+
 using ReactiveUI;
 
 using System;
@@ -51,6 +53,8 @@ public enum AssetState
 public class AssetItemViewModel : ViewModelBase, IDisposable
 
 {
+
+    private static bool memberHistoryExperimentalEnabled;
 
     public const string GmodDisabledSystemAssetId =
 
@@ -104,11 +108,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = asset.Name;
 
-        var displayState = IsGmodDisabledAsset
-
-            ? AddonState.Excluded
-
-            : asset.State;
+        var displayState = asset.State;
 
         IsEnabled = displayState == AddonState.Enabled;
 
@@ -170,13 +170,14 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             VersionManageAsync,
             this.WhenAnyValue(x => x.CanManageVersions));
 
-        EditCommand = ReactiveCommand.CreateFromTask(
+        EditImageCommand = ReactiveCommand.CreateFromTask(
 
             EditAsync,
 
             System.Reactive.Linq.Observable.Select(
-                this.WhenAnyValue(x => x.IsSystem),
-                _ => CanEditImage));
+                 this.WhenAnyValue(x => x.IsSystem),
+                 _ => CanEditImage));
+        EditCommand = EditImageCommand;
 
         // Localization
 
@@ -223,6 +224,10 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(DisabledStateTooltip));
             this.RaisePropertyChanged(nameof(ExcludedStateTooltip));
             this.RaisePropertyChanged(nameof(FavoriteButtonText));
+            this.RaisePropertyChanged(nameof(SmartBadgeText));
+            this.RaisePropertyChanged(nameof(SmartRuleText));
+            this.RaisePropertyChanged(nameof(SmartAutomationStatusText));
+            this.RaisePropertyChanged(nameof(SmartAutomationDescription));
         }
 
     }
@@ -363,14 +368,55 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     // 蜑企勁繝懊ち繝ｳ繧定｡ｨ遉ｺ縺吶ｋ縺九←縺・
 
     public bool CanDelete => !IsSystem;
-    public bool CanManageVersions => !IsSystem;
+    public bool CanManageVersions =>
+        memberHistoryExperimentalEnabled && !IsSystem && !IsSmart;
     public bool CanToggleAssetActive => IsSubscribeAsset || !IsSystem;
-    public bool CanEditAddonDefaultState => IsSubscribeAsset || !IsSystem;
+    public bool CanEditAddonDefaultState =>
+        IsSubscribeAsset || IsGmodDisabledAsset || !IsSystem;
     public bool IsSubscribeAsset => Id == SystemAssetDefinitions.SubscribeId;
     public bool IsGmodDisabledAsset => Id == GmodDisabledSystemAssetId;
-    public int StateColumnSpan => IsSubscribeAsset ? 2 : 1;
-    public bool CanSetExcluded => !IsSystem || IsSubscribeAsset;
+    public bool IncludesUnavailableMembership =>
+        IsSubscribeAsset || IsGmodDisabledAsset || asset.RetainMissingReferences;
+    public int StateColumnSpan => IsSubscribeAsset || IsGmodDisabledAsset ? 2 : 1;
+    public bool CanSetExcluded =>
+        !IsSystem || IsSubscribeAsset || IsGmodDisabledAsset;
     public bool CanFavorite => !IsSystem;
+    public bool IsSmart => asset.IsSmart;
+    public bool IsSmartAutomationFrozen =>
+        asset.SmartAutomationState?.Status ==
+        SmartAssetAutomationStatus.FrozenInvalidRule;
+    public string SmartBadgeText => L.Get("SmartAsset.Badge");
+    public string SmartRuleText
+    {
+        get
+        {
+            var rule = asset.MembershipRule;
+            if (rule == null)
+            {
+                return string.Empty;
+            }
+
+            var kindLabel = rule.Kind == AssetMembershipRuleKind.Type
+                ? L.Get("SmartAsset.TypeLabel")
+                : L.Get("SmartAsset.TagLabel");
+            var valueKey = (rule.Kind == AssetMembershipRuleKind.Type
+                ? "AddonType."
+                : "AddonTag.") + rule.Value;
+            var localizedValue = L.Get(valueKey);
+            if (string.Equals(localizedValue, valueKey, StringComparison.Ordinal))
+            {
+                localizedValue = rule.Value;
+            }
+
+            return L.Format("SmartAsset.RuleFormat", kindLabel, localizedValue);
+        }
+    }
+    public string SmartAutomationStatusText => IsSmartAutomationFrozen
+        ? L.Get("SmartAsset.Status.Frozen")
+        : L.Get("SmartAsset.Status.Active");
+    public string SmartAutomationDescription => IsSmartAutomationFrozen
+        ? L.Get("SmartAsset.Status.FrozenDescription")
+        : L.Get("SmartAsset.Status.ActiveDescription");
     public string EnabledStateLabel => IsSubscribeAsset ? "ON" : L.Get("AssetList.Enabled");
     public string DisabledStateLabel => IsSubscribeAsset ? "OFF" : L.Get("AssetList.Disabled");
     public string ExcludedStateLabel => IsSubscribeAsset
@@ -407,7 +453,27 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
     public ReactiveCommand<Unit, Unit> VersionManageCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> EditImageCommand { get; }
+
     public ReactiveCommand<Unit, Unit> EditCommand { get; }    
+
+    public static void ApplyGlobalSettings(AppSettings settings)
+
+    {
+
+        ArgumentNullException.ThrowIfNull(settings);
+
+        memberHistoryExperimentalEnabled = settings.EnableMemberHistoryExperimental;
+
+    }
+
+    public void NotifySettingsChanged()
+
+    {
+
+        this.RaisePropertyChanged(nameof(CanManageVersions));
+
+    }
 
     // 繝舌・繧ｸ繝ｧ繝ｳ陦ｨ遉ｺ
 
@@ -622,7 +688,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
 
 
-            var dialog = new AssetEditDialog(asset, addonManager, allowRename: CanEditName);
+            var dialog = new AssetEditDialog(addonManager.ResolveAssetImagePath(asset));
 
             var result = await dialog.ShowDialog<AssetEditResult?>(mainWindow);
 
@@ -638,7 +704,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             await addonManager.ApplyAssetEditAsync(
                 Id,
-                result.Name,
+                asset.Name,
                 result.SourceImagePath,
                 result.Crop,
                 result.RemoveImage);
@@ -729,7 +795,9 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
             var dialogService = new DialogService();
 
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.AssetDeleteFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.AssetDeleteFailed", ex.Message));
 
         }
 
@@ -867,11 +935,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         name = updatedAsset.Name;
 
-        var displayState = IsGmodDisabledAsset
-
-            ? AddonState.Excluded
-
-            : updatedAsset.State;
+        var displayState = updatedAsset.State;
 
         IsEnabled = displayState == AddonState.Enabled;
 
@@ -894,6 +958,14 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(AssetActiveLabel));
         this.RaisePropertyChanged(nameof(AssetActiveTooltip));
         this.RaisePropertyChanged(nameof(VersionDisplay));
+        this.RaisePropertyChanged(nameof(IsSmart));
+        this.RaisePropertyChanged(nameof(CanManageVersions));
+        this.RaisePropertyChanged(nameof(IncludesUnavailableMembership));
+        this.RaisePropertyChanged(nameof(IsSmartAutomationFrozen));
+        this.RaisePropertyChanged(nameof(SmartBadgeText));
+        this.RaisePropertyChanged(nameof(SmartRuleText));
+        this.RaisePropertyChanged(nameof(SmartAutomationStatusText));
+        this.RaisePropertyChanged(nameof(SmartAutomationDescription));
 
 
 
@@ -1226,9 +1298,13 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
         {
 
+            SafeFileLogger.TryLogException("AssetItemViewModel.ShowDetailsAsync", ex);
+
             var dialogService = new DialogService();
 
-            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.DetailsDialogFailed"));
+            await dialogService.ShowErrorAsync(
+                L.Get("Error.Title"),
+                L.Format("Error.DetailsDialogFailed", ex.Message));
 
         }
 

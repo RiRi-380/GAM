@@ -1,11 +1,14 @@
 [Setup]
 AppName=Gmod Addon Manager
+AppId=Gmod Addon Manager
 AppVersion={#MyAppVersion}
 AppPublisher=RiRi-380
 AppPublisherURL=https://github.com/RiRi-380/GAM
 DefaultDirName={autopf}\GmodAddonManager
 DefaultGroupName=Gmod Addon Manager
 UninstallDisplayIcon={app}\GmodAddonManager.UI.exe
+Uninstallable=yes
+CreateUninstallRegKey=yes
 Compression=lzma2
 SolidCompression=yes
 OutputDir=..\dist
@@ -19,6 +22,14 @@ LicenseFile=..\publish\DISTRIBUTION-LICENSES.txt
 [Languages]
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[CustomMessages]
+english.VCRedistMissing=Microsoft Visual C++ Redistributable is not installed.%n%nSetup will install it automatically.
+japanese.VCRedistMissing=Microsoft Visual C++ 再頒布可能パッケージがインストールされていません。%n%nセットアップ中に自動でインストールします。
+english.VCRedistLaunchFailed=Microsoft Visual C++ Redistributable could not be started.
+japanese.VCRedistLaunchFailed=Microsoft Visual C++ 再頒布可能パッケージを起動できませんでした。
+english.VCRedistInstallFailed=Microsoft Visual C++ Redistributable failed with exit code %1.
+japanese.VCRedistInstallFailed=Microsoft Visual C++ 再頒布可能パッケージのインストールに失敗しました。終了コード: %1
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -34,12 +45,12 @@ Name: "{group}\{cm:UninstallProgram,Gmod Addon Manager}"; Filename: "{uninstalle
 Name: "{userdesktop}\Gmod Addon Manager"; Filename: "{app}\GmodAddonManager.UI.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\GmodAddonManager.UI.exe"; Description: "{cm:LaunchProgram,Gmod Addon Manager}"; Flags: nowait postinstall skipifsilent shellexec
-Filename: "{app}\GmodAddonManager.UI.exe"; Flags: nowait skipifnotsilent shellexec
+Filename: "{app}\GmodAddonManager.UI.exe"; Description: "{cm:LaunchProgram,Gmod Addon Manager}"; Flags: nowait postinstall shellexec; Check: ShouldLaunchApplication
 
 [Code]
 var
   VCRedistNeedsInstallFlag: Boolean;
+  VCRedistRestartRequiredFlag: Boolean;
 
 // Visual C++ Redistributableがインストールされているかチェック
 function IsVCRedistInstalled: Boolean;
@@ -92,12 +103,23 @@ function InitializeSetup(): Boolean;
 begin
   Result := True;
   VCRedistNeedsInstallFlag := not IsVCRedistInstalled();
+  VCRedistRestartRequiredFlag := False;
   
   if VCRedistNeedsInstallFlag then
   begin
-    MsgBox('Visual C++ 再頒布可能パッケージがインストールされていません。' + #13#10 +
-           'セットアップ中に自動的にインストールされます。', mbInformation, MB_OK);
+    MsgBox(ExpandConstant('{cm:VCRedistMissing}'), mbInformation, MB_OK);
   end;
+end;
+
+function NeedRestart(): Boolean;
+begin
+  Result := VCRedistRestartRequiredFlag;
+end;
+
+function ShouldLaunchApplication(): Boolean;
+begin
+  Result := (not WizardSilent) or
+    (CompareText(ExpandConstant('{param:LAUNCHAFTERINSTALL|0}'), '1') = 0);
 end;
 
 // セットアップ完了前にVC++ Redistributableをインストール
@@ -110,11 +132,24 @@ begin
     // VC++ Redistributableをサイレントインストール
     if FileExists(ExpandConstant('{tmp}\VC_redist.x64.exe')) then
     begin
-      if not Exec(ExpandConstant('{tmp}\VC_redist.x64.exe'), '/quiet /norestart', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+      if not Exec(ExpandConstant('{tmp}\VC_redist.x64.exe'), '/install /quiet /norestart', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
       begin
-        MsgBox('Visual C++ 再頒布可能パッケージのインストールに失敗しました。' + #13#10 +
-               'エラーコード: ' + IntToStr(ResultCode), mbError, MB_OK);
+        RaiseException(ExpandConstant('{cm:VCRedistLaunchFailed}'));
       end;
+
+      if ResultCode = 3010 then
+      begin
+        VCRedistRestartRequiredFlag := True;
+      end
+      else if (ResultCode <> 0) and (ResultCode <> 1638) then
+      begin
+        RaiseException(FmtMessage(
+          ExpandConstant('{cm:VCRedistInstallFailed}'), [IntToStr(ResultCode)]));
+      end;
+    end
+    else
+    begin
+      RaiseException(ExpandConstant('{cm:VCRedistLaunchFailed}'));
     end;
   end;
 end;

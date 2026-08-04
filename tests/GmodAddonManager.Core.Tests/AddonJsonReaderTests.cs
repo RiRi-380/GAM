@@ -5,6 +5,35 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class AddonJsonReaderTests
 {
     [Fact]
+    public void TryReadFromFile_ValidEmptyDocumentIsAuthoritative()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            "gam-addon-json-empty-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, "{}");
+
+            var ok = AddonJsonReader.TryReadClassificationDocumentFromFile(
+                path,
+                out var type,
+                out var tags);
+
+            Assert.True(ok);
+            Assert.Null(type);
+            Assert.Null(tags);
+            Assert.False(AddonJsonReader.TryReadFromFile(
+                path,
+                out _,
+                out _));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void TryReadFromFile_MissingFile_ReturnsFalse()
     {
         var ok = AddonJsonReader.TryReadFromFile("X:\\this\\path\\does\\not\\exist.json", out var type, out var tags);

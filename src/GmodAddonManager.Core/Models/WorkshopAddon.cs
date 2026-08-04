@@ -54,8 +54,17 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("type")]
         public string Type { get; set; }
 
+        [JsonProperty("typeMetadataStatus")]
+        public AddonClassificationMetadataStatus TypeMetadataStatus { get; set; }
+
         [JsonProperty("tags")]
         public string[] Tags { get; set; }
+
+        [JsonProperty("tagsMetadataStatus")]
+        public AddonClassificationMetadataStatus TagsMetadataStatus { get; set; }
+
+        [JsonProperty("classificationSourceLastWriteTimeUtc")]
+        public DateTime? ClassificationSourceLastWriteTimeUtc { get; set; }
 
         [JsonProperty("isGmaFile")]
         public bool IsGmaFile { get; set; }
@@ -91,7 +100,10 @@ namespace GmodAddonManager.Core.Models
             FolderPath = string.Empty;
             Description = string.Empty;
             Type = string.Empty;
+            TypeMetadataStatus = AddonClassificationMetadataStatus.Unknown;
             Tags = Array.Empty<string>();
+            TagsMetadataStatus = AddonClassificationMetadataStatus.Unknown;
+            ClassificationSourceLastWriteTimeUtc = null;
             IsGmaFile = false;
             NeedsTitleUpdate = false;
             IsFavorite = false;

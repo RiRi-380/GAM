@@ -13,6 +13,20 @@ namespace GmodAddonManager.Core.Services
 
         public static bool TryReadFromFile(string jsonPath, out string? type, out string[]? tags)
         {
+            var parsed = TryReadClassificationDocumentFromFile(
+                jsonPath,
+                out type,
+                out tags);
+            return parsed &&
+                   (!string.IsNullOrWhiteSpace(type) ||
+                    (tags != null && tags.Length > 0));
+        }
+
+        public static bool TryReadClassificationDocumentFromFile(
+            string jsonPath,
+            out string? type,
+            out string[]? tags)
+        {
             type = null;
             tags = null;
 
@@ -105,6 +119,7 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
 
+                var classificationDocumentRead = false;
                 var addonJsonEntry = entries.FirstOrDefault(e => IsAddonJsonPath(e.Path));
                 if (addonJsonEntry.Path != null)
                 {
@@ -126,7 +141,10 @@ namespace GmodAddonManager.Core.Services
                         stream.Position = offset;
                         var bytes = reader.ReadBytes((int)addonJsonEntry.Size);
                         var json = Encoding.UTF8.GetString(bytes).Trim('\uFEFF', '\u0000', '\u001A');
-                        TryParseAddonJson(json, out type, out tags);
+                        classificationDocumentRead = TryParseAddonJson(
+                            json,
+                            out type,
+                            out tags);
                     }
                 }
 
@@ -135,7 +153,9 @@ namespace GmodAddonManager.Core.Services
                     type = InferTypeFromPaths(entries.Select(e => e.Path));
                 }
 
-                return !string.IsNullOrWhiteSpace(type) || (tags != null && tags.Length > 0);
+                return classificationDocumentRead ||
+                       !string.IsNullOrWhiteSpace(type) ||
+                       (tags != null && tags.Length > 0);
             }
             catch
             {
@@ -185,7 +205,10 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
-            return !string.IsNullOrWhiteSpace(type) || (tags != null && tags.Length > 0);
+            // A syntactically valid addon.json is authoritative even when it
+            // explicitly provides no Type or Tags. Smart Assets need to
+            // distinguish that confirmed empty classification from I/O failure.
+            return true;
         }
 
         private static IEnumerable<string> SplitTags(string raw)

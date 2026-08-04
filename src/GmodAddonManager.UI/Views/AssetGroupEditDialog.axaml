@@ -1,0 +1,105 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        xmlns:views="using:GmodAddonManager.UI.Views"
+        mc:Ignorable="d" d:DesignWidth="560" d:DesignHeight="680"
+        x:Class="GmodAddonManager.UI.Views.AssetGroupEditDialog"
+        Title="{loc:Localize AssetGroup.DetailsTitle}"
+        Width="560"
+        Height="680"
+        MinWidth="440"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+
+    <Grid Margin="20" RowDefinitions="*,Auto">
+        <ScrollViewer Grid.Row="0"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="9">
+                <TextBlock Text="{loc:Localize AssetDetails.MemoLabel}"
+                           FontWeight="Bold"/>
+                <TextBox x:Name="MemoTextBox"
+                         MaxLength="4000"
+                         MinHeight="110"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         Watermark="{loc:Localize AssetDetails.MemoPlaceholder}"/>
+
+                <TextBlock Text="{loc:Localize AssetGroup.NameLabel}"
+                           FontWeight="Bold"
+                           Margin="0,10,0,0"/>
+                <TextBox x:Name="GroupNameTextBox"
+                         MaxLength="200"
+                         Watermark="{loc:Localize AssetGroup.NamePlaceholder}"
+                         TextChanged="OnNameChanged"/>
+                <TextBlock x:Name="NameValidationText"
+                           IsVisible="False"
+                           Foreground="#EF6C6C"
+                           FontSize="11"
+                           TextWrapping="Wrap"/>
+
+                <TextBlock Text="{loc:Localize AssetGroup.SummaryTitle}"
+                           FontWeight="Bold"
+                           Margin="0,12,0,0"/>
+                <Border BorderThickness="1"
+                        BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                        CornerRadius="6"
+                        Padding="12">
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto"
+                          ColumnSpacing="14"
+                          RowSpacing="7">
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="{loc:Localize AssetGroup.PathLabel}"
+                                   Opacity="0.65"/>
+                        <TextBlock x:Name="GroupPathText"
+                                   Grid.Row="0" Grid.Column="1"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="{loc:Localize AssetGroup.DirectContentsLabel}"
+                                   Opacity="0.65"/>
+                        <TextBlock x:Name="DirectContentsText"
+                                   Grid.Row="1" Grid.Column="1"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                   Text="{loc:Localize AssetGroup.RecursiveContentsLabel}"
+                                   Opacity="0.65"/>
+                        <TextBlock x:Name="RecursiveContentsText"
+                                   Grid.Row="2" Grid.Column="1"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0"
+                                   Text="{loc:Localize AssetGroup.AddonsLabel}"
+                                   Opacity="0.65"/>
+                        <TextBlock x:Name="AddonSummaryText"
+                                   Grid.Row="3" Grid.Column="1"/>
+                    </Grid>
+                </Border>
+
+                <Button x:Name="EditStructureButton"
+                        Click="OnEditStructure"
+                        HorizontalAlignment="Left"
+                        Padding="12,6"
+                        Content="{loc:Localize AssetGroup.EditStructure}"/>
+                <TextBlock Text="{loc:Localize AssetGroup.EditStructureDescription}"
+                           FontSize="11"
+                           Opacity="0.7"
+                           TextWrapping="Wrap"/>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,16,0,0">
+            <Button Click="OnCancel"
+                    Content="{loc:Localize Dialog.Cancel}"/>
+            <Button x:Name="SaveButton"
+                    Click="OnSave"
+                    Classes="accent"
+                    Content="{loc:Localize Dialog.Save}"/>
+        </StackPanel>
+    </Grid>
+</Window>

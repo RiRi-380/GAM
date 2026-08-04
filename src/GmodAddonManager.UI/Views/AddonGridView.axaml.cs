@@ -8,6 +8,7 @@ using Avalonia.VisualTree;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -19,16 +20,44 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 {
     private Point? _dragStartPoint;
     private bool _isDragging;
-    private int _lastStartIndex = -1;
-    private int _lastEndIndex = -1;
-    private bool _viewportExceptionLogged;
+    private bool _realizedItemExceptionLogged;
 
     private CancellationTokenSource? _scrollIdleCts;
     private ItemsRepeater? _itemsRepeater;
+    private readonly Dictionary<Control, int> _realizedAddonIndices = new();
+    private ResponsiveLayoutKind? _responsiveLayoutKind;
 
     public AddonGridView()
     {
         InitializeComponent();
+    }
+
+    public void ApplyResponsiveLayout(ResponsiveLayoutState layout)
+    {
+        var transitionedFromWide = _responsiveLayoutKind == ResponsiveLayoutKind.Wide;
+
+        FilterSplitView.DisplayMode = layout.UseOverlayPanes
+            ? SplitViewDisplayMode.Overlay
+            : SplitViewDisplayMode.Inline;
+        FilterSplitView.OpenPaneLength = layout.FilterPaneWidth;
+        FilterPaneToggleButton.IsVisible = layout.UseOverlayPanes;
+        FilterPaneCloseButton.IsVisible = layout.UseOverlayPanes;
+
+        if (!layout.UseOverlayPanes)
+        {
+            FilterSplitView.IsPaneOpen = true;
+        }
+        else if (_responsiveLayoutKind is null || transitionedFromWide)
+        {
+            FilterSplitView.IsPaneOpen = false;
+        }
+
+        _responsiveLayoutKind = layout.Kind;
+    }
+
+    private void OnFilterPaneToggleClick(object? sender, RoutedEventArgs e)
+    {
+        FilterSplitView.IsPaneOpen = !FilterSplitView.IsPaneOpen;
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -46,14 +75,30 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
         if (_itemsRepeater != null)
         {
-            _itemsRepeater.EffectiveViewportChanged -= OnEffectiveViewportChanged;
+            DetachRepeaterInteractions(_itemsRepeater);
             _itemsRepeater = null;
         }
 
         _itemsRepeater = this.FindControl<ItemsRepeater>("AddonItemsRepeater");
         if (_itemsRepeater != null)
         {
-            _itemsRepeater.EffectiveViewportChanged += OnEffectiveViewportChanged;
+            _itemsRepeater.ElementPrepared += OnRepeaterElementPrepared;
+            _itemsRepeater.ElementClearing += OnRepeaterElementClearing;
+            _itemsRepeater.ElementIndexChanged += OnRepeaterElementIndexChanged;
+
+            // Elements may already be realized before this deferred attachment
+            // runs. Seed the exact indices from the repeater instead of deriving
+            // them from card dimensions or scroll offsets.
+            foreach (var element in _itemsRepeater.GetVisualChildren().OfType<Control>())
+            {
+                var index = _itemsRepeater.GetElementIndex(element);
+                if (index >= 0)
+                {
+                    _realizedAddonIndices[element] = index;
+                }
+            }
+
+            ScheduleIdleRemoteLoad();
         }
 
     }
@@ -63,6 +108,13 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         if (sender is not Border border ||
             border.DataContext is not AddonItemViewModel addonVm ||
             DataContext is not AddonGridViewModel gridVm)
+        {
+            return;
+        }
+
+        // Local addons are surfaced for discovery only. Return before any
+        // selection clearing, selection-mode transition, or drag setup.
+        if (addonVm.IsLocal)
         {
             return;
         }
@@ -173,75 +225,70 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         }
     }
 
-    private void OnEffectiveViewportChanged(object? sender, EventArgs e)
+    private void OnRepeaterElementPrepared(
+        object? sender,
+        ItemsRepeaterElementPreparedEventArgs e)
     {
         try
         {
-            if (DataContext is not AddonGridViewModel gridVm || sender is not ItemsRepeater itemsRepeater)
+            if (sender is not ItemsRepeater || e.Index < 0)
             {
                 return;
             }
 
-            var scrollViewer = this.FindControl<ScrollViewer>("AddonScrollViewer");
-            if (scrollViewer == null)
-            {
-                return;
-            }
-
-            var viewport = new Rect(0, scrollViewer.Offset.Y, scrollViewer.Viewport.Width, scrollViewer.Viewport.Height);
-
-            double GetLayoutDouble(string name, double fallback)
-            {
-                var layout = itemsRepeater.Layout;
-                if (layout == null)
-                {
-                    return fallback;
-                }
-
-                var property = layout.GetType().GetProperty(name);
-                if (property?.PropertyType == typeof(double))
-                {
-                    return (double)(property.GetValue(layout) ?? fallback);
-                }
-
-                return fallback;
-            }
-
-            var itemHeight = GetLayoutDouble("MinItemHeight", 220);
-            var itemWidth = GetLayoutDouble("MinItemWidth", 200);
-            var rowSpacing = GetLayoutDouble("MinRowSpacing", 10);
-            var columnSpacing = GetLayoutDouble("MinColumnSpacing", 10);
-            var availableWidth = Math.Max(1, scrollViewer.Viewport.Width);
-            var columns = Math.Max(1, (int)Math.Floor((availableWidth + columnSpacing) / (itemWidth + columnSpacing)));
-            var rowHeight = itemHeight + rowSpacing;
-
-            var startRow = Math.Max(0, (int)Math.Floor(viewport.Y / rowHeight) - 1);
-            var visibleRows = Math.Ceiling(viewport.Height / rowHeight) + 2;
-            var startIndex = Math.Max(0, startRow * columns);
-            var endIndex = Math.Min(gridVm.FilteredAddons.Count, startIndex + (int)(visibleRows * columns));
-
-            if (startIndex == _lastStartIndex && endIndex == _lastEndIndex)
-            {
-                return;
-            }
-
-            _lastStartIndex = startIndex;
-            _lastEndIndex = endIndex;
-
-            _ = LoadVisibleRangeSafeAsync(gridVm, startIndex, endIndex, allowRemote: false);
-            ScheduleIdleRemoteLoad(gridVm, startIndex, endIndex);
+            _realizedAddonIndices[e.Element] = e.Index;
+            ScheduleIdleRemoteLoad();
         }
         catch (Exception ex)
         {
-            if (!_viewportExceptionLogged)
-            {
-                _viewportExceptionLogged = true;
-                SafeFileLogger.TryLogException("AddonGridView.OnEffectiveViewportChanged", ex);
-            }
+            LogRealizedItemExceptionOnce("AddonGridView.OnRepeaterElementPrepared", ex);
         }
     }
 
-    private void ScheduleIdleRemoteLoad(AddonGridViewModel gridVm, int startIndex, int endIndex)
+    private void OnRepeaterElementClearing(
+        object? sender,
+        ItemsRepeaterElementClearingEventArgs e)
+    {
+        try
+        {
+            if (e.Element.DataContext is AddonItemViewModel addonVm)
+            {
+                addonVm.ReleaseThumbnailBitmap();
+            }
+
+            _realizedAddonIndices.Remove(e.Element);
+            ScheduleIdleRemoteLoad();
+        }
+        catch (Exception ex)
+        {
+            LogRealizedItemExceptionOnce("AddonGridView.OnRepeaterElementClearing", ex);
+        }
+    }
+
+    private void OnRepeaterElementIndexChanged(
+        object? sender,
+        ItemsRepeaterElementIndexChangedEventArgs e)
+    {
+        try
+        {
+            if (e.NewIndex >= 0)
+            {
+                _realizedAddonIndices[e.Element] = e.NewIndex;
+            }
+            else
+            {
+                _realizedAddonIndices.Remove(e.Element);
+            }
+
+            ScheduleIdleRemoteLoad();
+        }
+        catch (Exception ex)
+        {
+            LogRealizedItemExceptionOnce("AddonGridView.OnRepeaterElementIndexChanged", ex);
+        }
+    }
+
+    private void ScheduleIdleRemoteLoad()
     {
         _scrollIdleCts?.Cancel();
         _scrollIdleCts?.Dispose();
@@ -260,7 +307,23 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    _ = LoadVisibleRangeSafeAsync(gridVm, startIndex, endIndex, allowRemote: true);
+                    if (DataContext is not AddonGridViewModel gridVm)
+                    {
+                        return;
+                    }
+
+                    var ranges = GetRealizedRanges(
+                        _realizedAddonIndices.Values,
+                        gridVm.FilteredAddons.Count);
+                    if (ranges.Count == 0)
+                    {
+                        return;
+                    }
+
+                    _ = LoadRealizedRangesSafeAsync(
+                        gridVm,
+                        ranges,
+                        token);
                 });
             }
             catch (OperationCanceledException)
@@ -271,6 +334,71 @@ public sealed partial class AddonGridView : UserControl, IDisposable
                 SafeFileLogger.TryLogException("AddonGridView.ScheduleIdleRemoteLoad", ex);
             }
         });
+    }
+
+    private static IReadOnlyList<(int StartIndex, int EndIndex)> GetRealizedRanges(
+        IEnumerable<int> realizedIndices,
+        int itemCount)
+    {
+        if (itemCount <= 0)
+        {
+            return Array.Empty<(int StartIndex, int EndIndex)>();
+        }
+
+        var orderedIndices = realizedIndices
+            .Where(index => index >= 0 && index < itemCount)
+            .Distinct()
+            .OrderBy(index => index)
+            .ToList();
+        if (orderedIndices.Count == 0)
+        {
+            return Array.Empty<(int StartIndex, int EndIndex)>();
+        }
+
+        var ranges = new List<(int StartIndex, int EndIndex)>();
+        var rangeStart = orderedIndices[0];
+        var previousIndex = orderedIndices[0];
+        foreach (var index in orderedIndices.Skip(1))
+        {
+            if (index != previousIndex + 1)
+            {
+                ranges.Add((rangeStart, previousIndex + 1));
+                rangeStart = index;
+            }
+
+            previousIndex = index;
+        }
+
+        ranges.Add((rangeStart, previousIndex + 1));
+        return ranges;
+    }
+
+    private void LogRealizedItemExceptionOnce(string context, Exception exception)
+    {
+        if (_realizedItemExceptionLogged)
+        {
+            return;
+        }
+
+        _realizedItemExceptionLogged = true;
+        SafeFileLogger.TryLogException(context, exception);
+    }
+
+    private void DetachRepeaterInteractions(ItemsRepeater itemsRepeater)
+    {
+        itemsRepeater.ElementPrepared -= OnRepeaterElementPrepared;
+        itemsRepeater.ElementClearing -= OnRepeaterElementClearing;
+        itemsRepeater.ElementIndexChanged -= OnRepeaterElementIndexChanged;
+
+        foreach (var element in _realizedAddonIndices.Keys)
+        {
+            if (element.DataContext is AddonItemViewModel addonVm)
+            {
+                addonVm.ReleaseThumbnailBitmap();
+            }
+        }
+
+        _realizedAddonIndices.Clear();
     }
 
     private async Task LoadVisibleRangeSafeAsync(
@@ -289,6 +417,26 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         }
     }
 
+    private async Task LoadRealizedRangesSafeAsync(
+        AddonGridViewModel gridVm,
+        IReadOnlyList<(int StartIndex, int EndIndex)> ranges,
+        CancellationToken token)
+    {
+        foreach (var range in ranges)
+        {
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            await LoadVisibleRangeSafeAsync(
+                gridVm,
+                range.StartIndex,
+                range.EndIndex,
+                allowRemote: true);
+        }
+    }
+
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
@@ -299,7 +447,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     {
         if (_itemsRepeater != null)
         {
-            _itemsRepeater.EffectiveViewportChanged -= OnEffectiveViewportChanged;
+            DetachRepeaterInteractions(_itemsRepeater);
             _itemsRepeater = null;
         }
 

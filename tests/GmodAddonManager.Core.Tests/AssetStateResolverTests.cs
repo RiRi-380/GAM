@@ -198,7 +198,7 @@ public sealed class AssetStateResolverTests
     }
 
     [Fact]
-    public void Resolve_GmodDisabledSystemAssetIsAuthoritativeExcludedSource()
+    public void Resolve_ExcludedGmodDisabledSystemAssetOverridesEnabledSubscribe()
     {
         var subscribe = CreateSubscribe(AddonState.Enabled);
         var gmodDisabled = new Asset(
@@ -220,6 +220,39 @@ public sealed class AssetStateResolverTests
         Assert.Equal(
             SystemAssetDefinitions.GmodDisabledId,
             Assert.Single(result.ExcludedByAssets).AssetId);
+    }
+
+    [Fact]
+    public void Resolve_EnabledGmodDisabledSystemAssetIsAnEnabledSource()
+    {
+        var subscribe = CreateSubscribe(AddonState.Disabled);
+        var gmodDisabled = CreateGmodDisabled(AddonState.Enabled, AddonId);
+
+        var result = Resolve(
+            AddonId,
+            [subscribe, gmodDisabled],
+            AddonId);
+
+        Assert.True(result.DesiredEnabled);
+        Assert.False(result.EnabledBySubscribe);
+        Assert.Equal(AddonStateResolutionReason.Enabled, result.Reason);
+        Assert.Equal(
+            SystemAssetDefinitions.GmodDisabledId,
+            Assert.Single(result.EnabledByAssets).AssetId);
+        Assert.Empty(result.ExcludedByAssets);
+    }
+
+    [Fact]
+    public void Resolve_DisabledGmodDisabledSystemAssetIsNeutral()
+    {
+        var gmodDisabled = CreateGmodDisabled(AddonState.Disabled, AddonId);
+
+        var result = Resolve(AddonId, [gmodDisabled], AddonId);
+
+        Assert.False(result.DesiredEnabled);
+        Assert.Equal(AddonStateResolutionReason.NoEnabledSource, result.Reason);
+        Assert.Empty(result.EnabledByAssets);
+        Assert.Empty(result.ExcludedByAssets);
     }
 
     private ResolvedAddonState Resolve(
@@ -261,6 +294,21 @@ public sealed class AssetStateResolverTests
             asset.Addons.Add(addonId);
         }
 
+        return asset;
+    }
+
+    private static Asset CreateGmodDisabled(
+        AddonState state,
+        params string[] addonIds)
+    {
+        var asset = new Asset(
+            SystemAssetDefinitions.GmodDisabledName,
+            isSystem: true)
+        {
+            Id = SystemAssetDefinitions.GmodDisabledId,
+            Addons = addonIds.ToList()
+        };
+        asset.SetWholeState(state);
         return asset;
     }
 }

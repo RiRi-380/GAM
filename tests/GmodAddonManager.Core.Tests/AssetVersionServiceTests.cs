@@ -172,6 +172,28 @@ public sealed class AssetVersionServiceTests
         Assert.Equal(AddonState.Excluded, asset.GetWholeState());
     }
 
+    [Fact]
+    public void VersionMutations_RejectSmartAssetMembership()
+    {
+        var service = new AssetVersionService();
+        var asset = CreateAsset(AddonState.Enabled, "100");
+        asset.MembershipRule = new AssetMembershipRule(
+            AssetMembershipRuleKind.Tag,
+            "Fun");
+        asset.VersionHistory.Add(CreateVersion(1, "100"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => service.CreateSnapshot(asset));
+        Assert.Throws<InvalidOperationException>(
+            () => service.RestoreSnapshot(asset, 1));
+        Assert.Throws<InvalidOperationException>(
+            () => service.DeleteSnapshot(asset, 1));
+        Assert.Throws<InvalidOperationException>(
+            () => service.ClearHistory(asset));
+        Assert.Equal(["100"], asset.Addons);
+        Assert.Single(asset.VersionHistory);
+    }
+
     private static Asset CreateAsset(AddonState state, params string[] addonIds)
     {
         var asset = new Asset("Versioned Asset");

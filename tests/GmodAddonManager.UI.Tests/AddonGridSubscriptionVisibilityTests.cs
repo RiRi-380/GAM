@@ -1,14 +1,13 @@
 using System.Reflection;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.ViewModels;
-using GmodAddonManager.UI.Views;
 
 namespace GmodAddonManager.UI.Tests;
 
 public sealed class AddonGridSubscriptionVisibilityTests
 {
     [Fact]
-    public void ThrottledFilterUpdatesReturnToTheUiScheduler()
+    public void OnlySearchTextUsesTheThrottledFilterPipeline()
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
@@ -17,13 +16,16 @@ public sealed class AddonGridSubscriptionVisibilityTests
             "ViewModels",
             "AddonGridViewModel.cs"));
 
+        var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.Contains(
-            ".Throttle(TimeSpan.FromMilliseconds(300))\n            .ObserveOn(RxApp.MainThreadScheduler)",
-            source.Replace("\r\n", "\n", StringComparison.Ordinal));
+            "this.WhenAnyValue(x => x.FilterText)\n            .Throttle(TimeSpan.FromMilliseconds(300))\n            .ObserveOn(RxApp.MainThreadScheduler)",
+            normalized);
+        Assert.DoesNotContain("x => x.CurrentAsset,", normalized, StringComparison.Ordinal);
+        Assert.DoesNotContain("x => x.ShowOnlyAssetAddons,", normalized, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AssetSelectionUsesOnlyTheDebouncedFilterPipeline()
+    public void AssetSelectionAppliesTheFilterImmediately()
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
@@ -41,11 +43,11 @@ public sealed class AddonGridSubscriptionVisibilityTests
 
         Assert.True(methodStart >= 0);
         Assert.True(methodEnd > methodStart);
-        Assert.DoesNotContain("ApplyFilter();", source[methodStart..methodEnd]);
+        Assert.Contains("ApplyFilter();", source[methodStart..methodEnd]);
     }
 
     [Fact]
-    public void SubscribeDetailsUsesARepeaterForLargeMembershipLists()
+    public void AssetDetailsUseSummaryInsteadOfDuplicatingTheAddonGrid()
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
@@ -54,9 +56,10 @@ public sealed class AddonGridSubscriptionVisibilityTests
             "Views",
             "AssetDetailsDialog.axaml"));
 
-        Assert.Contains("<ItemsRepeater ItemsSource=\"{Binding Addons}\"", source);
-        Assert.Contains("<StackLayout Orientation=\"Vertical\"/>", source);
-        Assert.DoesNotContain("<ItemsControl ItemsSource=\"{Binding Addons}\"", source);
+        Assert.DoesNotContain("ItemsSource=\"{Binding Addons}\"", source);
+        Assert.Contains("Text=\"{Binding MemberCountText}\"", source);
+        Assert.Contains("Text=\"{Binding AvailableCountText}\"", source);
+        Assert.Contains("Text=\"{Binding MissingCountText}\"", source);
     }
 
     [Fact]
@@ -96,12 +99,14 @@ public sealed class AddonGridSubscriptionVisibilityTests
             "subscribe-system-asset",
             ["*"],
             "100",
-            subscribedIds));
+            subscribedIds,
+            isLocal: false));
         Assert.False(InvokeMatchesAssetMembership(
             "subscribe-system-asset",
             ["*"],
             "200",
-            subscribedIds));
+            subscribedIds,
+            isLocal: false));
     }
 
     [Fact]
@@ -113,12 +118,82 @@ public sealed class AddonGridSubscriptionVisibilityTests
             "custom",
             ["200"],
             "200",
-            subscribedIds));
+            subscribedIds,
+            isLocal: false));
         Assert.False(InvokeMatchesAssetMembership(
             "custom",
             ["200"],
             "300",
-            subscribedIds));
+            subscribedIds,
+            isLocal: false));
+    }
+
+    [Fact]
+    public void LocalAddonIsDiscoverableOnlyBesideInitialSubscribeInventory()
+    {
+        var noSubscriptions = new HashSet<string>(StringComparer.Ordinal);
+
+        Assert.True(InvokeMatchesAssetMembership(
+            "subscribe-system-asset",
+            ["*"],
+            "local-folder-id",
+            noSubscriptions,
+            isLocal: true));
+        Assert.False(InvokeMatchesAssetMembership(
+            "custom",
+            ["local-folder-id"],
+            "local-folder-id",
+            noSubscriptions,
+            isLocal: true));
+    }
+
+    [Fact]
+    public void ImportedFixedAssetRetentionProducesOneVisibleRowPerReference()
+    {
+        var asset = new Asset("Imported")
+        {
+            Addons = ["100", "999"],
+            RetainMissingReferences = true
+        };
+        var unavailable = new WorkshopAddon("999", string.Empty)
+        {
+            Title = "Unavailable",
+            IsAvailable = false,
+            IsDownloadPending = false
+        };
+        var config = new Configuration
+        {
+            Assets = [asset],
+            RetainMissingAssetReferences = false,
+            SubscriptionBaselineInitialized = true,
+            AddonMetadata = new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal)
+            {
+                [unavailable.Id] = unavailable
+            }
+        };
+        var inventory = new List<WorkshopAddon>
+        {
+            new("100", string.Empty)
+            {
+                Title = "Installed",
+                IsAvailable = true,
+                IsDownloadPending = false
+            }
+        };
+        var subscribedIds = new HashSet<string>(StringComparer.Ordinal) { "100" };
+
+        InvokeAddRetainedMissingAddons(inventory, config, subscribedIds);
+        var visibleRows = inventory.Where(addon => InvokeMatchesAssetMembership(
+            asset.Id,
+            asset.Addons,
+            addon.Id,
+            subscribedIds,
+            addon.IsLocal)).ToList();
+
+        Assert.Equal(asset.Addons.Count, visibleRows.Count);
+        var synthetic = Assert.Single(visibleRows, addon => addon.Id == "999");
+        Assert.False(synthetic.IsAvailable);
+        Assert.False(synthetic.IsDownloadPending);
     }
 
     [Fact]
@@ -168,67 +243,13 @@ public sealed class AddonGridSubscriptionVisibilityTests
     {
         Assert.Equal(
             "(利用可能 300 / 購読中 1021)",
-            InvokeFormatSubscriptionCountDisplay(300, 300, 1021, japanese: true));
+            InvokeFormatSubscriptionCountDisplay(300, 300, 1021, 0, japanese: true));
         Assert.Equal(
             "(Showing 42 / Available 300 / Subscribed 1021)",
-            InvokeFormatSubscriptionCountDisplay(42, 300, 1021, japanese: false));
-    }
-
-    [Fact]
-    public void SubscribeDetailsIncludesAllMembershipOverOneThousandWithoutCreatingCards()
-    {
-        var subscribedIds = Enumerable.Range(1, 1021)
-            .Select(index => (100000000L + index).ToString(
-                System.Globalization.CultureInfo.InvariantCulture))
-            .ToList();
-        var metadata = subscribedIds
-            .Take(995)
-            .ToDictionary(
-                addonId => addonId,
-                addonId => new WorkshopAddon(addonId, string.Empty)
-                {
-                    Title = $"Addon {addonId}",
-                    IsAvailable = true,
-                    IsGmaFile = true
-                },
-                StringComparer.Ordinal);
-        var availableIds = subscribedIds
-            .Take(300)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var rows = InvokeBuildMembershipItems(
-            subscribedIds,
-            metadata,
-            availableIds,
-            isSubscribeAsset: true);
-
-        Assert.Equal(1021, rows.Count);
-        Assert.Equal(1021, rows.Select(row => row.AddonId).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(300, rows.Count(row => !row.IsUnavailable));
-        Assert.Equal(721, rows.Count(row => row.IsUnavailable));
-        Assert.All(rows.Where(row => row.IsUnavailable), row => Assert.Equal(0.55, row.RowOpacity));
-        Assert.All(rows, row => Assert.False(row.IsMissing));
-    }
-
-    [Fact]
-    public void CustomDetailsKeepsExistingMissingReferenceBehavior()
-    {
-        var metadata = new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal)
-        {
-            ["200"] = CreateMetadata(isAvailable: false, isDownloadPending: false)
-        };
-
-        var rows = InvokeBuildMembershipItems(
-            ["200", "metadata-absent"],
-            metadata,
-            new HashSet<string>(StringComparer.Ordinal),
-            isSubscribeAsset: false);
-
-        var row = Assert.Single(rows);
-        Assert.Equal("200", row.AddonId);
-        Assert.True(row.IsMissing);
-        Assert.False(row.IsUnavailable);
-        Assert.Equal(1.0, row.RowOpacity);
+            InvokeFormatSubscriptionCountDisplay(42, 300, 1021, 0, japanese: false));
+        Assert.Equal(
+            "(Available 300 / Subscribed 1021 / Local 2)",
+            InvokeFormatSubscriptionCountDisplay(300, 300, 1021, 2, japanese: false));
     }
 
     private static WorkshopAddon CreateMetadata(
@@ -247,7 +268,8 @@ public sealed class AddonGridSubscriptionVisibilityTests
         string assetId,
         IReadOnlyCollection<string> assetAddonIds,
         string addonId,
-        IReadOnlySet<string> subscribedAddonIds)
+        IReadOnlySet<string> subscribedAddonIds,
+        bool isLocal)
     {
         var method = typeof(AddonGridViewModel).GetMethod(
             "MatchesAssetMembership",
@@ -256,7 +278,7 @@ public sealed class AddonGridSubscriptionVisibilityTests
         Assert.NotNull(method);
         return Assert.IsType<bool>(method!.Invoke(
             null,
-            [assetId, assetAddonIds, addonId, subscribedAddonIds]));
+            [assetId, assetAddonIds, addonId, subscribedAddonIds, isLocal]));
     }
 
     private static bool InvokeShouldAddRetainedMissingAddon(
@@ -284,6 +306,7 @@ public sealed class AddonGridSubscriptionVisibilityTests
         int visibleCount,
         int availableCount,
         int subscribedCount,
+        int visibleLocalCount,
         bool japanese)
     {
         var method = typeof(AddonGridViewModel).GetMethod(
@@ -293,23 +316,28 @@ public sealed class AddonGridSubscriptionVisibilityTests
         Assert.NotNull(method);
         return Assert.IsType<string>(method!.Invoke(
             null,
-            [visibleCount, availableCount, subscribedCount, japanese]));
+            [visibleCount, availableCount, subscribedCount, visibleLocalCount, japanese]));
     }
 
-    private static List<AssetAddonMembershipItem> InvokeBuildMembershipItems(
-        IReadOnlyCollection<string> addonIds,
-        IReadOnlyDictionary<string, WorkshopAddon> addonMetadata,
-        IReadOnlySet<string> availableAddonIds,
-        bool isSubscribeAsset)
+    private static void InvokeAddRetainedMissingAddons(
+        IList<WorkshopAddon> inventory,
+        Configuration config,
+        IReadOnlySet<string> subscribedAddonIds)
     {
-        var method = typeof(AssetDetailsDialog).GetMethod(
-            "BuildMembershipItems",
+        var method = typeof(AddonGridViewModel).GetMethod(
+            "AddRetainedMissingAddons",
             BindingFlags.Static | BindingFlags.NonPublic);
 
         Assert.NotNull(method);
-        return Assert.IsType<List<AssetAddonMembershipItem>>(method!.Invoke(
+        method!.Invoke(
             null,
-            [addonIds, addonMetadata, availableAddonIds, isSubscribeAsset]));
+            [
+                inventory,
+                config,
+                subscribedAddonIds,
+                (Func<string, bool>)(_ => false),
+                CancellationToken.None
+            ]);
     }
 
     private static string FindRepositoryRoot()

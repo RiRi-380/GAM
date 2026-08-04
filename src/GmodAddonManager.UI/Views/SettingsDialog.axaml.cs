@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Models;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.ViewModels;
 using GmodAddonManager.UI;
 
@@ -29,6 +30,9 @@ public partial class SettingsDialog : Window
     public bool WasSaved { get; private set; }
 
     public bool RetainMissingAssetReferences { get; private set; }
+
+    public int MaxNestedGroupDepth { get; private set; } =
+        Configuration.MinimumNestedGroupDepth;
     
     public SettingsDialog()
         : this(false)
@@ -50,6 +54,7 @@ public partial class SettingsDialog : Window
             throw new ArgumentNullException(nameof(addonManager)))
     {
         this.addonManager = addonManager;
+        LoadManagerSettings();
     }
     
     private void LoadCurrentSettings()
@@ -71,8 +76,11 @@ public partial class SettingsDialog : Window
 
         BackgroundTitleUpdatesCheckBox.IsChecked = currentSettings.EnableBackgroundTitleUpdates;
         BackgroundAddonPreloadCheckBox.IsChecked = currentSettings.EnableBackgroundAddonPreload;
+        LocalAddonDiscoveryExperimentalCheckBox.IsChecked =
+            currentSettings.EnableLocalAddonDiscoveryExperimental;
+        MemberHistoryExperimentalCheckBox.IsChecked =
+            currentSettings.EnableMemberHistoryExperimental;
         RetainMissingAssetReferencesCheckBox.IsChecked = RetainMissingAssetReferences;
-        ApplyResetManagerTexts();
         
     }
     
@@ -132,13 +140,20 @@ public partial class SettingsDialog : Window
         {
             if (currentSettings == null) return;
             
-            var languageChanged = false;
-            
             // 言語が変更されたかチェック
             var newLanguage = LanguageComboBox.SelectedIndex == 0 ? "ja-JP" : "en-US";
-            if (newLanguage != currentSettings.Language)
+            var languageChanged = newLanguage != currentSettings.Language;
+
+            var enableLocalAddonDiscoveryExperimental =
+                LocalAddonDiscoveryExperimentalCheckBox.IsChecked ?? false;
+            var localAddonDiscoveryChanged =
+                enableLocalAddonDiscoveryExperimental !=
+                currentSettings.EnableLocalAddonDiscoveryExperimental;
+
+            if (!TryReadMaxNestedGroupDepth(out var maxNestedGroupDepth) ||
+                !await TrySaveMaxNestedGroupDepthAsync(maxNestedGroupDepth))
             {
-                languageChanged = true;
+                return;
             }
             
             // 設定を更新
@@ -146,6 +161,10 @@ public partial class SettingsDialog : Window
 
             currentSettings.EnableBackgroundTitleUpdates = BackgroundTitleUpdatesCheckBox.IsChecked ?? false;
             currentSettings.EnableBackgroundAddonPreload = BackgroundAddonPreloadCheckBox.IsChecked ?? false;
+            currentSettings.EnableLocalAddonDiscoveryExperimental =
+                enableLocalAddonDiscoveryExperimental;
+            currentSettings.EnableMemberHistoryExperimental =
+                MemberHistoryExperimentalCheckBox.IsChecked ?? false;
             RetainMissingAssetReferences =
                 RetainMissingAssetReferencesCheckBox.IsChecked ?? false;
             if (addonManager != null &&
@@ -165,11 +184,11 @@ public partial class SettingsDialog : Window
             // 保存
             currentSettings.Save();
             
-            if (languageChanged)
+            if (languageChanged || localAddonDiscoveryChanged)
             {
                 var restartNow = await dialogService.ShowConfirmAsync(
                     L.Get("Settings.LanguageRestartTitle"),
-                    L.Get("Settings.LanguageRestartMessage"));
+                    GetRestartMessage(languageChanged, localAddonDiscoveryChanged));
                 if (restartNow)
                 {
                     var restarted = await TryRestartApplicationAsync();
@@ -196,17 +215,97 @@ public partial class SettingsDialog : Window
             SafeFileLogger.TryLogException("SettingsDialog.OnSave", ex);
             await dialogService.ShowErrorAsync(
                 L.Get("Error.Title"),
-                L.Get("Error.SettingsDialogFailed"));
+                L.Format("Error.SettingsDialogFailed", ex.Message));
         }
     }
-    private void ApplyResetManagerTexts()
+
+    private void LoadManagerSettings()
     {
-        var japanese = currentSettings?.Language == "ja-JP";
-        ResetManagerTitleText.Text = japanese ? "GAMを初期化" : "Reset GAM";
-        ResetManagerButtonText.Text = japanese ? "GAMを初期化" : "Reset GAM";
-        ResetManagerDescriptionText.Text = japanese
-            ? "Custom Asset・お気に入り・Version・共通除外を初期化します。Steamの購読とWorkshopのアドオン本体は削除しません。"
-            : "Resets Custom Assets, favorites, Versions, and global exclusions. Steam subscriptions and Workshop addon files are not deleted.";
+        if (addonManager == null)
+        {
+            return;
+        }
+
+        MaxNestedGroupDepth = addonManager.GetConfiguration().MaxNestedGroupDepth;
+        MaxNestedGroupDepthNumericUpDown.Value = MaxNestedGroupDepth;
+    }
+
+    private bool TryReadMaxNestedGroupDepth(out int value)
+    {
+        value = Configuration.MinimumNestedGroupDepth;
+        var input = MaxNestedGroupDepthNumericUpDown.Value;
+        if (!input.HasValue ||
+            input.Value != decimal.Truncate(input.Value) ||
+            input.Value < Configuration.MinimumNestedGroupDepth ||
+            input.Value > Configuration.MaximumNestedGroupDepth)
+        {
+            ShowMaxNestedGroupDepthError(
+                L.Format(
+                    "Settings.MaxNestedGroupDepthRangeError",
+                    Configuration.MinimumNestedGroupDepth,
+                    Configuration.MaximumNestedGroupDepth));
+            return false;
+        }
+
+        value = decimal.ToInt32(input.Value);
+        ClearMaxNestedGroupDepthError();
+        return true;
+    }
+
+    private async Task<bool> TrySaveMaxNestedGroupDepthAsync(int value)
+    {
+        if (addonManager == null ||
+            addonManager.GetConfiguration().MaxNestedGroupDepth == value)
+        {
+            MaxNestedGroupDepth = value;
+            return true;
+        }
+
+        try
+        {
+            await addonManager.SetMaxNestedGroupDepthAsync(value);
+            MaxNestedGroupDepth = value;
+            ClearMaxNestedGroupDepthError();
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            ShowMaxNestedGroupDepthError(
+                L.Format("Settings.MaxNestedGroupDepthSaveError", ex.Message));
+            return false;
+        }
+        catch (InvalidOperationException ex)
+        {
+            ShowMaxNestedGroupDepthError(
+                L.Format("Settings.MaxNestedGroupDepthSaveError", ex.Message));
+            return false;
+        }
+    }
+
+    private void ShowMaxNestedGroupDepthError(string message)
+    {
+        MaxNestedGroupDepthErrorTextBlock.Text = message;
+        MaxNestedGroupDepthErrorTextBlock.IsVisible = true;
+    }
+
+    private void ClearMaxNestedGroupDepthError()
+    {
+        MaxNestedGroupDepthErrorTextBlock.Text = string.Empty;
+        MaxNestedGroupDepthErrorTextBlock.IsVisible = false;
+    }
+
+    private static string GetRestartMessage(
+        bool languageChanged,
+        bool localAddonDiscoveryChanged)
+    {
+        if (languageChanged && localAddonDiscoveryChanged)
+        {
+            return L.Get("Settings.LanguageAndLocalAddonDiscoveryRestartMessage");
+        }
+
+        return languageChanged
+            ? L.Get("Settings.LanguageRestartMessage")
+            : L.Get("Settings.LocalAddonDiscoveryRestartMessage");
     }
 
     private async void OnOpenLogFolder(object? sender, RoutedEventArgs e)

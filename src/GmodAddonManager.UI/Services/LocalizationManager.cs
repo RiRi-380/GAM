@@ -134,12 +134,6 @@ namespace GmodAddonManager.UI.Services
                 {
                     return resources;
                 }
-
-                // Fallback for legacy Shift-JIS encoded files
-                if (TryLoadResource(bytes, Encoding.GetEncoding(932), out resources))
-                {
-                    return resources;
-                }
             }
             catch (Exception ex)
             {

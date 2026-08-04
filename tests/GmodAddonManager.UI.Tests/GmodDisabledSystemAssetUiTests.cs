@@ -1,10 +1,11 @@
 using System.Reflection;
+using System.Reactive;
 using System.Windows.Input;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
-using GmodAddonManager.UI.Views;
+using ReactiveUI;
 
 namespace GmodAddonManager.UI.Tests;
 
@@ -15,7 +16,7 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
         "GAM_UI_GmodDisabledAsset_" + Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public async Task FixedAssetIsSecondAndEveryMutationControlIsLocked()
+    public async Task FixedAssetIsSecondAndOnlyWholeStateMutationIsAvailable()
     {
         using var manager = await CreateManagerAsync();
         var configuration = manager.GetConfiguration();
@@ -40,8 +41,8 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
         Assert.Equal(1, viewModel.AddonCount);
         Assert.Equal(["100"], viewModel.GetAddonIds());
         Assert.True(viewModel.IsSystem);
-        Assert.True(viewModel.IsExcludedState);
-        Assert.Equal("#F44336", viewModel.AssetStateColor);
+        Assert.True(viewModel.IsEnabledState);
+        Assert.Equal("#4CAF50", viewModel.AssetStateColor);
 
         Assert.False(viewModel.CanEditName);
         Assert.False(viewModel.CanEditImage);
@@ -49,17 +50,58 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
         Assert.False(viewModel.CanFavorite);
         Assert.False(viewModel.CanManageVersions);
         Assert.False(viewModel.CanToggleAssetActive);
-        Assert.False(viewModel.CanEditAddonDefaultState);
-        Assert.False(viewModel.CanSetExcluded);
+        Assert.True(viewModel.CanEditAddonDefaultState);
+        Assert.True(viewModel.CanSetExcluded);
+        Assert.Equal(2, viewModel.StateColumnSpan);
 
         Assert.False(((ICommand)viewModel.EditCommand).CanExecute(null));
         Assert.False(((ICommand)viewModel.DeleteCommand).CanExecute(null));
         Assert.False(((ICommand)viewModel.ToggleFavoriteCommand).CanExecute(null));
         Assert.False(((ICommand)viewModel.VersionManageCommand).CanExecute(null));
         Assert.False(((ICommand)viewModel.ToggleEnabledCommand).CanExecute(null));
-        Assert.False(((ICommand)viewModel.SetEnabledCommand).CanExecute(null));
-        Assert.False(((ICommand)viewModel.SetDisabledCommand).CanExecute(null));
-        Assert.False(((ICommand)viewModel.SetExcludedCommand).CanExecute(null));
+        Assert.True(((ICommand)viewModel.SetEnabledCommand).CanExecute(null));
+        Assert.True(((ICommand)viewModel.SetDisabledCommand).CanExecute(null));
+        Assert.True(((ICommand)viewModel.SetExcludedCommand).CanExecute(null));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WholeStateChoicesWorkWithZeroOrMoreMembers(bool hasMember)
+    {
+        using var manager = await CreateManagerAsync();
+        var disabledAsset = GetOrCreateDisabledAsset(manager.GetConfiguration());
+        disabledAsset.State = AddonState.Disabled;
+        if (hasMember)
+        {
+            disabledAsset.AddAddon("100");
+        }
+
+        using var viewModel = new AssetItemViewModel(
+            disabledAsset,
+            manager,
+            null!,
+            null!);
+
+        Assert.Equal(hasMember ? 1 : 0, viewModel.AddonCount);
+        Assert.True(viewModel.IsDisabledState);
+        Assert.True(viewModel.CanEditAddonDefaultState);
+        Assert.True(viewModel.CanSetExcluded);
+        Assert.True(((ICommand)viewModel.SetEnabledCommand).CanExecute(null));
+        Assert.True(((ICommand)viewModel.SetDisabledCommand).CanExecute(null));
+        Assert.True(((ICommand)viewModel.SetExcludedCommand).CanExecute(null));
+
+        await ExecuteAsync(viewModel.SetEnabledCommand);
+        Assert.Equal(AddonState.Enabled, disabledAsset.State);
+        Assert.True(viewModel.IsEnabledState);
+
+        await ExecuteAsync(viewModel.SetExcludedCommand);
+        Assert.Equal(AddonState.Excluded, disabledAsset.State);
+        Assert.True(viewModel.IsExcludedState);
+
+        await ExecuteAsync(viewModel.SetDisabledCommand);
+        Assert.Equal(AddonState.Disabled, disabledAsset.State);
+        Assert.True(viewModel.IsDisabledState);
     }
 
     [Fact]
@@ -106,36 +148,6 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
     }
 
     [Fact]
-    public void FixedAssetDetailsKeepEveryMembershipEntryIncludingUnavailableMetadata()
-    {
-        var method = typeof(AssetDetailsDialog).GetMethod(
-            "BuildMembershipItems",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-
-        var rows = Assert.IsType<List<AssetAddonMembershipItem>>(method!.Invoke(
-            null,
-            [
-                new[] { "100", "metadata-absent" },
-                new Dictionary<string, WorkshopAddon>(StringComparer.Ordinal)
-                {
-                    ["100"] = new WorkshopAddon("100", string.Empty)
-                    {
-                        Title = "Disabled addon",
-                        IsAvailable = true
-                    }
-                },
-                new HashSet<string>(StringComparer.Ordinal) { "100" },
-                true
-            ]));
-
-        Assert.Equal(2, rows.Count);
-        Assert.False(rows[0].IsUnavailable);
-        Assert.True(rows[1].IsUnavailable);
-        Assert.False(string.IsNullOrWhiteSpace(rows[1].Title));
-    }
-
-    [Fact]
     public void FixedAssetUsesExplicitVisibleVersusMembershipCount()
     {
         var method = typeof(AddonGridViewModel).GetMethod(
@@ -145,22 +157,6 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
 
         Assert.Equal("(5)", method!.Invoke(null, [5, 5]));
         Assert.Equal("(3/5)", method.Invoke(null, [3, 5]));
-    }
-
-    [Fact]
-    public void DetailsWiringTreatsFixedAssetAsAnAuthoritativeMembershipList()
-    {
-        var source = File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(),
-            "src",
-            "GmodAddonManager.UI",
-            "Views",
-            "AssetDetailsDialog.axaml.cs"));
-
-        Assert.Contains(
-            "assetViewModel.IsSubscribeAsset || assetViewModel.IsGmodDisabledAsset",
-            source,
-            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -227,7 +223,7 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
     }
 
     [Fact]
-    public void FixedCardShowsExcludedAsReadOnlyState()
+    public void FixedCardUsesStandardStateEditorWithoutReadOnlyDuplicate()
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
@@ -235,21 +231,17 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
             "GmodAddonManager.UI",
             "Views",
             "AssetListView.axaml"));
-        var marker = "IsVisible=\"{Binding IsGmodDisabledAsset}\"";
-        var markerIndex = source.IndexOf(marker, StringComparison.Ordinal);
-
-        Assert.True(markerIndex >= 0);
-        var blockStart = source.LastIndexOf(
-            "<TextBlock",
-            markerIndex,
-            StringComparison.Ordinal);
-        Assert.True(blockStart >= 0);
-        var fixedStateBlock = source[blockStart..(markerIndex + marker.Length)];
         Assert.Contains(
-            "Text=\"{loc:Localize AssetList.Excluded}\"",
-            fixedStateBlock,
+            "IsVisible=\"{Binding CanEditAddonDefaultState}\"",
+            source,
             StringComparison.Ordinal);
-        Assert.Contains("Foreground=\"#F44336\"", fixedStateBlock, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding SetEnabledCommand}\"", source, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding SetDisabledCommand}\"", source, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding SetExcludedCommand}\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IsVisible=\"{Binding IsGmodDisabledAsset}\"",
+            source,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -330,7 +322,7 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
             isSystem: true)
         {
             Id = AssetItemViewModel.GmodDisabledSystemAssetId,
-            State = AddonState.Excluded
+            State = SystemAssetDefinitions.GmodDisabledDefaultState
         };
         configuration.Assets.Add(created);
         return created;
@@ -376,6 +368,17 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
 
         await manager.InitializeAsync();
         return manager;
+    }
+
+    private static async Task ExecuteAsync(ReactiveCommand<Unit, Unit> command)
+    {
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var execution = command.Execute().Subscribe(
+            _ => { },
+            completion.SetException,
+            () => completion.SetResult(true));
+        await completion.Task;
     }
 
     private static void DeleteDirectoryWithRetry(string path)

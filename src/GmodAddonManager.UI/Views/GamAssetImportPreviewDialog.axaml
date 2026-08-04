@@ -1,0 +1,133 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        mc:Ignorable="d"
+        d:DesignWidth="600"
+        d:DesignHeight="520"
+        x:Class="GmodAddonManager.UI.Views.GamAssetImportPreviewDialog"
+        Title="{loc:Localize GamAssetFile.ImportPreviewTitle}"
+        Width="600"
+        Height="520"
+        MinWidth="440"
+        MinHeight="400"
+        CanResize="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel Margin="24">
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,18,0,0">
+            <Button Content="{loc:Localize Dialog.Cancel}"
+                    IsCancel="True"
+                    Click="OnCancel"/>
+            <Button x:Name="ImportButton"
+                    Content="{loc:Localize GamAssetFile.Import}"
+                    Classes="accent"
+                    IsDefault="True"
+                    Click="OnImport"/>
+        </StackPanel>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14">
+                <TextBlock Text="{loc:Localize GamAssetFile.ImportPreviewDescription}"
+                           Opacity="0.78"
+                           TextWrapping="Wrap"/>
+
+                <StackPanel Spacing="5">
+                    <TextBlock Text="{loc:Localize Dialog.AssetName}"
+                               FontWeight="SemiBold"/>
+                    <TextBox x:Name="AssetNameTextBox"
+                             TextChanged="OnAssetNameChanged"
+                             MaxLength="200"
+                             Watermark="{loc:Localize Dialog.AssetNamePlaceholder}"/>
+                    <TextBlock x:Name="AssetNameErrorTextBlock"
+                               IsVisible="False"
+                               Foreground="#F08A8A"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <Border Padding="16"
+                        CornerRadius="8"
+                        Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                          ColumnSpacing="18"
+                          RowSpacing="9">
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.FormatLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="FormatTextBlock" Grid.Row="0" Grid.Column="1"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.KindLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="KindTextBlock" Grid.Row="1" Grid.Column="1"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.StateLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="StateTextBlock" Grid.Row="2" Grid.Column="1"/>
+                        <TextBlock x:Name="ReferenceCountLabelTextBlock"
+                                   Grid.Row="3" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.ReferenceCountLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="ReferenceCountTextBlock" Grid.Row="3" Grid.Column="1"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0"
+                                   Text="{loc:Localize GamAssetFile.ImageLabel}"
+                                   Opacity="0.7"/>
+                        <TextBlock x:Name="ImageTextBlock" Grid.Row="4" Grid.Column="1"/>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="SmartSnapshotPanel"
+                        IsVisible="False"
+                        Padding="14"
+                        CornerRadius="8"
+                        Background="#172532">
+                    <TextBlock Text="{loc:Localize GamAssetFile.SmartSnapshotDescription}"
+                               FontSize="12"
+                               Opacity="0.86"
+                               TextWrapping="Wrap"/>
+                </Border>
+
+                <Border x:Name="MissingPanel"
+                        Padding="16"
+                        CornerRadius="8"
+                        Background="#2B2215">
+                    <StackPanel Spacing="9">
+                        <TextBlock x:Name="MissingSummaryTextBlock"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Text="{loc:Localize GamAssetFile.MissingDescription}"
+                                   FontSize="12"
+                                   Opacity="0.8"
+                                   TextWrapping="Wrap"/>
+                        <Button x:Name="CopyMissingUrlsButton"
+                                Content="{loc:Localize GamAssetFile.CopyMissingUrls}"
+                                HorizontalAlignment="Left"
+                                Click="OnCopyMissingUrls"/>
+                        <TextBlock x:Name="CopyMissingUrlsErrorTextBlock"
+                                   IsVisible="False"
+                                   Foreground="#F08A8A"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Padding="14"
+                        CornerRadius="8"
+                        Background="#172532">
+                    <TextBlock Text="{loc:Localize GamAssetFile.NoSteamChanges}"
+                               TextWrapping="Wrap"/>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

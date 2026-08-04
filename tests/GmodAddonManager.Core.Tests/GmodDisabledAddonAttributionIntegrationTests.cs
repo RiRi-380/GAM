@@ -245,7 +245,7 @@ public sealed class GmodDisabledAddonAttributionIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task ProtectedAssetIdBlocksMutationsEvenWhenIsSystemFlagIsCorrupted()
+    public async Task ProtectedAssetIdBlocksIdentityMembershipAndVersionMutationsButAllowsWholeState()
     {
         using var manager = await CreateManagerAsync("100");
         var disabled = manager.GetConfiguration().Assets.Single(
@@ -288,17 +288,50 @@ public sealed class GmodDisabledAddonAttributionIntegrationTests : IDisposable
         await manager.EnableAssetAsync(disabled.Id);
         await manager.DisableAssetAsync(disabled.Id);
         await manager.SetAssetEnabledAsync(disabled.Id, enabled: false);
-        await manager.ApplyAssetDefaultStateAsync(disabled.Id, AddonState.Enabled);
         var exclusive = await manager.ApplyAssetExclusiveAsync(disabled.Id);
 
         Assert.False(exclusive.Success);
         Assert.Contains(disabled, manager.GetConfiguration().Assets);
         Assert.Equal(SystemAssetDefinitions.GmodDisabledName, disabled.Name);
-        Assert.Equal(AddonState.Excluded, disabled.GetWholeState());
+        Assert.Equal(SystemAssetDefinitions.GmodDisabledDefaultState, disabled.GetWholeState());
         Assert.Equal(["100"], disabled.Addons);
         Assert.False(disabled.IsFavorite);
         Assert.Single(disabled.VersionHistory);
         Assert.Equal(undoCount, manager.GetUndoManager().GetHistory(100).Count);
+
+        await manager.ApplyAssetDefaultStateAsync(disabled.Id, AddonState.Enabled);
+
+        Assert.Equal(AddonState.Enabled, disabled.GetWholeState());
+        Assert.Equal(["100"], disabled.Addons);
+        Assert.Equal(undoCount + 1, manager.GetUndoManager().GetHistory(100).Count);
+    }
+
+    [Theory]
+    [InlineData(AddonState.Enabled)]
+    [InlineData(AddonState.Disabled)]
+    [InlineData(AddonState.Excluded)]
+    public async Task WholeState_PersistsAcrossRuntimeReconcileAndRestart(AddonState state)
+    {
+        using (var first = await CreateManagerAsync("100"))
+        {
+            WriteNoMount("100");
+            await first.RefreshGmodDisabledAddonsFromRuntimeAsync();
+            var disabled = first.GetConfiguration().Assets.Single(
+                asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+            Assert.Equal(["100"], disabled.Addons);
+
+            await first.ApplyAssetDefaultStateAsync(disabled.Id, state);
+            await first.RefreshGmodDisabledAddonsFromRuntimeAsync();
+
+            Assert.Equal(state, disabled.GetWholeState());
+            Assert.Equal(["100"], disabled.Addons);
+        }
+
+        using var restarted = await CreateManagerAsync("100");
+        var persisted = restarted.GetConfiguration().Assets.Single(
+            asset => asset.Id == SystemAssetDefinitions.GmodDisabledId);
+        Assert.Equal(state, persisted.GetWholeState());
+        Assert.Equal(["100"], persisted.Addons);
     }
 
     [Fact]
