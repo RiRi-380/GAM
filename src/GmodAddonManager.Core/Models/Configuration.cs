@@ -104,6 +104,16 @@ namespace GmodAddonManager.Core.Models
         public PendingGamRuntimeWrite? PendingGamRuntimeWrite { get; set; }
 
         /// <summary>
+        /// Durable latch used when startup reconciliation needs a runtime apply
+        /// before PendingChangeManager is available. The pending.json marker is
+        /// created first when the provider arrives, then this latch is cleared.
+        /// A crash can therefore cause a harmless duplicate apply, never a lost
+        /// desired-state transition.
+        /// </summary>
+        [JsonProperty("pendingRuntimeApplyRequired")]
+        public bool PendingRuntimeApplyRequired { get; set; }
+
+        /// <summary>
         /// One valid post-upgrade observation must classify only runtime OFF
         /// states that the pre-attribution Asset model expected to be ON.
         /// </summary>
@@ -136,6 +146,7 @@ namespace GmodAddonManager.Core.Models
             LastObservedGmodRuntimeAtUtc = null;
             LastObservedGmodStateStorePath = null;
             PendingGamRuntimeWrite = null;
+            PendingRuntimeApplyRequired = false;
             GmodAttributionMigrationPending = false;
         }
 

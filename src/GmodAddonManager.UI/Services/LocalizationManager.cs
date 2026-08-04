@@ -13,6 +13,7 @@ namespace GmodAddonManager.UI.Services
 {
     public class LocalizationManager : INotifyPropertyChanged
     {
+        private const string DefaultLanguage = "en-US";
         private static LocalizationManager? _instance;
         private Dictionary<string, Dictionary<string, string>> _resources;
         private string _currentLanguage;
@@ -60,6 +61,13 @@ namespace GmodAddonManager.UI.Services
         }
 
         private LocalizationManager()
+            : this(
+                "ja-JP",
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources"))
+        {
+        }
+
+        internal LocalizationManager(string currentLanguage, string resourcesPath)
         {
 #if DEBUG
             SafeFileLogger.TryLogInfo(
@@ -68,11 +76,11 @@ namespace GmodAddonManager.UI.Services
 #endif
 
             _resources = new Dictionary<string, Dictionary<string, string>>();
-            _currentLanguage = "ja-JP";
+            _currentLanguage = currentLanguage;
 
             try
             {
-                LoadResources();
+                LoadResources(resourcesPath);
 #if DEBUG
                 SafeFileLogger.TryLogInfo(
                     "LocalizationManager.LoadResources",
@@ -88,35 +96,43 @@ namespace GmodAddonManager.UI.Services
                     $"LoadResources failed at: {DateTime.Now:O}; using empty fallback dictionaries.");
 #endif
 
-                _resources["ja-JP"] = new Dictionary<string, string>();
-                _resources["en-US"] = new Dictionary<string, string>();
+                EnsureLanguageDictionaries();
             }
         }
 
-        private void LoadResources()
+        internal LocalizationManager(
+            string currentLanguage,
+            Dictionary<string, Dictionary<string, string>> resources)
         {
-            try
+            _currentLanguage = currentLanguage;
+            _resources = resources.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value != null
+                    ? new Dictionary<string, string>(pair.Value, StringComparer.Ordinal)
+                    : new Dictionary<string, string>(StringComparer.Ordinal),
+                StringComparer.OrdinalIgnoreCase);
+            EnsureLanguageDictionaries();
+        }
+
+        private void LoadResources(string resourcesPath)
+        {
+            // Load each language independently. A malformed or unreadable current-language
+            // file must not discard a usable default-language dictionary.
+            _resources[DefaultLanguage] = LoadResourceFile(
+                Path.Combine(resourcesPath, $"{DefaultLanguage}.json"));
+            _resources["ja-JP"] = LoadResourceFile(
+                Path.Combine(resourcesPath, "ja-JP.json"));
+            EnsureLanguageDictionaries();
+        }
+
+        private void EnsureLanguageDictionaries()
+        {
+            foreach (var language in new[] { DefaultLanguage, "ja-JP" })
             {
-                var resourcesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
-
-                _resources["ja-JP"] = LoadResourceFile(Path.Combine(resourcesPath, "ja-JP.json"));
-                _resources["en-US"] = LoadResourceFile(Path.Combine(resourcesPath, "en-US.json"));
-
-                if (!_resources.ContainsKey("ja-JP"))
+                if (!_resources.TryGetValue(language, out var dictionary) || dictionary == null)
                 {
-                    _resources["ja-JP"] = new Dictionary<string, string>();
+                    _resources[language] = new Dictionary<string, string>(StringComparer.Ordinal);
                 }
-
-                if (!_resources.ContainsKey("en-US"))
-                {
-                    _resources["en-US"] = new Dictionary<string, string>();
-                }
-            }
-            catch (Exception ex)
-            {
-                SafeFileLogger.TryLogException("LocalizationManager.LoadResources", ex);
-                _resources["ja-JP"] = new Dictionary<string, string>();
-                _resources["en-US"] = new Dictionary<string, string>();
             }
         }
 
@@ -176,14 +192,33 @@ namespace GmodAddonManager.UI.Services
                 return string.Empty;
             }
 
-            if (_resources.TryGetValue(_currentLanguage, out var langResources) &&
-                langResources != null &&
-                langResources.TryGetValue(key, out var value))
+            if (TryGetNonEmptyString(_currentLanguage, key, out var value))
+            {
+                return value;
+            }
+
+            if (!string.Equals(_currentLanguage, DefaultLanguage, StringComparison.OrdinalIgnoreCase) &&
+                TryGetNonEmptyString(DefaultLanguage, key, out value))
             {
                 return value;
             }
 
             return key;
+        }
+
+        private bool TryGetNonEmptyString(string language, string key, out string value)
+        {
+            if (_resources.TryGetValue(language, out var languageResources) &&
+                languageResources != null &&
+                languageResources.TryGetValue(key, out var candidate) &&
+                !string.IsNullOrWhiteSpace(candidate))
+            {
+                value = candidate;
+                return true;
+            }
+
+            value = string.Empty;
+            return false;
         }
 
         public string this[string key] => GetString(key);

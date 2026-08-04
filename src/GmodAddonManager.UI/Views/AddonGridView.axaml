@@ -24,10 +24,14 @@
                     BorderBrush="{Binding BorderColor}"
                     Opacity="{Binding CardOpacity}"
                     ToolTip.Tip="{Binding RuntimeStateTooltip}"
+                    AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.HelpText="{Binding RuntimeStateTooltip}"
+                    Classes="addonCard"
                     Classes.selected="{Binding IsSelected}"
                     Classes.selectionMode="{Binding $parent[UserControl].DataContext.IsSelectionMode}"
                     Classes.local="{Binding IsLocal}"
+                    Focusable="True"
+                    KeyDown="OnAddonKeyDown"
                     PointerPressed="OnAddonPointerPressed"
                     DoubleTapped="OnAddonDoubleTapped">
                 
@@ -48,6 +52,9 @@
                         <Setter Property="Background" Value="#333333"/>
                         <Setter Property="BoxShadow" Value="0 8 20 0 #55000000"/>
                         <Setter Property="RenderTransform" Value="scale(1.02)"/>
+                    </Style>
+                    <Style Selector="Border.addonCard:focus">
+                        <Setter Property="BoxShadow" Value="0 0 0 2 #CC4A90E2"/>
                     </Style>
                     <Style Selector="Border.selected">
                         <Setter Property="BorderThickness" Value="2"/>
@@ -207,7 +214,8 @@
                     <Button Grid.Column="2"
                             Name="FilterPaneToggleButton"
                             Click="OnFilterPaneToggleClick"
-                            ToolTip.Tip="{loc:Localize VersionManagement.SortOrderLabel}"
+                            ToolTip.Tip="{loc:Localize AddonGrid.OpenFilters}"
+                            AutomationProperties.Name="{loc:Localize AddonGrid.OpenFilters}"
                             Width="32"
                             Height="32"
                             IsVisible="False">
@@ -341,10 +349,13 @@
                    PanePlacement="Right"
                    OpenPaneLength="250"
                    CompactPaneLength="0"
-                   IsPaneOpen="True">
+                   IsPaneOpen="True"
+                   PaneOpening="OnFilterPaneOpening"
+                   PaneClosed="OnFilterPaneClosed">
             <SplitView.Pane>
                 <!-- 並び替え・フィルターサイドバー -->
-                <Border Background="#1B1B1B"
+                <Border Name="FilterPaneContent"
+                        Background="#1B1B1B"
                         BorderBrush="#2C2C2C"
                         BorderThickness="1,0,0,0"
                         Padding="12">
@@ -352,7 +363,8 @@
                         <Button Grid.Row="0"
                                 Name="FilterPaneCloseButton"
                                 Click="OnFilterPaneToggleClick"
-                                ToolTip.Tip="{loc:Localize VersionManagement.SortOrderLabel}"
+                                ToolTip.Tip="{loc:Localize AddonGrid.CloseFilters}"
+                                AutomationProperties.Name="{loc:Localize AddonGrid.CloseFilters}"
                                 HorizontalAlignment="Right"
                                 Width="32"
                                 Height="32"

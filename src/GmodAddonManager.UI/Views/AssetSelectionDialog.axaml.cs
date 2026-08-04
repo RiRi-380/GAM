@@ -3,68 +3,116 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 
 namespace GmodAddonManager.UI.Views;
 
-public partial class AssetSelectionDialog : Window
+public partial class AssetSelectionDialog : Window, IDisposable
 {
-    private AssetItemViewModel? selectedAsset;
-    private readonly ObservableCollection<AssetItemViewModel> assetItems = new ObservableCollection<AssetItemViewModel>();
-    private readonly Func<string, Task<AssetItemViewModel?>>? createAssetAsync;
+    private const double BreadcrumbWheelPixels = 60;
+
+    private string? selectedAssetId;
+    private AssetTargetPickerViewModel? pickerViewModel;
+    private readonly Func<string, string?, Task<AssetItemViewModel?>>? createAssetAsync;
+    private bool disposed;
 
     public AssetSelectionDialog()
     {
         InitializeComponent();
-        AssetListBox.ItemsSource = assetItems;
-        AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(
+            KeyDownEvent,
+            OnWindowNavigationKeyDown,
+            RoutingStrategies.Tunnel);
+        AssetListBox.AddHandler(
+            KeyDownEvent,
+            OnListKeyDown,
+            RoutingStrategies.Tunnel);
         Opened += OnOpened;
+        Closed += OnClosed;
     }
 
-    public AssetSelectionDialog(IEnumerable<AssetItemViewModel> assets, Func<string, Task<AssetItemViewModel?>>? createAssetAsync = null) : this()
+    public AssetSelectionDialog(
+        AddonManager addonManager,
+        IEnumerable<AssetItemViewModel> assets,
+        Func<string, string?, Task<AssetItemViewModel?>>? createAssetAsync = null)
+        : this()
     {
-        // 既にソート済みのリストを受け取るので、そのまま使用
-        foreach (var asset in assets)
-        {
-            assetItems.Add(asset);
-        }
+        pickerViewModel = new AssetTargetPickerViewModel(addonManager, assets);
+        pickerViewModel.Navigated += OnPickerNavigated;
+        DataContext = pickerViewModel;
 
         this.createAssetAsync = createAssetAsync;
         CreateAssetButton.IsVisible = createAssetAsync != null;
     }
 
+    internal AssetTargetPickerViewModel? PickerViewModel => pickerViewModel;
+
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        selectedAsset = AssetListBox.SelectedItem as AssetItemViewModel;
-        OkButton.IsEnabled = selectedAsset != null;
+        var entry = AssetListBox.SelectedItem as AssetListEntryViewModel;
+        selectedAssetId = entry?.Asset?.Id;
+        OkButton.IsEnabled = !string.IsNullOrWhiteSpace(selectedAssetId);
     }
 
     private void OnOpened(object? sender, EventArgs e)
     {
-        Dispatcher.UIThread.Post(() => AssetListBox.Focus(), DispatcherPriority.Input);
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (!disposed)
+                {
+                    AssetListBox.Focus();
+                }
+            },
+            DispatcherPriority.Input);
+        ScheduleBreadcrumbScrollToEnd();
     }
 
-    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    private void OnWindowNavigationKeyDown(object? sender, KeyEventArgs e)
     {
+        if ((e.Key == Key.Back ||
+             (e.Key == Key.Left && e.KeyModifiers.HasFlag(KeyModifiers.Alt))) &&
+            pickerViewModel?.IsInsideGroup == true)
+        {
+            pickerViewModel.ReturnToParent();
+            e.Handled = true;
+        }
+    }
+
+    private void OnListKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Close(null);
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.Enter)
         {
-            if (selectedAsset != null)
+            var entry = AssetListBox.SelectedItem as AssetListEntryViewModel;
+            if (entry?.IsGroup == true)
             {
-                Close(selectedAsset);
+                pickerViewModel?.OpenGroup(entry);
+            }
+            else if (entry?.Asset != null)
+            {
+                Close(entry.Asset.Id);
             }
             e.Handled = true;
             return;
         }
 
-        if ((e.Key == Key.Up || e.Key == Key.Down) && selectedAsset == null)
+        if ((e.Key == Key.Up || e.Key == Key.Down) &&
+            AssetListBox.SelectedItem == null)
         {
-            var initialSelection = GetInitialSelection();
+            var initialSelection = pickerViewModel?.Entries.FirstOrDefault();
             if (initialSelection != null)
             {
                 AssetListBox.SelectedItem = initialSelection;
@@ -75,9 +123,41 @@ public partial class AssetSelectionDialog : Window
         }
     }
 
+    private void OnEntryPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (e.InitialPressMouseButton != MouseButton.Left ||
+            sender is not Control control ||
+            control.DataContext is not AssetListEntryViewModel entry ||
+            !entry.IsGroup)
+        {
+            return;
+        }
+
+        pickerViewModel?.OpenGroup(entry);
+        e.Handled = true;
+    }
+
+    private void OnEntryDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is not Control control ||
+            control.DataContext is not AssetListEntryViewModel entry ||
+            entry.Asset == null)
+        {
+            return;
+        }
+
+        Close(entry.Asset.Id);
+        e.Handled = true;
+    }
+
+    private void OnBackClick(object? sender, RoutedEventArgs e)
+    {
+        pickerViewModel?.ReturnToParent();
+    }
+
     private void OnOkClick(object? sender, RoutedEventArgs e)
     {
-        Close(selectedAsset);
+        Close(selectedAssetId);
     }
 
     private void OnCancelClick(object? sender, RoutedEventArgs e)
@@ -89,27 +169,36 @@ public partial class AssetSelectionDialog : Window
     {
         try
         {
-            if (createAssetAsync == null)
+            if (createAssetAsync == null || pickerViewModel == null)
             {
                 return;
             }
 
             var dialog = new SimpleAssetCreateDialog();
             var name = await dialog.ShowDialog<string?>(this);
-            if (string.IsNullOrWhiteSpace(name))
+            if (disposed ||
+                pickerViewModel == null ||
+                string.IsNullOrWhiteSpace(name))
             {
                 return;
             }
 
-            var newAsset = await createAssetAsync(name.Trim());
-            if (newAsset == null)
+            var newAsset = await createAssetAsync(
+                name.Trim(),
+                pickerViewModel.CurrentGroupId);
+            if (disposed || pickerViewModel == null || newAsset == null)
             {
                 return;
             }
 
-            InsertAsset(newAsset);
-            AssetListBox.SelectedItem = newAsset;
-            AssetListBox.ScrollIntoView(newAsset);
+            var entry = pickerViewModel.RegisterTargetAsset(newAsset, ownsAsset: true);
+            if (entry == null)
+            {
+                return;
+            }
+
+            AssetListBox.SelectedItem = entry;
+            AssetListBox.ScrollIntoView(entry);
             AssetListBox.Focus();
         }
         catch (Exception ex)
@@ -118,37 +207,116 @@ public partial class AssetSelectionDialog : Window
         }
     }
 
-    private AssetItemViewModel? GetInitialSelection()
+    private void OnPickerNavigated(object? sender, EventArgs e)
     {
-        return assetItems.FirstOrDefault(a => a.Id == "subscribe-system-asset")
-               ?? assetItems.FirstOrDefault();
-    }
-
-    private void InsertAsset(AssetItemViewModel asset)
-    {
-        if (assetItems.Count == 0)
+        if (disposed)
         {
-            assetItems.Add(asset);
             return;
         }
 
-        var systemAssets = assetItems.Where(a => a.IsSystem).ToList();
-        var normalAssets = assetItems.Where(a => !a.IsSystem).ToList();
-        normalAssets.Add(asset);
+        selectedAssetId = null;
+        AssetListBox.SelectedItem = null;
+        OkButton.IsEnabled = false;
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (!disposed)
+                {
+                    AssetListBox.Focus();
+                }
+            },
+            DispatcherPriority.Input);
+        ScheduleBreadcrumbScrollToEnd();
+    }
 
-        var orderedNormalAssets = normalAssets
-            .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase)
-            .ToList();
-
-        assetItems.Clear();
-        foreach (var systemAsset in systemAssets)
+    private void OnBreadcrumbPointerWheelChanged(
+        object? sender,
+        PointerWheelEventArgs e)
+    {
+        if (sender is not ScrollViewer scrollViewer)
         {
-            assetItems.Add(systemAsset);
+            return;
         }
 
-        foreach (var normalAsset in orderedNormalAssets)
+        var delta = Math.Abs(e.Delta.X) > Math.Abs(e.Delta.Y)
+            ? e.Delta.X
+            : e.Delta.Y;
+        if (Math.Abs(delta) < double.Epsilon)
         {
-            assetItems.Add(normalAsset);
+            return;
         }
+
+        var maxOffset = Math.Max(
+            0,
+            scrollViewer.Extent.Width - scrollViewer.Viewport.Width);
+        var nextOffset = Math.Clamp(
+            scrollViewer.Offset.X - delta * BreadcrumbWheelPixels,
+            0,
+            maxOffset);
+        if (Math.Abs(nextOffset - scrollViewer.Offset.X) < double.Epsilon)
+        {
+            return;
+        }
+
+        scrollViewer.Offset = new Vector(nextOffset, scrollViewer.Offset.Y);
+        e.Handled = true;
+    }
+
+    private void OnBreadcrumbSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        ScheduleBreadcrumbScrollToEnd();
+    }
+
+    private void ScheduleBreadcrumbScrollToEnd()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                var maxOffset = Math.Max(
+                    0,
+                    BreadcrumbScrollViewer.Extent.Width -
+                    BreadcrumbScrollViewer.Viewport.Width);
+                BreadcrumbScrollViewer.Offset = new Vector(
+                    maxOffset,
+                    BreadcrumbScrollViewer.Offset.Y);
+            },
+            DispatcherPriority.Render);
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        Opened -= OnOpened;
+        Closed -= OnClosed;
+        RemoveHandler(KeyDownEvent, OnWindowNavigationKeyDown);
+        AssetListBox.RemoveHandler(KeyDownEvent, OnListKeyDown);
+        if (pickerViewModel != null)
+        {
+            pickerViewModel.Navigated -= OnPickerNavigated;
+            pickerViewModel.Dispose();
+            pickerViewModel = null;
+        }
+        DataContext = null;
+        GC.SuppressFinalize(this);
     }
 }

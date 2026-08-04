@@ -22,6 +22,18 @@ namespace GmodAddonManager.Core.Services
         Error
     }
 
+    public enum UpdatePackageKind
+    {
+        Installer,
+        PortableArchive
+    }
+
+    public enum UpdateInstallDisposition
+    {
+        InstallerLaunched,
+        PortableArchiveReady
+    }
+
     public sealed class UpdateCheckResult
     {
         public UpdateCheckStatus Status { get; private set; }
@@ -68,6 +80,7 @@ namespace GmodAddonManager.Core.Services
     {
         private const string DefaultGithubRepo = "RiRi-380/GAM";
         private const string UpdateCheckFile = "last_update_check.txt";
+        public const string PortableMarkerFileName = ".gam-portable.json";
         private const string InnoSilentInstallArgs =
             "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /LAUNCHAFTERINSTALL=1";
         private const string EnvUpdateRepo = "GAM_UPDATE_REPO";
@@ -88,6 +101,7 @@ namespace GmodAddonManager.Core.Services
         private readonly long maxApiResponseBytes;
         private readonly string temporaryDirectory;
         private readonly string updateStateDirectory;
+        private readonly bool portableInstallation;
         private Uri? updateApiOrigin;
         private string? selectedDownloadUrl;
         private string? selectedAssetApiUrl;
@@ -111,7 +125,8 @@ namespace GmodAddonManager.Core.Services
             long maxUpdateDownloadBytes = DefaultMaxUpdateDownloadBytes,
             long maxApiResponseBytes = DefaultMaxApiResponseBytes,
             string? temporaryDirectory = null,
-            string? updateStateDirectory = null)
+            string? updateStateDirectory = null,
+            bool? portableInstallation = null)
         {
             this.currentVersion = currentVersion;
             configuredSource = source;
@@ -137,6 +152,8 @@ namespace GmodAddonManager.Core.Services
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "GmodAddonManager")
                 : updateStateDirectory;
+            this.portableInstallation = portableInstallation ??
+                IsPortableInstallation(AppContext.BaseDirectory);
         }
 
         public async Task<UpdateCheckResult> CheckForUpdateAsync(bool forceCheck = false)
@@ -207,11 +224,15 @@ namespace GmodAddonManager.Core.Services
                 return UpdateCheckResult.UpToDate();
             }
 
-            var installerAsset = SelectInstallerAsset(release.Assets);
+            var installerAsset = portableInstallation
+                ? SelectPortableAsset(release.Assets)
+                : SelectInstallerAsset(release.Assets);
             if (installerAsset == null)
             {
                 await SaveLastCheckTime();
-                return UpdateCheckResult.Error("No installer asset found in the latest release.");
+                return UpdateCheckResult.Error(portableInstallation
+                    ? "No portable archive found in the latest release."
+                    : "No installer asset found in the latest release.");
             }
 
             if (!TryNormalizeSha256Digest(installerAsset.Digest, out _))
@@ -250,6 +271,9 @@ namespace GmodAddonManager.Core.Services
                 ReleaseNotes = release.Body ?? string.Empty,
                 DownloadUrl = downloadUrl,
                 DownloadDigest = installerAsset.Digest,
+                PackageKind = portableInstallation
+                    ? UpdatePackageKind.PortableArchive
+                    : UpdatePackageKind.Installer,
                 PublishedAt = release.PublishedAt
             });
         }
@@ -491,6 +515,40 @@ namespace GmodAddonManager.Core.Services
                 .ThenBy(x => x.Asset.Name.Length)
                 .Select(x => x.Asset)
                 .FirstOrDefault();
+        }
+
+        internal static GitHubAsset? SelectPortableAsset(GitHubAsset[]? assets)
+        {
+            if (assets == null || assets.Length == 0)
+            {
+                return null;
+            }
+
+            return assets
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.Name))
+                .Where(asset => asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                .Where(asset => asset.Name.Contains("portable", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(asset =>
+                    asset.Name.StartsWith("GAM-Portable-", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(asset => asset.Name.Length)
+                .FirstOrDefault();
+        }
+
+        internal static bool IsPortableInstallation(string baseDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(baseDirectory))
+            {
+                return false;
+            }
+
+            try
+            {
+                return File.Exists(Path.Combine(baseDirectory, PortableMarkerFileName));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static int ScoreInstallerName(string name)
@@ -854,7 +912,7 @@ namespace GmodAddonManager.Core.Services
             return !string.IsNullOrWhiteSpace(fileName);
         }
 
-        public async Task DownloadAndInstallUpdateAsync(
+        public async Task<UpdateInstallDisposition> DownloadAndInstallUpdateAsync(
             string downloadUrl,
             string expectedDigest,
             CancellationToken cancellationToken = default)
@@ -875,9 +933,31 @@ namespace GmodAddonManager.Core.Services
                 throw new InvalidDataException("A valid SHA-256 release-asset digest is required.");
             }
 
+            var selectedFileName = string.Equals(
+                    downloadUrl,
+                    selectedDownloadUrl,
+                    StringComparison.Ordinal)
+                ? selectedInstallerName
+                : TryGetFileName(downloadUrl, out var urlFileName)
+                    ? urlFileName
+                    : null;
+            var selectedKind = DeterminePackageKind(selectedFileName);
+            var expectedKind = portableInstallation
+                ? UpdatePackageKind.PortableArchive
+                : UpdatePackageKind.Installer;
+            if (selectedKind != expectedKind)
+            {
+                throw new InvalidDataException(portableInstallation
+                    ? "Portable GAM requires a GAM-Portable ZIP update package."
+                    : "Installed GAM requires a GAM Setup executable update package.");
+            }
+
+            var extension = selectedKind == UpdatePackageKind.PortableArchive
+                ? ".zip"
+                : ".exe";
             var tempPath = Path.Combine(
                 temporaryDirectory,
-                $"GAM-Update-Setup-{Guid.NewGuid():N}.exe");
+                $"GAM-Update-Package-{Guid.NewGuid():N}{extension}");
             var requestUrl = ResolveDownloadRequestUrl(downloadUrl);
             if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var requestUri) ||
                 !string.Equals(requestUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
@@ -912,7 +992,7 @@ namespace GmodAddonManager.Core.Services
                     RejectDeclaredOversize(
                         response.Content.Headers.ContentLength,
                         maxUpdateDownloadBytes,
-                        "Update installer");
+                        "Update package");
 
                     using var fs = new FileStream(
                         tempPath,
@@ -926,7 +1006,7 @@ namespace GmodAddonManager.Core.Services
                         contentStream,
                         fs,
                         maxUpdateDownloadBytes,
-                        "Update installer",
+                        "Update package",
                         timeoutCts.Token).ConfigureAwait(false);
                 }
 
@@ -941,6 +1021,28 @@ namespace GmodAddonManager.Core.Services
             {
                 TryDeleteFile(tempPath);
                 throw;
+            }
+
+            if (selectedKind == UpdatePackageKind.PortableArchive)
+            {
+                try
+                {
+                    var revealProcess = Process.Start(
+                        CreatePortablePackageRevealStartInfo(tempPath));
+                    if (revealProcess == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Failed to reveal the downloaded portable update package.");
+                    }
+
+                    return UpdateInstallDisposition.PortableArchiveReady;
+                }
+                catch
+                {
+                    // The verified archive is intentionally retained so the
+                    // user can still install it manually from the temp path.
+                    throw;
+                }
             }
 
             var launcherPath = Path.Combine(
@@ -958,6 +1060,8 @@ namespace GmodAddonManager.Core.Services
                 {
                     throw new InvalidOperationException("Failed to start the update installer launcher.");
                 }
+
+                return UpdateInstallDisposition.InstallerLaunched;
             }
             catch
             {
@@ -965,6 +1069,29 @@ namespace GmodAddonManager.Core.Services
                 TryDeleteFile(tempPath);
                 throw;
             }
+        }
+
+        private static UpdatePackageKind? DeterminePackageKind(string? fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return null;
+            }
+
+            if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+                fileName.Contains("portable", StringComparison.OrdinalIgnoreCase))
+            {
+                return UpdatePackageKind.PortableArchive;
+            }
+
+            if (fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                (fileName.Contains("setup", StringComparison.OrdinalIgnoreCase) ||
+                 fileName.Contains("installer", StringComparison.OrdinalIgnoreCase)))
+            {
+                return UpdatePackageKind.Installer;
+            }
+
+            return null;
         }
 
         private async Task<HttpResponseMessage> SendDownloadRequestAsync(
@@ -1101,6 +1228,27 @@ namespace GmodAddonManager.Core.Services
             return startInfo;
         }
 
+        internal static ProcessStartInfo CreatePortablePackageRevealStartInfo(string packagePath)
+        {
+            if (string.IsNullOrWhiteSpace(packagePath))
+            {
+                throw new ArgumentException("Package path is required.", nameof(packagePath));
+            }
+
+            var fullPath = Path.GetFullPath(packagePath);
+            if (fullPath.Contains("\"", StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Package path contains an invalid quote.", nameof(packagePath));
+            }
+
+            return new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{fullPath}\"",
+                UseShellExecute = true
+            };
+        }
+
         internal static string BuildInstallerLauncherScript(
             int currentProcessId,
             string installerPath,
@@ -1203,6 +1351,7 @@ namespace GmodAddonManager.Core.Services
         public string ReleaseNotes { get; set; } = string.Empty;
         public string DownloadUrl { get; set; } = string.Empty;
         public string DownloadDigest { get; set; } = string.Empty;
+        public UpdatePackageKind PackageKind { get; set; } = UpdatePackageKind.Installer;
         public DateTime PublishedAt { get; set; }
     }
 

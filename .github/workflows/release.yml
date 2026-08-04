@@ -1,136 +1,244 @@
-﻿name: Release
+name: Release
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: windows-2022
-    
+    timeout-minutes: 45
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    permissions:
+      contents: read
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-      
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '10.0.302'
-        
-    - name: Restore dependencies
-      run: |
-        dotnet restore GmodAddonManager.sln '-p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904'
+      - name: Checkout tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Test release candidate
-      run: |
-        dotnet test GmodAddonManager.sln -c Release --no-restore --logger "console;verbosity=minimal"
-      
-    - name: Build
-      run: |
-        $tag = "${{ github.ref_name }}"
-        $version = $tag
-        if ($version.StartsWith("v")) {
-          $version = $version.Substring(1)
-        }
-        $fileVersion = "$version.0"
-        $sha = "${{ github.sha }}"
-        $versionProps = @(
-          "-p:Version=$version",
-          "-p:FileVersion=$fileVersion",
-          "-p:AssemblyVersion=$fileVersion",
-          "-p:InformationalVersion=$tag+$sha",
-          "-p:IncludeSourceRevisionInInformationalVersion=false"
-        )
+      - name: Validate annotated release tag, main commit, version, and notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:TAG_NAME
+          if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "Release tag is not an exact stable semantic version: $tag"
+          }
+          if ((git cat-file -t "refs/tags/$tag").Trim() -ne 'tag') {
+            throw "Release tag must be annotated: $tag"
+          }
+          git show-ref --verify --quiet refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The full checkout did not contain refs/remotes/origin/main.'
+          }
+          $tagCommit = (git rev-parse "refs/tags/$tag^{commit}").Trim()
+          $mainCommit = (git rev-parse refs/remotes/origin/main).Trim()
+          if ($tagCommit -ne $mainCommit) {
+            throw "Release tag commit $tagCommit is not origin/main $mainCommit."
+          }
+          $version = $tag.Substring(1)
+          [xml]$props = Get-Content -LiteralPath Directory.Build.props -Raw
+          $declaredVersion = $props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
+          if ($declaredVersion -ne $version) {
+            throw 'Directory.Build.props version does not match the release tag.'
+          }
+          if (-not (Test-Path -LiteralPath "docs/releases/$tag.md" -PathType Leaf)) {
+            throw "Release notes are missing: docs/releases/$tag.md"
+          }
 
-        dotnet build -c Release @versionProps
-        # Keep the release self-contained, but publish as multiple files. A single-file
-        # bundle extracts native Avalonia/runtime libraries to %TEMP%\.net before the
-        # process can show a window, which makes a cold start look like launch failed.
-        dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false @versionProps -o publish
-      shell: pwsh
-      
-    - name: Package and verify distribution licenses
-      run: |
-        ./scripts/prepare-release-notices.ps1 `
-          -PublishDirectory publish `
-          -ProjectAssetsPath src/GmodAddonManager.UI/obj/project.assets.json
-      shell: pwsh
-      
-    - name: Create portable archive
-      run: |
-        # Remove 'v' prefix from tag name if present
-        $version = "${{ github.ref_name }}"
-        if ($version.StartsWith("v")) {
-          $version = $version.Substring(1)
-        }
-        
-        Compress-Archive -Path publish/* -DestinationPath GAM-Portable-$version.zip
-      shell: pwsh
-      
-    - name: Setup Inno Setup
-      run: |
-        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        if (Test-Path $iscc) {
-          Write-Host "Inno Setup is already available at $iscc"
-        } else {
-          choco install innosetup -y --no-progress
-        }
-      shell: pwsh
-    
-    - name: Download VC++ Redistributable
-      run: |
-        # Create redist directory
-        New-Item -ItemType Directory -Force -Path redist
-        
-        # Download VC++ Redistributable
-        Write-Host "Downloading Visual C++ Redistributable..."
-        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
-          -OutFile "redist/VC_redist.x64.exe" `
-          -UseBasicParsing
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.302'
 
-        $signature = Get-AuthenticodeSignature "redist/VC_redist.x64.exe"
-        if ($signature.Status -ne "Valid" -or
-            $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
-          throw "VC++ Redistributable signature validation failed: $($signature.Status)"
-        }
-        
-        Write-Host "VC++ Redistributable downloaded and signature-validated successfully"
-      shell: pwsh
-        
-    - name: Build installer
-      run: |
-        # Create dist directory if it doesn't exist
-        New-Item -ItemType Directory -Force -Path dist
-        
-        # Remove 'v' prefix from tag name if present
-        $version = "${{ github.ref_name }}"
-        if ($version.StartsWith("v")) {
-          $version = $version.Substring(1)
-        }
-        
-        Write-Host "Building installer for version: $version"
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/setup.iss /DMyAppVersion=$version
-        Copy-Item "dist\GAM-Setup-$version.exe" "GAM-Setup.exe" -Force
-      shell: pwsh
-      
-    - name: Create Release
-      uses: softprops/action-gh-release@v3
-      with:
-        files: |
-          ./GAM-Portable-*.zip
-          ./dist/GAM-Setup-*.exe
-          ./GAM-Setup.exe
-        tag_name: ${{ github.ref_name }}
-        name: Release ${{ github.ref_name }}
-        body_path: ./docs/releases/${{ github.ref_name }}.md
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        fail_on_unmatched_files: true
-        make_latest: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore locked dependencies and audit vulnerabilities
+        run: dotnet restore GmodAddonManager.sln --locked-mode
+
+      - name: Test release candidate
+        run: dotnet test GmodAddonManager.sln -c Release --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"
+
+      - name: Publish self-contained multi-file application
+        shell: pwsh
+        run: |
+          $tag = $env:TAG_NAME
+          $version = $tag.Substring(1)
+          $fileVersion = "$version.0"
+          $sha = (git rev-parse "refs/tags/$tag^{commit}").Trim()
+          $versionProps = @(
+            "-p:Version=$version",
+            "-p:FileVersion=$fileVersion",
+            "-p:AssemblyVersion=$fileVersion",
+            "-p:InformationalVersion=$tag+$sha",
+            '-p:IncludeSourceRevisionInInformationalVersion=false'
+          )
+          dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:TreatWarningsAsErrors=true `
+            -p:PublishSingleFile=false `
+            -p:PublishTrimmed=false `
+            @versionProps `
+            -o publish
+
+      - name: Package and verify distribution notices
+        shell: pwsh
+        run: |
+          ./scripts/prepare-release-notices.ps1 `
+            -PublishDirectory publish `
+            -ProjectAssetsPath src/GmodAddonManager.UI/obj/project.assets.json
+
+      - name: Generate managed release-file manifest
+        shell: pwsh
+        run: |
+          $marker = '.gam-portable.json'
+          if (Test-Path -LiteralPath "publish/$marker") {
+            throw "Installer staging must not contain $marker."
+          }
+          $manifestName = 'GAM-ReleaseFiles.txt'
+          $managedFiles = @(
+            Get-ChildItem -LiteralPath publish -Recurse -File |
+              ForEach-Object {
+                $publishRoot = (Resolve-Path publish).Path.TrimEnd('\')
+                $_.FullName.Substring($publishRoot.Length + 1).Replace('/', '\')
+              }
+            $manifestName
+          ) | Sort-Object -Unique
+          Set-Content -LiteralPath "publish/$manifestName" `
+            -Value $managedFiles -Encoding utf8NoBOM
+
+      - name: Create portable archive with portable-only marker
+        shell: pwsh
+        run: |
+          $version = $env:TAG_NAME.Substring(1)
+          New-Item -ItemType Directory -Path publish-portable -Force | Out-Null
+          Copy-Item -Path publish/* -Destination publish-portable -Recurse -Force
+          Set-Content -LiteralPath 'publish-portable/.gam-portable.json' `
+            -Value '{"formatVersion":1,"distribution":"portable"}' `
+            -Encoding utf8NoBOM
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path publish-portable).Path,
+            (Join-Path $PWD "GAM-Portable-$version.zip"),
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false)
+
+      - name: Setup pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          choco install innosetup --version=6.7.1 `
+            -y --no-progress --limit-output --force --allow-downgrade
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey failed to install Inno Setup 6.7.1 (exit $LASTEXITCODE)."
+          }
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw 'Pinned Inno Setup 6.7.1 compiler was not installed.'
+          }
+
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          $version = $env:TAG_NAME.Substring(1)
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' `
+            installer/setup.iss "/DMyAppVersion=$version"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE."
+          }
+          Copy-Item -LiteralPath "dist/GAM-Setup-$version.exe" `
+            -Destination 'GAM-Setup.exe' -Force
+
+      - name: Verify and stage release artifacts
+        shell: pwsh
+        run: |
+          $tag = $env:TAG_NAME
+          $version = $tag.Substring(1)
+          $portablePath = "GAM-Portable-$version.zip"
+          $installerPath = "dist/GAM-Setup-$version.exe"
+          foreach ($path in @($portablePath, $installerPath, 'GAM-Setup.exe')) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Release artifact is missing: $path"
+            }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $portablePath))
+          try {
+            $names = @($zip.Entries | ForEach-Object FullName)
+            if ($names -notcontains '.gam-portable.json') {
+              throw 'Portable archive is missing its distribution marker.'
+            }
+            if ($names -notcontains 'GAM-ReleaseFiles.txt') {
+              throw 'Portable archive is missing the managed release-file manifest.'
+            }
+          } finally {
+            $zip.Dispose()
+          }
+          New-Item -ItemType Directory -Path release-artifacts -Force | Out-Null
+          Copy-Item -LiteralPath $portablePath, $installerPath, 'GAM-Setup.exe' `
+            -Destination release-artifacts
+          Copy-Item -LiteralPath "docs/releases/$tag.md" `
+            -Destination 'release-artifacts/release-notes.md'
+          $checksumLines = Get-ChildItem -LiteralPath release-artifacts -File |
+            Where-Object Name -ne 'release-notes.md' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          Set-Content -LiteralPath 'release-artifacts/SHA256SUMS.txt' `
+            -Value $checksumLines -Encoding ascii
+
+      - name: Upload verified release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: release-artifacts
+
+      - name: Create private-repository Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        with:
+          files: |
+            release-artifacts/GAM-Portable-*.zip
+            release-artifacts/GAM-Setup-*.exe
+            release-artifacts/GAM-Setup.exe
+            release-artifacts/SHA256SUMS.txt
+          tag_name: ${{ github.ref_name }}
+          name: GAM ${{ github.ref_name }}
+          body_path: release-artifacts/release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

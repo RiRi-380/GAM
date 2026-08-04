@@ -1,8 +1,14 @@
-# Experiment Constraints and Known Limitations
+# Experiment Constraints and Known Limitations (Archived)
 
-Note: Current releases run in soft-only mode (addonnomount.txt). Junction/hard-link constraints are legacy/experimental.
+This document records the retired v1 link-based experiments. GAM v2.0.0 runs
+only in Soft mode through `addonnomount.txt`; the product UI and startup path do
+not provide Hard mode, junction, hard-link, copy-fallback, or unsubscribe-based
+addon management. Do not use the old experiment environment variables with a
+release build.
 
 ## Link-Based Mode (LM)
+- The following points describe the historical experiment only; they are not
+  supported v2 operating instructions.
 - Hard links require the workshop and cache paths to be on the same NTFS volume.
 - Junction creation requires admin rights or Windows Developer Mode.
 - StrictLinkMode blocks any File.Copy fallback and fails the operation with `StrictLinkModeException`.
@@ -22,4 +28,5 @@ Note: Current releases run in soft-only mode (addonnomount.txt). Junction/hard-l
 - `experiment_id`, `condition`, `task_id`, `session_id` are supplied via environment variables.
 
 ## Operational
-- UI blocks exclusive apply while GMod is running; perform experiments with GMod closed.
+- Do not run these historical experiments against a live v2 profile. The only
+  supported runtime state mechanism is `addonnomount.txt`.

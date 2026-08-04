@@ -9,8 +9,8 @@
         WindowState="Maximized"
         WindowStartupLocation="CenterOwner"
         CanResize="True"
-        MinWidth="800"
-        MinHeight="600">
+        MinWidth="520"
+        MinHeight="360">
     
     <Grid>
         <Grid.RowDefinitions>
@@ -18,7 +18,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300" MinWidth="250"/>
+            <ColumnDefinition Width="260" MinWidth="220"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
         
@@ -65,20 +65,22 @@
                     <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
                             CornerRadius="4"
                             Padding="8,5">
-                        <StackPanel Orientation="Horizontal"
-                                    Spacing="10">
+                        <WrapPanel Orientation="Horizontal">
                             <TextBlock Text="{loc:Localize VersionManagement.SortOrderLabel}" 
                                        VerticalAlignment="Center"
-                                       FontSize="12"/>
+                                       FontSize="12"
+                                       Margin="0,0,10,4"/>
                             <RadioButton Content="{loc:Localize VersionManagement.SortNewest}"
                                          IsChecked="{Binding IsNewestFirst}"
                                          GroupName="SortOrder"
-                                         FontSize="12"/>
+                                         FontSize="12"
+                                         Margin="0,0,10,4"/>
                             <RadioButton Content="{loc:Localize VersionManagement.SortOldest}"
                                          IsChecked="{Binding IsOldestFirst}"
                                          GroupName="SortOrder"
-                                         FontSize="12"/>
-                        </StackPanel>
+                                         FontSize="12"
+                                         Margin="0,0,0,4"/>
+                        </WrapPanel>
                     </Border>
                     
                     <!-- 差分表示 -->
@@ -152,7 +154,8 @@
                                             Width="24"
                                             Height="24"
                                             Margin="0,-5,-5,0"
-                                            ToolTip.Tip="{loc:Localize VersionManagement.DeleteVersionTooltip}">
+                                            ToolTip.Tip="{loc:Localize VersionManagement.DeleteVersionTooltip}"
+                                            AutomationProperties.Name="{loc:Localize VersionManagement.DeleteVersionTooltip}">
                                         <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
                                     </Button>
                                 </Grid>

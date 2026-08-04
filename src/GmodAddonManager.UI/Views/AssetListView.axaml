@@ -143,10 +143,14 @@
                                     CornerRadius="4"
                                     BorderThickness="2"
                                      BorderBrush="{Binding BorderColor}"
-                                     Classes="assetEntryCard"
-                                     Classes.group="{Binding IsGroup}"
-                                     Classes.selected="{Binding IsSelected}"
+                                    Classes="assetEntryCard"
+                                    Classes.group="{Binding IsGroup}"
+                                    Classes.selected="{Binding IsSelected}"
                                     Classes.shareSelected="{Binding IsShareSelected}"
+                                    Focusable="True"
+                                    AutomationProperties.Name="{Binding Name}"
+                                    AutomationProperties.HelpText="{Binding AddonCountDisplay}"
+                                    KeyDown="OnEntryKeyDown"
                                     PointerPressed="OnEntryPointerPressed"
                                     PointerMoved="OnEntryPointerMoved"
                                     PointerReleased="OnEntryPointerReleased"
@@ -160,6 +164,9 @@
                                     </Style>
                                     <Style Selector="Border.dragging">
                                         <Setter Property="Opacity" Value="0.68"/>
+                                    </Style>
+                                    <Style Selector="Border.assetEntryCard:focus">
+                                        <Setter Property="BoxShadow" Value="0 0 0 2 #CC4A90E2"/>
                                     </Style>
                                      <Style Selector="Border.shareSelected">
                                          <Setter Property="Background" Value="#243F6488"/>
@@ -186,9 +193,12 @@
                                              Classes.hasImage="{Binding HasCustomImage}"
                                              IsVisible="{Binding IsAsset}"
                                             PointerPressed="OnEntryImagePointerPressed"
+                                            KeyDown="OnEntryImageKeyDown"
+                                            Focusable="{Binding CanEditImage}"
                                             Cursor="Hand"
                                             ToolTip.Tip="{loc:Localize AssetList.Edit}"
                                             AutomationProperties.Name="{loc:Localize AssetList.Edit}"
+                                            AutomationProperties.HelpText="{loc:Localize AssetList.Edit}"
                                             IsHitTestVisible="{Binding CanEditImage}">
                                         <Border.Styles>
                                             <Style Selector="Border.assetImage">
@@ -200,6 +210,9 @@
                                             <Style Selector="Border.assetImage.hasImage">
                                                 <Setter Property="BorderThickness" Value="0"/>
                                                 <Setter Property="Background" Value="Transparent"/>
+                                            </Style>
+                                            <Style Selector="Border.assetImage:focus">
+                                                <Setter Property="BoxShadow" Value="0 0 0 2 #CC4A90E2"/>
                                             </Style>
                                         </Border.Styles>
                                         <Grid>
@@ -232,12 +245,21 @@
                                             BoxShadow="0 2 6 0 #30000000"
                                             ClipToBounds="True"
                                             VerticalAlignment="Center"
+                                            Classes="groupImage"
                                             IsVisible="{Binding IsGroup}"
                                             PointerPressed="OnEntryImagePointerPressed"
+                                            KeyDown="OnEntryImageKeyDown"
+                                            Focusable="{Binding CanEditImage}"
                                             Cursor="Hand"
                                             ToolTip.Tip="{loc:Localize AssetList.Edit}"
                                             AutomationProperties.Name="{loc:Localize AssetList.Edit}"
+                                            AutomationProperties.HelpText="{loc:Localize AssetList.Edit}"
                                             IsHitTestVisible="{Binding CanEditImage}">
+                                        <Border.Styles>
+                                            <Style Selector="Border.groupImage:focus">
+                                                <Setter Property="BoxShadow" Value="0 0 0 2 #CC4A90E2"/>
+                                            </Style>
+                                        </Border.Styles>
                                         <Grid>
                                             <Image Source="{Binding AssetImageBitmap}"
                                                    Stretch="UniformToFill"
@@ -464,7 +486,8 @@
                                                 IsEnabled="{Binding CanShowDetails}"
                                                 Width="24" Height="24"
                                                 Padding="4"
-                                                ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}">
+                                                ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}"
+                                                AutomationProperties.Name="{loc:Localize AssetList.DetailsTooltip}">
                                             <PathIcon Data="{StaticResource InfoIcon}" Width="12" Height="12"/>
                                         </Button>
                                         <ToggleButton IsChecked="{Binding IsFavorite, Mode=OneWay}"
@@ -474,6 +497,7 @@
                                                       Background="Transparent"
                                                       BorderThickness="0"
                                                       ToolTip.Tip="{Binding FavoriteButtonText}"
+                                                      AutomationProperties.Name="{Binding FavoriteButtonText}"
                                                       IsVisible="{Binding CanFavorite}">
                                             <TextBlock Text="♥"
                                                        FontSize="14"
@@ -503,7 +527,8 @@
                                                       Width="24"
                                                       Height="24"
                                                       Padding="0"
-                                                      ToolTip.Tip="{Binding #AssetListRoot.DataContext.GmodDisabledCollapseTooltip}">
+                                                      ToolTip.Tip="{Binding #AssetListRoot.DataContext.GmodDisabledCollapseTooltip}"
+                                                      AutomationProperties.Name="{Binding #AssetListRoot.DataContext.GmodDisabledCollapseTooltip}">
                                             <Grid>
                                                 <TextBlock Text="▤"
                                                            FontSize="13"
@@ -523,7 +548,8 @@
                                                 Width="24"
                                                 Height="24"
                                                 Padding="4"
-                                                ToolTip.Tip="{loc:Localize GamShare.ToggleSelection}">
+                                                ToolTip.Tip="{loc:Localize GamShare.ToggleSelection}"
+                                                AutomationProperties.Name="{loc:Localize GamShare.ToggleSelection}">
                                             <Button.Styles>
                                                 <Style Selector="Button.shareSelected">
                                                     <Setter Property="Background" Value="#4A90E2"/>
@@ -537,6 +563,7 @@
                                         <Button Command="{Binding DeleteCommand}"
                                                 Width="24" Height="24"
                                                 ToolTip.Tip="{loc:Localize AssetList.DeleteTooltip}"
+                                                AutomationProperties.Name="{loc:Localize AssetList.DeleteTooltip}"
                                                 IsVisible="{Binding CanDelete}">
                                             <PathIcon Data="{StaticResource DeleteIcon}" Width="12" Height="12"/>
                                         </Button>

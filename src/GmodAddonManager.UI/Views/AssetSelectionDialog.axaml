@@ -4,125 +4,320 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:GmodAddonManager.UI.ViewModels"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
-        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="450"
+        xmlns:shapes="using:Avalonia.Controls.Shapes"
+        mc:Ignorable="d"
+        d:DesignWidth="460"
+        d:DesignHeight="560"
         x:Class="GmodAddonManager.UI.Views.AssetSelectionDialog"
+        x:DataType="vm:AssetTargetPickerViewModel"
         Title="{loc:Localize AssetSelection.Title}"
-        Width="400"
-        Height="450"
-        CanResize="False"
+        Width="460"
+        Height="560"
+        MinWidth="400"
+        MinHeight="420"
+        CanResize="True"
         WindowStartupLocation="CenterOwner">
-    
-    <DockPanel Margin="10">
-        <!-- ヘッダー -->
-        <TextBlock DockPanel.Dock="Top" 
-                  Text="{loc:Localize AssetSelection.SelectPrompt}" 
-                  FontSize="14"
-                  FontWeight="Bold"
-                  Margin="0,0,0,10"/>
-        
-        <!-- ボタン -->
-        <DockPanel DockPanel.Dock="Bottom"
-                   Margin="0,10,0,0">
+
+    <Grid Margin="12"
+          RowDefinitions="Auto,Auto,*,Auto"
+          RowSpacing="10">
+        <TextBlock Grid.Row="0"
+                   Text="{loc:Localize AssetSelection.SelectPrompt}"
+                   FontSize="14"
+                   FontWeight="Bold"
+                   TextWrapping="Wrap"/>
+
+        <Grid Grid.Row="1"
+              ColumnDefinitions="Auto,*"
+              ClipToBounds="True">
+            <Button Name="BackButton"
+                    Grid.Column="0"
+                    Width="34"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Padding="0"
+                    Background="Transparent"
+                    IsVisible="{Binding IsInsideGroup}"
+                    Click="OnBackClick"
+                    ToolTip.Tip="{loc:Localize AssetGroup.BackTooltip}"
+                    AutomationProperties.Name="{loc:Localize AssetGroup.BackTooltip}">
+                <TextBlock Text="←"
+                           FontSize="19"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+            </Button>
+
+            <ScrollViewer Name="BreadcrumbScrollViewer"
+                          Grid.Column="1"
+                          Height="34"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
+                          VerticalAlignment="Center"
+                          ClipToBounds="True"
+                          PointerWheelChanged="OnBreadcrumbPointerWheelChanged"
+                          SizeChanged="OnBreadcrumbSizeChanged">
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}"
+                              VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:AssetBreadcrumbItemViewModel">
+                            <StackPanel Orientation="Horizontal"
+                                        Height="34"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text=" / "
+                                           FontSize="14"
+                                           Opacity="0.45"
+                                           VerticalAlignment="Center"
+                                           IsVisible="{Binding HasSeparator}"/>
+                                <Button Command="{Binding NavigateCommand}"
+                                        IsVisible="{Binding !IsCurrent}"
+                                        MaxWidth="150"
+                                        Height="30"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="3,2"
+                                        VerticalContentAlignment="Center"
+                                        ToolTip.Tip="{Binding Name}">
+                                    <TextBlock Text="{Binding Name}"
+                                               MaxWidth="138"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               MaxLines="1"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Button>
+                                <TextBlock Text="{Binding Name}"
+                                           IsVisible="{Binding IsCurrent}"
+                                           MaxWidth="180"
+                                           FontSize="15"
+                                           FontWeight="Bold"
+                                           MaxLines="1"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"
+                                           ToolTip.Tip="{Binding Name}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Row="2"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                ClipToBounds="True">
+            <Grid>
+                <ListBox Name="AssetListBox"
+                         ItemsSource="{Binding Entries}"
+                         SelectionMode="Single"
+                         SelectionChanged="OnSelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:AssetListEntryViewModel">
+                            <Border Padding="10,8"
+                                    Background="Transparent"
+                                    BorderBrush="Transparent"
+                                    BorderThickness="1"
+                                    Classes="targetEntry"
+                                    Classes.group="{Binding IsGroup}"
+                                    PointerReleased="OnEntryPointerReleased"
+                                    DoubleTapped="OnEntryDoubleTapped"
+                                    ToolTip.Tip="{Binding Name}">
+                                <Border.Styles>
+                                    <Style Selector="Border.targetEntry.group">
+                                        <Setter Property="Background" Value="#202A34"/>
+                                    </Style>
+                                    <Style Selector="Border.targetEntry.group:pointerover">
+                                        <Setter Property="Background" Value="#283747"/>
+                                    </Style>
+                                </Border.Styles>
+
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <Border Grid.Column="0"
+                                            Width="38"
+                                            Height="38"
+                                            Margin="0,0,10,0"
+                                            CornerRadius="6"
+                                            BorderThickness="1"
+                                            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                                            Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                                            ClipToBounds="True"
+                                            IsVisible="{Binding IsAsset}">
+                                        <Grid>
+                                            <Image Source="{Binding AssetImageBitmap}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding HasCustomImage}"/>
+                                            <TextBlock Text="{Binding Name, Converter={StaticResource FirstCharacterConverter}}"
+                                                       IsVisible="{Binding HasNoCustomImage}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="17"
+                                                       FontWeight="Bold"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Grid.Column="0"
+                                            Width="38"
+                                            Height="38"
+                                            Margin="0,0,10,0"
+                                            CornerRadius="6"
+                                            BorderThickness="1"
+                                            BorderBrush="#446C94"
+                                            Background="#1D3348"
+                                            ClipToBounds="True"
+                                            IsVisible="{Binding IsGroup}">
+                                        <Grid>
+                                            <Image Source="{Binding AssetImageBitmap}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding HasCustomImage}"/>
+                                            <Viewbox Width="28"
+                                                     Height="28"
+                                                     Stretch="Uniform"
+                                                     IsVisible="{Binding HasNoCustomImage}">
+                                                <Canvas Width="44" Height="44">
+                                                    <shapes:Path Data="M5,28 L22,38 L39,28 L22,18 Z"
+                                                                 Fill="Transparent"
+                                                                 Stroke="#3E78BC"
+                                                                 StrokeThickness="2"
+                                                                 StrokeJoin="Round"/>
+                                                    <shapes:Path Data="M5,21 L22,31 L39,21 L22,11 Z"
+                                                                 Fill="#182C40"
+                                                                 Stroke="#4C91E6"
+                                                                 StrokeThickness="2"
+                                                                 StrokeJoin="Round"/>
+                                                    <shapes:Path Data="M5,14 L22,4 L39,14 L22,24 Z"
+                                                                 Fill="#5DA8FF"
+                                                                 Stroke="#82C1FF"
+                                                                 StrokeThickness="1"
+                                                                 StrokeJoin="Round"/>
+                                                </Canvas>
+                                            </Viewbox>
+                                            <Border Width="15"
+                                                    Height="15"
+                                                    Margin="0,0,2,2"
+                                                    Padding="2"
+                                                    HorizontalAlignment="Right"
+                                                    VerticalAlignment="Bottom"
+                                                    CornerRadius="4"
+                                                    Background="#D91C1E24"
+                                                    IsVisible="{Binding HasCustomImage}">
+                                                <Viewbox Stretch="Uniform">
+                                                    <Canvas Width="44" Height="44">
+                                                        <shapes:Path Data="M5,28 L22,38 L39,28 L22,18 Z"
+                                                                     Fill="Transparent"
+                                                                     Stroke="#D7EEFF"
+                                                                     StrokeThickness="3"
+                                                                     StrokeJoin="Round"/>
+                                                        <shapes:Path Data="M5,21 L22,31 L39,21 L22,11 Z"
+                                                                     Fill="#1C1E24"
+                                                                     Stroke="#A8D7FF"
+                                                                     StrokeThickness="3"
+                                                                     StrokeJoin="Round"/>
+                                                        <shapes:Path Data="M5,14 L22,4 L39,14 L22,24 Z"
+                                                                     Fill="#5DA8FF"
+                                                                     Stroke="#D7EEFF"
+                                                                     StrokeThickness="1.5"
+                                                                     StrokeJoin="Round"/>
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+
+                                    <StackPanel Grid.Column="1"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontWeight="Bold"
+                                                   FontSize="14"
+                                                   MaxLines="1"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding Name}"/>
+                                        <TextBlock Text="{Binding AddonCountDisplay}"
+                                                   IsVisible="{Binding IsAsset}"
+                                                   Opacity="0.7"
+                                                   FontSize="12"
+                                                   MaxLines="1"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding AddonCountDisplay}"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Column="2"
+                                               Text="›"
+                                               Margin="10,0,4,0"
+                                               FontSize="24"
+                                               Opacity="0.75"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding IsGroup}"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+
+                    <ListBox.Styles>
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentLowBrush}"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected Border.targetEntry">
+                            <Setter Property="Background" Value="#344A61"/>
+                            <Setter Property="BorderBrush" Value="#4A90E2"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:selected Border.targetEntry.group">
+                            <Setter Property="Background" Value="#344A61"/>
+                            <Setter Property="BorderBrush" Value="#4A90E2"/>
+                        </Style>
+                    </ListBox.Styles>
+                </ListBox>
+
+                <TextBlock Text="{Binding EmptyText}"
+                           IsVisible="{Binding IsEmpty}"
+                           Margin="28"
+                           MaxWidth="320"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap"
+                           Opacity="0.65"
+                           IsHitTestVisible="False"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3"
+              ColumnDefinitions="Auto,*,Auto,Auto"
+              ColumnSpacing="10">
             <Button Name="CreateAssetButton"
-                    DockPanel.Dock="Left"
+                    Grid.Column="0"
                     Content="{loc:Localize AssetList.CreateNew}"
-                    Height="32"
+                    Height="34"
+                    Padding="12,4"
                     Click="OnCreateAssetClick"
                     IsVisible="False"/>
-            <StackPanel Orientation="Horizontal"
-                       HorizontalAlignment="Right"
-                       Spacing="10">
-                <Button Name="CancelButton"
-                        Content="{loc:Localize Dialog.Cancel}"
-                        Width="100"
-                        Height="32"
-                        Click="OnCancelClick"/>
-                <Button Name="OkButton"
-                        Content="{loc:Localize Dialog.Add}"
-                        Width="100"
-                        Height="32"
-                        IsEnabled="False"
-                        Click="OnOkClick"
-                        Classes="accent"/>
-            </StackPanel>
-        </DockPanel>
-        
-        <!-- アセットリスト -->
-        <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                BorderThickness="1"
-                CornerRadius="4">
-            <ListBox Name="AssetListBox"
-                     SelectionMode="Single"
-                     SelectionChanged="OnSelectionChanged">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:AssetItemViewModel">
-                        <Border Padding="10,8"
-                                Background="Transparent">
-                            <Grid ColumnDefinitions="Auto,*">
-                                <!-- アイコン -->
-                                <Border Grid.Column="0"
-                                        Width="32" Height="32"
-                                        Margin="0,0,10,0"
-                                        ClipToBounds="True"
-                                        Classes="assetImage"
-                                        Classes.hasImage="{Binding HasCustomImage}">
-                                    <Border.Styles>
-                                        <Style Selector="Border.assetImage">
-                                            <Setter Property="CornerRadius" Value="4"/>
-                                            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListLowBrush}"/>
-                                        </Style>
-                                        <Style Selector="Border.assetImage.hasImage">
-                                            <Setter Property="CornerRadius" Value="4"/>
-                                            <Setter Property="Background" Value="Transparent"/>
-                                        </Style>
-                                    </Border.Styles>
-                                    <Grid>
-                                        <Image Source="{Binding AssetImageBitmap}"
-                                               Stretch="UniformToFill"
-                                               IsVisible="{Binding HasCustomImage}"/>
-                                        <Border IsVisible="{Binding HasNoCustomImage}"
-                                                Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-                                            <TextBlock Text="{Binding Name, Converter={StaticResource FirstCharacterConverter}}"
-                                                      HorizontalAlignment="Center"
-                                                      VerticalAlignment="Center"
-                                                      FontSize="16"
-                                                      FontWeight="Bold"
-                                                      Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"/>
-                                        </Border>
-                                    </Grid>
-                                </Border>
-                                
-                                <!-- 情報 -->
-                                <StackPanel Grid.Column="1"
-                                            VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Name}"
-                                              FontWeight="Bold"
-                                              FontSize="14"
-                                              MaxLines="1"
-                                              TextTrimming="CharacterEllipsis"
-                                              ToolTip.Tip="{Binding Name}"/>
-                                    <TextBlock Text="{Binding AddonCountDisplay}"
-                                               Opacity="0.7"
-                                               FontSize="12"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-                
-                <ListBox.Styles>
-                    <Style Selector="ListBoxItem">
-                        <Setter Property="Padding" Value="0"/>
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                    </Style>
-                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
-                    </Style>
-                    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListAccentLowBrush}"/>
-                    </Style>
-                </ListBox.Styles>
-            </ListBox>
-        </Border>
-    </DockPanel>
+            <Button Name="CancelButton"
+                    Grid.Column="2"
+                    Content="{loc:Localize Dialog.Cancel}"
+                    Width="100"
+                    Height="34"
+                    IsCancel="True"
+                    Click="OnCancelClick"/>
+            <Button Name="OkButton"
+                    Grid.Column="3"
+                    Content="{loc:Localize Dialog.Add}"
+                    Width="100"
+                    Height="34"
+                    IsDefault="True"
+                    IsEnabled="False"
+                    Click="OnOkClick"
+                    Classes="accent"/>
+        </Grid>
+    </Grid>
 </Window>

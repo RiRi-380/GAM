@@ -119,6 +119,32 @@ public sealed class AssetGroupUiContractTests : IDisposable
     }
 
     [Fact]
+    public void ScrolledReorderTargetMapsVisibleBoundariesToGlobalIndices()
+    {
+        var entryKeys = Enumerable.Range(0, 30)
+            .Select(index => $"asset:{index}")
+            .ToList();
+        var visibleBoundaries = Enumerable.Range(20, 9)
+            .Select((index, visibleIndex) =>
+                (EntryKey: entryKeys[index], CenterY: 50d + (visibleIndex * 100d)))
+            .ToList();
+
+        var beforeFirstVisible = Views.AssetListView.ResolveRequestedReorderTargetIndex(
+            entryKeys,
+            entryKeys[24],
+            visibleBoundaries,
+            pointerY: 0);
+        var afterVisibleNeighbor = Views.AssetListView.ResolveRequestedReorderTargetIndex(
+            entryKeys,
+            entryKeys[24],
+            visibleBoundaries,
+            pointerY: 600);
+
+        Assert.Equal(20, beforeFirstVisible);
+        Assert.Equal(25, afterVisibleNeighbor);
+    }
+
+    [Fact]
     public async Task CollapsePreferenceUsesInjectedPersistenceBoundary()
     {
         using var manager = await CreateManagerAsync();

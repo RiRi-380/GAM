@@ -85,7 +85,21 @@ public sealed class UiPolishContractTests
             "Text=\"{Binding AddonCountDisplay}\"",
             source, StringComparison.Ordinal);
         Assert.DoesNotContain("{0} addons", source, StringComparison.Ordinal);
-        AssertEllipsisAndTooltip(document, "{Binding Name}");
+        var targetEntry = document
+            .Descendants(AvaloniaNamespace + "Border")
+            .Single(element =>
+                (string?)element.Attribute("PointerReleased") ==
+                "OnEntryPointerReleased");
+        var targetName = targetEntry
+            .Descendants(AvaloniaNamespace + "TextBlock")
+            .Single(element =>
+                (string?)element.Attribute("Text") == "{Binding Name}");
+        Assert.Equal(
+            "CharacterEllipsis",
+            (string?)targetName.Attribute("TextTrimming"));
+        Assert.Equal(
+            "{Binding Name}",
+            (string?)targetName.Attribute("ToolTip.Tip"));
     }
 
     [Fact]

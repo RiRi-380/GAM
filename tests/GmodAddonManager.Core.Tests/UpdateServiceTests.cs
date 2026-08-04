@@ -481,6 +481,98 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
+    public void SelectPortableAsset_ChoosesVersionedGamPortableZipOnly()
+    {
+        var selected = UpdateService.SelectPortableAsset(new[]
+        {
+            new GitHubAsset { Name = "source.zip" },
+            new GitHubAsset { Name = "GAM-Setup-2.0.0.exe" },
+            new GitHubAsset { Name = "GAM-Portable-2.0.0.zip" }
+        });
+
+        Assert.NotNull(selected);
+        Assert.Equal("GAM-Portable-2.0.0.zip", selected.Name);
+    }
+
+    [Fact]
+    public async Task PortableCheck_SelectsPortableArchiveAndNeverSetupExecutable()
+    {
+        using var client = new HttpClient(new RecordingHandler((_, _) => JsonResponse(
+            """
+            {
+              "tag_name": "v2.1.0",
+              "published_at": "2026-08-05T00:00:00Z",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "url": "https://updates.example.test/assets/setup",
+                  "name": "GAM-Setup-2.1.0.exe",
+                  "browser_download_url": "https://downloads.example.test/GAM-Setup-2.1.0.exe",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                  "url": "https://updates.example.test/assets/portable",
+                  "name": "GAM-Portable-2.1.0.zip",
+                  "browser_download_url": "https://downloads.example.test/GAM-Portable-2.1.0.zip",
+                  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              ]
+            }
+            """)));
+        var service = new UpdateService(
+            "2.0.0",
+            new UpdateSource { ApiUrl = "https://updates.example.test/releases" },
+            githubToken: null,
+            client,
+            portableInstallation: true);
+
+        var result = await service.CheckForUpdateAsync(forceCheck: true);
+
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
+        var update = Assert.IsType<UpdateInfo>(result.UpdateInfo);
+        Assert.Equal(UpdatePackageKind.PortableArchive, update.PackageKind);
+        Assert.EndsWith("GAM-Portable-2.1.0.zip", update.DownloadUrl, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IsPortableInstallation_RequiresExplicitPackageMarker()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            Assert.False(UpdateService.IsPortableInstallation(directory));
+            File.WriteAllText(
+                Path.Combine(directory, UpdateService.PortableMarkerFileName),
+                "{}");
+            Assert.True(UpdateService.IsPortableInstallation(directory));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PortableInstall_RejectsSetupPackageBeforeNetworkAccess()
+    {
+        var handler = new RecordingHandler((_, _) => BinaryResponse("must not download"));
+        using var client = new HttpClient(handler);
+        var service = new UpdateService(
+            "2.0.0",
+            source: null,
+            githubToken: null,
+            client,
+            portableInstallation: true);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.DownloadAndInstallUpdateAsync(
+                "https://downloads.example.test/GAM-Setup-2.1.0.exe",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public void BuildInstallerLauncherScript_WaitsForCurrentProcessAndStartsInstaller()
     {
         var script = UpdateService.BuildInstallerLauncherScript(
@@ -563,6 +655,19 @@ public sealed class UpdateServiceTests
         Assert.True(startInfo.CreateNoWindow);
         Assert.Contains("-File", startInfo.ArgumentList);
         Assert.Contains(@"C:\Temp\launcher.ps1", startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void CreatePortablePackageRevealStartInfo_UsesExplorerSelectWithoutShellText()
+    {
+        var startInfo = UpdateService.CreatePortablePackageRevealStartInfo(
+            @"C:\Temp\GAM-Portable-2.1.0.zip");
+
+        Assert.Equal("explorer.exe", startInfo.FileName);
+        Assert.True(startInfo.UseShellExecute);
+        Assert.Equal(
+            "/select,\"C:\\Temp\\GAM-Portable-2.1.0.zip\"",
+            startInfo.Arguments);
     }
 
     [Theory]

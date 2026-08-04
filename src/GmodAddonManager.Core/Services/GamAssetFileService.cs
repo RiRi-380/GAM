@@ -59,8 +59,11 @@ namespace GmodAddonManager.Core.Services
             stream.Position = 0;
             if (signatureLength >= 2 && signature[0] == (byte)'P' && signature[1] == (byte)'K')
             {
+                var bundle = await Task.Run(
+                    () => GamAssetBundleCodec.Deserialize(stream, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
                 return GamAssetFileReadResult.FromBundle(
-                    GamAssetBundleCodec.Deserialize(stream, cancellationToken));
+                    bundle);
             }
 
             return GamAssetFileReadResult.FromSingleAsset(
@@ -85,7 +88,9 @@ namespace GmodAddonManager.Core.Services
             }
 
             stream.Position = 0;
-            return GamAssetBundleCodec.Deserialize(stream, cancellationToken);
+            return await Task.Run(
+                () => GamAssetBundleCodec.Deserialize(stream, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         public async Task WriteAsync(
@@ -100,7 +105,9 @@ namespace GmodAddonManager.Core.Services
             }
 
             var destination = ValidateWriteDestination(path, overwrite);
-            var bytes = GamAssetDocumentCodec.Serialize(document);
+            var bytes = await Task.Run(
+                () => GamAssetDocumentCodec.Serialize(document),
+                cancellationToken).ConfigureAwait(false);
             await WriteAtomicallyAsync(
                 destination,
                 overwrite,
@@ -132,8 +139,9 @@ namespace GmodAddonManager.Core.Services
                 overwrite,
                 stream =>
                 {
-                    GamAssetBundleCodec.Serialize(stream, document, cancellationToken);
-                    return Task.CompletedTask;
+                    return Task.Run(
+                        () => GamAssetBundleCodec.Serialize(stream, document, cancellationToken),
+                        cancellationToken);
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -162,10 +170,11 @@ namespace GmodAddonManager.Core.Services
             CancellationToken cancellationToken)
         {
             EnsureNotEmpty(stream);
-            if (stream.Length > int.MaxValue)
+            if (stream.Length > GamAssetDocumentCodec.MaximumDocumentBytes)
             {
                 throw new GamAssetDocumentException(
-                    "This single-Asset .gam document exceeds the byte-array address range. " +
+                    $"This single-Asset .gam document exceeds the " +
+                    $"{GamAssetDocumentCodec.MaximumDocumentBytes}-byte safety limit. " +
                     "Use the streaming .gam bundle format for very large exports.");
             }
 
@@ -188,7 +197,16 @@ namespace GmodAddonManager.Core.Services
                 offset += read;
             }
 
-            return GamAssetDocumentCodec.Deserialize(bytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (stream.ReadByte() != -1)
+            {
+                throw new GamAssetDocumentException(
+                    "The .gam document changed while it was being read.");
+            }
+
+            return await Task.Run(
+                () => GamAssetDocumentCodec.Deserialize(bytes, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         private static string ValidateWriteDestination(string path, bool overwrite)

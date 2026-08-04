@@ -122,6 +122,163 @@ public sealed class PathHealthServiceTests
     }
 
     [Fact]
+    public void BuildReport_CorruptManagedPathPointingAtWorkshopRootDoesNotOfferPayloadForMigration()
+    {
+        using var env = new TestEnvironment();
+        var workshopPayload = Path.Combine(env.OldWorkshopRoot, "111");
+        WritePayload(workshopPayload);
+        var config = new Configuration();
+        config.PathState.LastManagerPath = Path.GetDirectoryName(env.OldWorkshopRoot);
+        config.PathState.LastAddonsPath = env.OldWorkshopRoot;
+
+        var report = PathHealthService.BuildReport(
+            config,
+            CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot),
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Empty(report.ManagedDataMigrationCandidates);
+        Assert.True(Directory.Exists(workshopPayload));
+    }
+
+    [Fact]
+    public void BuildReport_CorruptManagedPathDoesNotOfferWorkshopPayloadForMigration()
+    {
+        using var env = new TestEnvironment();
+        var workshopPayload = Path.Combine(env.OldWorkshopRoot, "123");
+        WritePayload(workshopPayload);
+        var fakeManagedRoot = Path.Combine(env.OldWorkshopRoot, "addons");
+        Directory.CreateDirectory(fakeManagedRoot);
+        WritePayload(Path.Combine(fakeManagedRoot, "456"));
+        var config = new Configuration();
+        config.PathState.LastManagerPath = env.OldWorkshopRoot;
+        config.PathState.LastAddonsPath = fakeManagedRoot;
+        config.PathState.LastDetectedSnapshot = CreateSnapshot(
+            env.OldGmodPath,
+            env.OldWorkshopRoot);
+
+        var report = PathHealthService.BuildReport(
+            config,
+            CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot),
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Empty(report.ManagedDataMigrationCandidates);
+        Assert.Contains(
+            report.Issues,
+            issue => issue.Contains(
+                "untrusted previous managed addons root",
+                StringComparison.Ordinal));
+        Assert.True(Directory.Exists(workshopPayload));
+        Assert.True(Directory.Exists(Path.Combine(fakeManagedRoot, "456")));
+    }
+
+    [Fact]
+    public void BuildReport_CorruptManagedPathDoesNotOfferGmodLocalAddonsForMigration()
+    {
+        using var env = new TestEnvironment();
+        var garrysmodRoot = Path.Combine(env.OldGmodPath, "garrysmod");
+        var localAddonsRoot = Path.Combine(garrysmodRoot, "addons");
+        var localPayload = Path.Combine(localAddonsRoot, "789");
+        WritePayload(localPayload);
+        var config = new Configuration();
+        config.PathState.LastManagerPath = garrysmodRoot;
+        config.PathState.LastAddonsPath = localAddonsRoot;
+        config.PathState.LastDetectedSnapshot = CreateSnapshot(
+            env.OldGmodPath,
+            env.OldWorkshopRoot);
+
+        var report = PathHealthService.BuildReport(
+            config,
+            CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot),
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Empty(report.ManagedDataMigrationCandidates);
+        Assert.True(Directory.Exists(localPayload));
+    }
+
+    [Fact]
+    public void MigrateManagedData_ForgedWorkshopCandidateIsRejectedAtExecution()
+    {
+        using var env = new TestEnvironment();
+        var workshopPayload = Path.Combine(env.OldWorkshopRoot, "321");
+        var target = Path.Combine(env.CurrentAddonsPath, "321");
+        WritePayload(workshopPayload);
+
+        var result = PathHealthService.MigrateManagedData(
+            new[]
+            {
+                new ManagedDataMigrationCandidate
+                {
+                    AddonId = "321",
+                    SourcePath = workshopPayload,
+                    TargetPath = target,
+                    IsDirectory = true
+                }
+            },
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Equal(0, result.MovedCount);
+        Assert.Equal(1, result.SkippedCount);
+        Assert.True(Directory.Exists(workshopPayload));
+        Assert.False(Directory.Exists(target));
+    }
+
+    [Fact]
+    public void BuildReport_ArbitraryGmodAddonManagerFolderIsNotAnOwnedLegacySource()
+    {
+        using var env = new TestEnvironment();
+        var forgedManager = Path.Combine(env.RootPath, "Victim", "GmodAddonManager");
+        var forgedAddons = Path.Combine(forgedManager, "addons");
+        var payload = Path.Combine(forgedAddons, "654");
+        WritePayload(payload);
+        var config = new Configuration();
+        config.PathState.LastManagerPath = forgedManager;
+        config.PathState.LastAddonsPath = forgedAddons;
+
+        var report = PathHealthService.BuildReport(
+            config,
+            CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot),
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Empty(report.ManagedDataMigrationCandidates);
+        Assert.True(Directory.Exists(payload));
+    }
+
+    [Fact]
+    public void MigrateManagedData_TargetOutsideRuntimeManagedRootIsRejectedAtExecution()
+    {
+        using var env = new TestEnvironment();
+        var legacyPayload = Path.Combine(env.OldAddonsPath, "987");
+        var forgedTargetRoot = Path.Combine(env.RootPath, "ForgedTarget", "addons");
+        var forgedTarget = Path.Combine(forgedTargetRoot, "987");
+        WritePayload(legacyPayload);
+        Directory.CreateDirectory(forgedTargetRoot);
+
+        var result = PathHealthService.MigrateManagedData(
+            new[]
+            {
+                new ManagedDataMigrationCandidate
+                {
+                    AddonId = "987",
+                    SourcePath = legacyPayload,
+                    TargetPath = forgedTarget,
+                    IsDirectory = true
+                }
+            },
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
+
+        Assert.Equal(0, result.MovedCount);
+        Assert.Equal(1, result.SkippedCount);
+        Assert.True(Directory.Exists(legacyPayload));
+        Assert.False(Directory.Exists(forgedTarget));
+    }
+
+    [Fact]
     public void PublicPathHealthContract_DoesNotExposeWorkshopCleanup()
     {
         Assert.DoesNotContain(
@@ -158,7 +315,10 @@ public sealed class PathHealthServiceTests
         var candidate = Assert.Single(report.ManagedDataMigrationCandidates);
         Assert.Equal("123", candidate.AddonId);
 
-        var result = PathHealthService.MigrateManagedData(report.ManagedDataMigrationCandidates);
+        var result = PathHealthService.MigrateManagedData(
+            report.ManagedDataMigrationCandidates,
+            env.CurrentManagerPath,
+            env.CurrentAddonsPath);
 
         Assert.Equal(1, result.MovedCount);
         Assert.False(Directory.Exists(oldAddon));
@@ -219,7 +379,7 @@ public sealed class PathHealthServiceTests
             OldWorkshopRoot = Path.Combine(rootPath, "OldSteam", "steamapps", "workshop", "content", "4000");
             CurrentWorkshopRoot = Path.Combine(rootPath, "CurrentSteam", "steamapps", "workshop", "content", "4000");
             OldManagerPath = Path.Combine(rootPath, "OldSteam", "steamapps", "workshop", "content", "4000", ".addon-manager");
-            CurrentManagerPath = Path.Combine(rootPath, "CurrentSteam", "steamapps", "workshop", "content", "4000", ".addon-manager");
+            CurrentManagerPath = Path.Combine(rootPath, "AppData", "Roaming", "GmodAddonManager");
             OldAddonsPath = Path.Combine(OldManagerPath, "addons");
             CurrentAddonsPath = Path.Combine(CurrentManagerPath, "addons");
 
@@ -232,6 +392,7 @@ public sealed class PathHealthServiceTests
         }
 
         public string OldGmodPath { get; }
+        public string RootPath => rootPath;
         public string CurrentGmodPath { get; }
         public string OldWorkshopRoot { get; }
         public string CurrentWorkshopRoot { get; }

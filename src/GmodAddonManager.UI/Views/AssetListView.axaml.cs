@@ -172,6 +172,30 @@ public partial class AssetListView : UserControl
         e.Handled = true;
     }
 
+    private void OnEntryKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not Control card ||
+            !ReferenceEquals(e.Source, card) ||
+            e.Key is not (Key.Enter or Key.Space) ||
+            card.DataContext is not AssetListEntryViewModel entry ||
+            DataContext is not AssetListViewModel listViewModel)
+        {
+            return;
+        }
+
+        if (entry.Asset != null)
+        {
+            listViewModel.SelectedAsset = entry.Asset;
+        }
+
+        if (entry.Group != null)
+        {
+            listViewModel.OpenGroup(entry);
+        }
+
+        e.Handled = true;
+    }
+
     private void OnEntryPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Border card ||
@@ -296,17 +320,45 @@ public partial class AssetListView : UserControl
             return;
         }
 
-        if (entry.EditImageCommand.CanExecute(null))
+        if (TryExecuteEditImage(entry))
         {
-            try
-            {
-                entry.EditImageCommand.Execute(null);
-                e.Handled = true;
-            }
-            catch (Exception ex)
-            {
-                SafeFileLogger.TryLogException("AssetListView.OnEntryImagePointerPressed", ex);
-            }
+            e.Handled = true;
+        }
+    }
+
+    private void OnEntryImageKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not Control control ||
+            !ReferenceEquals(e.Source, control) ||
+            e.Key is not (Key.Enter or Key.Space) ||
+            control.DataContext is not AssetListEntryViewModel entry ||
+            !entry.CanEditImage)
+        {
+            return;
+        }
+
+        if (TryExecuteEditImage(entry))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private static bool TryExecuteEditImage(AssetListEntryViewModel entry)
+    {
+        if (!entry.EditImageCommand.CanExecute(null))
+        {
+            return false;
+        }
+
+        try
+        {
+            entry.EditImageCommand.Execute(null);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("AssetListView.TryExecuteEditImage", ex);
+            return false;
         }
     }
 
@@ -386,25 +438,59 @@ public partial class AssetListView : UserControl
         var pointerPosition = e.GetPosition(assetScrollViewer);
         AutoScrollDuringDrag(pointerPosition.Y);
         var cards = GetVisibleReorderCards(assetScrollViewer, reorderable);
-        var insertionSlot = 0;
-        foreach (var card in cards)
-        {
-            if (pointerPosition.Y >= card.Top + (card.Height / 2))
-            {
-                insertionSlot++;
-            }
-        }
-
-        var requestedTarget = insertionSlot;
-        if (requestedTarget > currentIndex)
-        {
-            requestedTarget--;
-        }
-        requestedTarget = Math.Clamp(requestedTarget, 0, reorderable.Count - 1);
+        var requestedTarget = ResolveRequestedReorderTargetIndex(
+            reorderable.Select(EntryKey).ToList(),
+            EntryKey(pressedEntry),
+            cards.Select(card => (EntryKey(card.Entry!), card.Top + (card.Height / 2))).ToList(),
+            pointerPosition.Y);
         dragTargetIndex = listViewModel.GetClampedReorderTargetIndex(
             pressedEntry,
             requestedTarget);
         ShowInsertionMarkerForTarget(reorderable, currentIndex, dragTargetIndex);
+    }
+
+    internal static int ResolveRequestedReorderTargetIndex(
+        IReadOnlyList<string> reorderableEntryKeys,
+        string movingEntryKey,
+        IReadOnlyList<(string EntryKey, double CenterY)> visibleCardBoundaries,
+        double pointerY)
+    {
+        var currentIndex = IndexOfEntryKey(reorderableEntryKeys, movingEntryKey);
+        if (currentIndex < 0 || reorderableEntryKeys.Count == 0)
+        {
+            return -1;
+        }
+
+        int? insertionSlot = null;
+        foreach (var boundary in visibleCardBoundaries)
+        {
+            var globalIndex = IndexOfEntryKey(reorderableEntryKeys, boundary.EntryKey);
+            if (globalIndex < 0)
+            {
+                continue;
+            }
+
+            if (pointerY < boundary.CenterY)
+            {
+                insertionSlot = globalIndex;
+                break;
+            }
+
+            insertionSlot = globalIndex + 1;
+        }
+
+        if (!insertionSlot.HasValue)
+        {
+            return currentIndex;
+        }
+
+        var requestedTarget = insertionSlot.Value;
+        if (requestedTarget > currentIndex)
+        {
+            requestedTarget--;
+        }
+
+        return Math.Clamp(requestedTarget, 0, reorderableEntryKeys.Count - 1);
     }
 
     private void ShowInsertionMarkerForTarget(
@@ -539,6 +625,21 @@ public partial class AssetListView : UserControl
                 return index;
             }
         }
+        return -1;
+    }
+
+    private static int IndexOfEntryKey(
+        IReadOnlyList<string> entryKeys,
+        string targetKey)
+    {
+        for (var index = 0; index < entryKeys.Count; index++)
+        {
+            if (string.Equals(entryKeys[index], targetKey, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
         return -1;
     }
 

@@ -1,72 +1,145 @@
-# Build script for GAM - Same as GitHub Actions
+# Build a local GAM release using the same packaging contract as GitHub Actions.
+[CmdletBinding()]
 param(
-    [string]$Version = "v2.2.0",
+    [string]$Version = "v2.0.0",
     [ValidateSet("prompt", "run", "skip")]
-    [string]$RunMode = "prompt"
+    [string]$RunMode = "prompt",
+    [string]$DotNetPath = "dotnet"
 )
 
-Write-Host "Building GAM $Version..." -ForegroundColor Green
-
-$normalizedVersion = $Version
-if ($normalizedVersion.StartsWith("v")) {
-    $normalizedVersion = $normalizedVersion.Substring(1)
+$ErrorActionPreference = "Stop"
+$repoRoot = $PSScriptRoot
+$versionPattern = '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if ($Version -notmatch $versionPattern) {
+    throw "Version must be an exact stable semantic version such as v2.0.0."
 }
+
+$normalizedVersion = $Version.TrimStart('v')
+$tagVersion = "v$normalizedVersion"
+[xml]$buildProperties = Get-Content -LiteralPath (Join-Path $repoRoot "Directory.Build.props") -Raw
+$declaredVersion = $buildProperties.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
+if ($declaredVersion -ne $normalizedVersion) {
+    throw "Directory.Build.props declares $declaredVersion, but the requested build is $normalizedVersion."
+}
+
+$publishDirectory = Join-Path $repoRoot "publish"
+$portableDirectory = Join-Path $repoRoot "publish-portable"
+$distDirectory = Join-Path $repoRoot "dist"
+$portableZip = Join-Path $repoRoot "GAM-Portable-$normalizedVersion.zip"
+$managedManifestName = "GAM-ReleaseFiles.txt"
+$portableMarkerName = ".gam-portable.json"
+$solutionPath = Join-Path $repoRoot "GmodAddonManager.sln"
+$uiProjectPath = Join-Path $repoRoot "src\GmodAddonManager.UI\GmodAddonManager.UI.csproj"
+$assetsPath = Join-Path $repoRoot "src\GmodAddonManager.UI\obj\project.assets.json"
+$globalJsonPath = Join-Path $repoRoot "global.json"
+[string]$requiredSdkVersion = (Get-Content -LiteralPath $globalJsonPath -Raw | ConvertFrom-Json).sdk.version
+$dotnetCommand = Get-Command $DotNetPath -ErrorAction Stop
+$dotnetExecutable = $dotnetCommand.Source
+
+function Invoke-DotNet {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    & $dotnetExecutable @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet $($Arguments[0]) failed with exit code $LASTEXITCODE."
+    }
+}
+
+$savedErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    $detectedSdkVersion = & $dotnetExecutable --version 2>&1
+    $dotnetVersionExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+}
+if (($dotnetVersionExitCode -ne 0) -or ($detectedSdkVersion -ne $requiredSdkVersion)) {
+    throw "The release build requires .NET SDK $requiredSdkVersion. Use -DotNetPath to select that dotnet executable."
+}
+
 $fileVersion = "$normalizedVersion.0"
-$informationalVersion = "v$normalizedVersion+local"
 $versionProps = @(
     "-p:Version=$normalizedVersion",
     "-p:FileVersion=$fileVersion",
     "-p:AssemblyVersion=$fileVersion",
-    "-p:InformationalVersion=$informationalVersion",
+    "-p:InformationalVersion=$tagVersion+local",
     "-p:IncludeSourceRevisionInInformationalVersion=false"
 )
 
-# Clean previous builds
-Write-Host "Cleaning previous builds..." -ForegroundColor Yellow
-if (Test-Path "publish") {
-    Remove-Item -Path "publish" -Recurse -Force
+Write-Host "Building GAM $tagVersion..." -ForegroundColor Green
+
+foreach ($directory in @($publishDirectory, $portableDirectory, $distDirectory)) {
+    if (Test-Path -LiteralPath $directory) {
+        Remove-Item -LiteralPath $directory -Recurse -Force
+    }
 }
-if (Test-Path "dist") {
-    Remove-Item -Path "dist" -Recurse -Force
+if (Test-Path -LiteralPath $portableZip) {
+    Remove-Item -LiteralPath $portableZip -Force
 }
 
-# Restore dependencies
-Write-Host "Restoring dependencies..." -ForegroundColor Yellow
-dotnet restore GmodAddonManager.sln '-p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904'
+Write-Host "Restoring locked dependencies and auditing vulnerabilities..." -ForegroundColor Yellow
+Invoke-DotNet @("restore", $solutionPath, "--locked-mode")
 
-# Build a self-contained, multi-file application. Do not switch this back to a
-# single-file bundle: native libraries are extracted to %TEMP%\.net before startup.
-Write-Host "Building self-contained application..." -ForegroundColor Yellow
-dotnet publish src/GmodAddonManager.UI/GmodAddonManager.UI.csproj `
-    -c Release `
-    -r win-x64 `
-    --self-contained true `
-    -p:PublishSingleFile=false `
-    -p:PublishTrimmed=false `
-    @versionProps `
-    -o publish
+Write-Host "Publishing the self-contained multi-file application..." -ForegroundColor Yellow
+$publishArguments = @(
+    "publish",
+    $uiProjectPath,
+    "-c", "Release",
+    "-r", "win-x64",
+    "--self-contained", "true",
+    "--no-restore",
+    "-p:TreatWarningsAsErrors=true",
+    "-p:PublishSingleFile=false",
+    "-p:PublishTrimmed=false"
+) + $versionProps + @("-o", $publishDirectory)
+Invoke-DotNet $publishArguments
 
-# Include and validate all distribution licenses/notices.
-& "$PSScriptRoot\scripts\prepare-release-notices.ps1" `
-    -PublishDirectory "$PSScriptRoot\publish" `
-    -ProjectAssetsPath "$PSScriptRoot\src\GmodAddonManager.UI\obj\project.assets.json"
+& (Join-Path $repoRoot "scripts\prepare-release-notices.ps1") `
+    -PublishDirectory $publishDirectory `
+    -ProjectAssetsPath $assetsPath
 
-# Create portable ZIP
-Write-Host "Creating portable ZIP..." -ForegroundColor Yellow
-$zipPath = "GAM-Portable-$normalizedVersion.zip"
-if (Test-Path $zipPath) {
-    Remove-Item $zipPath
+if (Test-Path -LiteralPath (Join-Path $publishDirectory $portableMarkerName)) {
+    throw "The installer staging directory must not contain $portableMarkerName."
 }
-Compress-Archive -Path publish/* -DestinationPath $zipPath
 
-# Build installer (if Inno Setup is installed)
+# The installer reads the previous release's copy of this manifest and deletes
+# only obsolete, explicitly managed files. It never recursively deletes {app}
+# or any file under the user's AppData directory.
+$managedFiles = @(
+    Get-ChildItem -LiteralPath $publishDirectory -Recurse -File |
+        ForEach-Object {
+            $_.FullName.Substring($publishDirectory.TrimEnd('\').Length + 1).Replace('/', '\')
+        }
+    $managedManifestName
+) | Sort-Object -Unique
+[System.IO.File]::WriteAllLines(
+    (Join-Path $publishDirectory $managedManifestName),
+    [string[]]$managedFiles,
+    [System.Text.UTF8Encoding]::new($false))
+
+Write-Host "Creating portable staging directory and marker..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Path $portableDirectory -Force | Out-Null
+Copy-Item -Path (Join-Path $publishDirectory '*') -Destination $portableDirectory -Recurse -Force
+[System.IO.File]::WriteAllText(
+    (Join-Path $portableDirectory $portableMarkerName),
+    '{"formatVersion":1,"distribution":"portable"}',
+    [System.Text.UTF8Encoding]::new($false))
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $portableDirectory,
+    $portableZip,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false)
+
 $innoSetupCandidates = @(
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
     "C:\Program Files\Inno Setup 6\ISCC.exe",
     (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
 )
-
-$innoSetupPath = $innoSetupCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+$innoSetupPath = $innoSetupCandidates |
+    Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+    Select-Object -First 1
 if (-not $innoSetupPath) {
     $isccCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
     if ($isccCommand) {
@@ -75,51 +148,31 @@ if (-not $innoSetupPath) {
 }
 
 if ($innoSetupPath) {
-    Write-Host "Building installer..." -ForegroundColor Yellow
-    
-    # Check for VC++ Redistributable
-    $vcRedistPath = Join-Path $PSScriptRoot "redist\VC_redist.x64.exe"
-    if (-not (Test-Path $vcRedistPath)) {
-        throw "Visual C++ Redistributable is required for installer builds. Expected: $vcRedistPath"
-    }
-
-    $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedistPath
-    if ($vcSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-        $vcSignature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
-        throw "VC++ Redistributable signature validation failed: $($vcSignature.Status)"
-    }
-    Write-Host "[OK] Visual C++ Redistributable signature is valid" -ForegroundColor Green
-    
-    & $innoSetupPath installer/setup.iss /DMyAppVersion=$normalizedVersion
-    
-    # Move installer to root directory for easy access
-    $installerSource = "dist\GAM-Setup-$normalizedVersion.exe"
-    if (Test-Path $installerSource) {
-        Move-Item $installerSource . -Force
-        Write-Host "Installer created: GAM-Setup-$normalizedVersion.exe" -ForegroundColor Green
+    Write-Host "Building the per-user installer..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
+    & $innoSetupPath (Join-Path $repoRoot "installer\setup.iss") "/DMyAppVersion=$normalizedVersion"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup failed with exit code $LASTEXITCODE."
     }
 } else {
-    Write-Host "Inno Setup not found. Skipping installer build." -ForegroundColor Red
-    Write-Host "Install from: https://jrsoftware.org/isdl.php" -ForegroundColor Yellow
+    Write-Warning "Inno Setup was not found; installer verification was skipped."
 }
 
-Write-Host "`nBuild completed!" -ForegroundColor Green
-Write-Host "Outputs:" -ForegroundColor Cyan
-Write-Host "  - Portable: $zipPath" -ForegroundColor White
-Write-Host "  - Executable: publish\GmodAddonManager.UI.exe" -ForegroundColor White
+Write-Host "`nBuild completed." -ForegroundColor Green
+Write-Host "Portable: $portableZip" -ForegroundColor Cyan
+Write-Host "Installer staging: $publishDirectory" -ForegroundColor Cyan
+if (Test-Path -LiteralPath (Join-Path $distDirectory "GAM-Setup-$normalizedVersion.exe")) {
+    Write-Host "Installer: $(Join-Path $distDirectory "GAM-Setup-$normalizedVersion.exe")" -ForegroundColor Cyan
+}
 
-# Option to run the built executable
+$portableExecutable = Join-Path $portableDirectory "GmodAddonManager.UI.exe"
 switch ($RunMode) {
-    "run" {
-        Start-Process "publish\GmodAddonManager.UI.exe"
-    }
-    "skip" {
-        # no-op
-    }
+    "run" { Start-Process -FilePath $portableExecutable }
+    "skip" { }
     default {
-        $response = Read-Host "`nDo you want to run the built executable? (y/n)"
+        $response = Read-Host "Do you want to run the portable build? (y/n)"
         if ($response -eq 'y') {
-            Start-Process "publish\GmodAddonManager.UI.exe"
+            Start-Process -FilePath $portableExecutable
         }
     }
 }

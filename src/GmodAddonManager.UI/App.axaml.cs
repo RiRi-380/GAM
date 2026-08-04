@@ -171,6 +171,74 @@ public sealed partial class App : Application, IDisposable
             var startupPathRecovery = await StartupPathRecoveryCoordinator.RunStartupAsync(settings, appDataPath);
             SafeFileLogger.TryLogStartupMilestone("PathRecoveryCompleted");
 
+            var resolvedGmodInstallPath =
+                startupPathRecovery.ResolvedGmodInstallPath ??
+                settings.CustomGmodInstallPath;
+            var resolvedWorkshopRootPath =
+                startupPathRecovery.ResolvedWorkshopRootPath ??
+                settings.CustomWorkshopPath;
+
+            // GAM v1 Hard mode could move the only physical addon payload under
+            // .addon-manager and leave a junction/hard link (or nothing for an
+            // OFF addon) at the Steam/GMod location. Restore that layout before
+            // v2 Soft mode inventories or writes any runtime state.
+            if (!string.IsNullOrWhiteSpace(resolvedGmodInstallPath) &&
+                !string.IsNullOrWhiteSpace(resolvedWorkshopRootPath) &&
+                Directory.Exists(resolvedGmodInstallPath) &&
+                Directory.Exists(resolvedWorkshopRootPath))
+            {
+                var legacyRecovery = await new LegacyHardLayoutRecoveryService()
+                    .RecoverIfNeededAsync(
+                        resolvedWorkshopRootPath,
+                        resolvedGmodInstallPath,
+                        appDataPath,
+                        SteamProcessChecker.IsGmodRunning());
+
+                if (legacyRecovery.Status ==
+                    LegacyHardLayoutRecoveryStatus.DeferredWhileGmodIsRunning)
+                {
+                    await dialogService.ShowErrorAsync(
+                        L.Get("Error.Title"),
+                        L.Get("LegacyRecovery.GmodRunning"));
+                    applicationLock.Dispose();
+                    if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime legacyRunningLifetime)
+                    {
+                        legacyRunningLifetime.Shutdown();
+                    }
+                    return;
+                }
+
+                if (legacyRecovery.Status == LegacyHardLayoutRecoveryStatus.Blocked)
+                {
+                    errorHandler.HandleError(
+                        new InvalidDataException(
+                            legacyRecovery.FailureCode + ": " +
+                            legacyRecovery.FailureDetail),
+                        "LegacyHardLayoutRecovery",
+                        ErrorSeverity.Critical);
+                    await dialogService.ShowErrorAsync(
+                        L.Get("Error.Title"),
+                        L.Format(
+                            "LegacyRecovery.Blocked",
+                            legacyRecovery.FailureCode ?? "legacy_recovery_failed"));
+                    applicationLock.Dispose();
+                    if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime legacyBlockedLifetime)
+                    {
+                        legacyBlockedLifetime.Shutdown();
+                    }
+                    return;
+                }
+
+                if (legacyRecovery.Status == LegacyHardLayoutRecoveryStatus.Recovered)
+                {
+                    errorHandler.HandleInfo(
+                        $"Recovered {legacyRecovery.RecoveredItemCount} legacy Hard-layout payloads; " +
+                        $"preserved {legacyRecovery.DisabledAddonIds.Count} disabled states.",
+                        "LegacyHardLayoutRecovery");
+                    SafeFileLogger.TryLogStartupMilestone("LegacyHardLayoutRecovered");
+                }
+            }
+
             try
             {
 #if DEBUG
@@ -187,11 +255,9 @@ public sealed partial class App : Application, IDisposable
                     // only validates the resolved pair instead of scanning every
                     // Steam library a second time before the window is shown.
                     CustomGmodInstallPath =
-                        startupPathRecovery.ResolvedGmodInstallPath ??
-                        settings.CustomGmodInstallPath,
+                        resolvedGmodInstallPath,
                     CustomWorkshopPath =
-                        startupPathRecovery.ResolvedWorkshopRootPath ??
-                        settings.CustomWorkshopPath,
+                        resolvedWorkshopRootPath,
                     EnableLocalAddonDiscoveryExperimental =
                         settings.EnableLocalAddonDiscoveryExperimental
                 });
@@ -469,13 +535,14 @@ public sealed partial class App : Application, IDisposable
 #endif
             }
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            // 邂｡逅・・ｨｩ髯舌お繝ｩ繝ｼ繝繧､繧｢繝ｭ繧ｰ繧定｡ｨ遉ｺ
             var dialogService = new DialogService();
             await dialogService.ShowErrorAsync(
-                L.Get("Error.AdminRequiredTitle"), 
-                L.Get("Error.AdminRequiredMessage")
+                L.Get("Error.AccessDeniedTitle"),
+                L.Format(
+                    "Error.AccessDeniedMessage",
+                    PathSanitizer.SanitizeException(ex))
             );
             Environment.Exit(1);
         }

@@ -128,37 +128,66 @@ namespace GmodAddonManager.Core.Services
             set
             {
                 queueRuntimeApplyProvider = value;
+                var currentConfiguration = configuration;
                 var queueRecoveredWrite = runtimeReapplyRequiredFromRecovery;
-                var queueNewSubscriptions = runtimeApplyRequiredForNewSubscriptions;
-                if (value != null && (queueRecoveredWrite || queueNewSubscriptions))
+                var queueDeferredRuntimeApply =
+                    runtimeApplyRequiredWhileQueueUnavailable ||
+                    (currentConfiguration != null &&
+                     currentConfiguration.PendingRuntimeApplyRequired);
+                if (value != null &&
+                    (queueRecoveredWrite || queueDeferredRuntimeApply))
                 {
+                    PendingGamRuntimeWrite? clearedPendingIntent = null;
+                    var clearedDeferredRuntimeApply = false;
                     try
                     {
                         value.Invoke();
-                        if (queueRecoveredWrite)
+                        if (queueRecoveredWrite && currentConfiguration != null)
                         {
-                            var pendingIntent = configuration.PendingGamRuntimeWrite;
+                            var pendingIntent = currentConfiguration.PendingGamRuntimeWrite;
                             if (pendingIntent != null && !pendingIntent.ConflictDetected)
                             {
-                                configuration.PendingGamRuntimeWrite = null;
-                                try
+                                clearedPendingIntent = pendingIntent;
+                                currentConfiguration.PendingGamRuntimeWrite = null;
+                            }
+                        }
+                        if (queueDeferredRuntimeApply &&
+                            currentConfiguration != null &&
+                            currentConfiguration.PendingRuntimeApplyRequired)
+                        {
+                            clearedDeferredRuntimeApply = true;
+                            currentConfiguration.PendingRuntimeApplyRequired = false;
+                        }
+                        if (clearedPendingIntent != null || clearedDeferredRuntimeApply)
+                        {
+                            try
+                            {
+                                SaveConfigurationImmediatelySynchronously();
+                            }
+                            catch
+                            {
+                                if (clearedPendingIntent != null &&
+                                    currentConfiguration != null)
                                 {
-                                    SaveConfigurationImmediatelySynchronously();
+                                    currentConfiguration.PendingGamRuntimeWrite =
+                                        clearedPendingIntent;
                                 }
-                                catch
+                                if (clearedDeferredRuntimeApply &&
+                                    currentConfiguration != null)
                                 {
-                                    configuration.PendingGamRuntimeWrite = pendingIntent;
-                                    throw;
+                                    currentConfiguration.PendingRuntimeApplyRequired = true;
                                 }
+                                throw;
                             }
                         }
                         runtimeReapplyRequiredFromRecovery = false;
-                        runtimeApplyRequiredForNewSubscriptions = false;
+                        runtimeApplyRequiredWhileQueueUnavailable = false;
                     }
                     catch (Exception ex)
                     {
                         runtimeReapplyRequiredFromRecovery = queueRecoveredWrite;
-                        runtimeApplyRequiredForNewSubscriptions = queueNewSubscriptions;
+                        runtimeApplyRequiredWhileQueueUnavailable =
+                            queueDeferredRuntimeApply;
                         errorHandler.HandleWarning(
                             $"Failed to queue deferred runtime apply: {ex.Message}",
                             "QueueRuntimeApplyProvider");
@@ -186,7 +215,7 @@ namespace GmodAddonManager.Core.Services
         private bool enableLocalAddonDiscovery;
         private Action? queueRuntimeApplyProvider;
         private bool runtimeReapplyRequiredFromRecovery;
-        private bool runtimeApplyRequiredForNewSubscriptions;
+        private bool runtimeApplyRequiredWhileQueueUnavailable;
         private bool IsBulkStateUpdate => bulkStateUpdateDepth.Value > 0;
 
         private const int ERROR_NOT_SAME_DEVICE = 17;
@@ -530,7 +559,10 @@ namespace GmodAddonManager.Core.Services
         public async Task<PathHealthOperationResult> MigrateManagedDataAsync()
         {
             var report = GetPathHealthReport();
-            var result = PathHealthService.MigrateManagedData(report.ManagedDataMigrationCandidates);
+            var result = PathHealthService.MigrateManagedData(
+                report.ManagedDataMigrationCandidates,
+                managerPath,
+                addonsPath);
             var metadataUpdates = UpdateManagedDataMetadata(report.ManagedDataMigrationCandidates);
             if (result.MovedCount > 0 || metadataUpdates > 0)
             {
@@ -1226,7 +1258,6 @@ namespace GmodAddonManager.Core.Services
                     // changed above as a separate step so a restart does not
                     // reload stale enabled values for the new subscription.
                     await SaveConfigurationImmediatelyAsync();
-                    runtimeApplyRequiredForNewSubscriptions = false;
                     return;
                 }
 
@@ -1279,25 +1310,7 @@ namespace GmodAddonManager.Core.Services
 
         private void QueueNewSubscriptionRuntimeApply(string operationName)
         {
-            var queue = QueueRuntimeApplyProvider;
-            if (queue == null)
-            {
-                runtimeApplyRequiredForNewSubscriptions = true;
-                return;
-            }
-
-            try
-            {
-                queue.Invoke();
-                runtimeApplyRequiredForNewSubscriptions = false;
-            }
-            catch (Exception ex)
-            {
-                runtimeApplyRequiredForNewSubscriptions = true;
-                errorHandler.HandleWarning(
-                    $"Failed to queue new-subscription runtime apply: {ex.Message}",
-                    operationName);
-            }
+            _ = QueueRuntimeApplyOrRemember(operationName);
         }
 
         internal async Task<bool> FinalizeRuntimeAttributionConflictAsync(
@@ -6248,14 +6261,105 @@ namespace GmodAddonManager.Core.Services
                                         configuration.PendingGamRuntimeWrite?.ConflictDetected == true
                 ? configuration.PendingGamRuntimeWrite.OperationId
                 : null;
-            var queue = QueueRuntimeApplyProvider;
-            queue?.Invoke();
-            if (queue != null && !string.IsNullOrWhiteSpace(conflictedOperationId))
+            var queued = QueueRuntimeApplyOrRemember(
+                "DeferRuntimeApplyIfGmodRunning",
+                propagateQueueFailure: true);
+            if (queued && !string.IsNullOrWhiteSpace(conflictedOperationId))
             {
                 FinalizeRuntimeAttributionConflictSynchronouslyCore(
                     conflictedOperationId);
             }
             return true;
+        }
+
+        private bool QueueRuntimeApplyOrRemember(
+            string operationName,
+            bool propagateQueueFailure = false)
+        {
+            var queue = QueueRuntimeApplyProvider;
+            if (queue == null)
+            {
+                // Startup can reconcile Smart Asset membership before the UI
+                // constructs PendingChangeManager. Persist that runtime intent
+                // before returning so a process exit cannot lose it.
+                RememberRuntimeApplyDurably(
+                    operationName,
+                    propagateQueueFailure);
+                return false;
+            }
+
+            try
+            {
+                queue.Invoke();
+                runtimeApplyRequiredWhileQueueUnavailable = false;
+                if (configuration.PendingRuntimeApplyRequired)
+                {
+                    configuration.PendingRuntimeApplyRequired = false;
+                    try
+                    {
+                        SaveConfigurationImmediatelySynchronously();
+                    }
+                    catch (Exception ex)
+                    {
+                        // pending.json is already durable. Retaining this latch
+                        // makes the operation at-least-once after restart.
+                        configuration.PendingRuntimeApplyRequired = true;
+                        runtimeApplyRequiredWhileQueueUnavailable = true;
+                        errorHandler.HandleWarning(
+                            $"The deferred runtime apply was queued, but its durable latch could not be cleared: {ex.Message}",
+                            operationName);
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Queue providers persist the apply marker. A failed provider
+                // call therefore must be remembered on disk as well as in memory.
+                errorHandler.HandleWarning(
+                    $"Failed to queue deferred runtime apply: {ex.Message}",
+                    operationName);
+                RememberRuntimeApplyDurably(
+                    operationName,
+                    propagateQueueFailure);
+                if (propagateQueueFailure)
+                {
+                    throw;
+                }
+
+                return false;
+            }
+        }
+
+        private bool RememberRuntimeApplyDurably(
+            string operationName,
+            bool propagatePersistenceFailure)
+        {
+            runtimeApplyRequiredWhileQueueUnavailable = true;
+            if (configuration.PendingRuntimeApplyRequired)
+            {
+                return true;
+            }
+
+            configuration.PendingRuntimeApplyRequired = true;
+            try
+            {
+                SaveConfigurationImmediatelySynchronously();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                configuration.PendingRuntimeApplyRequired = false;
+                errorHandler.HandleWarning(
+                    $"Failed to persist deferred runtime apply: {ex.Message}",
+                    operationName);
+                if (propagatePersistenceFailure)
+                {
+                    throw;
+                }
+
+                return false;
+            }
         }
 
         private int? GetPendingChangeCount()
@@ -6865,6 +6969,8 @@ namespace GmodAddonManager.Core.Services
                                         ConflictDetected =
                                             configuration.PendingGamRuntimeWrite.ConflictDetected
                                     },
+                            PendingRuntimeApplyRequired =
+                                configuration.PendingRuntimeApplyRequired,
                             GmodAttributionMigrationPending =
                                 configuration.GmodAttributionMigrationPending
                         };
@@ -7859,7 +7965,7 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    QueueRuntimeApplyProvider?.Invoke();
+                    QueueRuntimeApplyOrRemember("CreateSmartAssetAsync");
                     errorHandler.HandleError(
                         ex,
                         "Smart Asset creation was saved; runtime reconciliation was queued",
@@ -7896,7 +8002,7 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    QueueRuntimeApplyProvider?.Invoke();
+                    QueueRuntimeApplyOrRemember("ReconcileSmartAssetsAsync");
                     errorHandler.HandleError(
                         ex,
                         "Smart Asset reconciliation was saved; runtime reconciliation was queued",
@@ -8244,7 +8350,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember(operationName);
                 errorHandler.HandleError(
                     ex,
                     $"{operationName} was saved; runtime reconciliation was queued",
@@ -8877,7 +8983,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("ImportAssetFromGamFileAsync");
                 errorHandler.HandleError(
                     ex,
                     ".gam import was saved; runtime reconciliation was queued",
@@ -9075,7 +9181,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("ImportAssetBundleFromGamFileAsync");
                 errorHandler.HandleError(
                     ex,
                     ".gam bundle import was saved; runtime reconciliation was queued",
@@ -9507,7 +9613,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("DeleteAssetAsync");
                 errorHandler.HandleError(
                     ex,
                     "Asset deletion was saved; runtime reconciliation was queued",
@@ -9578,7 +9684,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("SetAllAddonsOffAsync");
                 errorHandler.HandleError(
                     ex,
                     "All-off was saved; runtime reconciliation was queued",
@@ -9663,7 +9769,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("RestoreAssetVersionAsync");
                 errorHandler.HandleError(
                     ex,
                     "Version restore was saved; runtime reconciliation was queued",
@@ -9957,7 +10063,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("AddAddonsToAsset");
                 errorHandler.HandleError(
                     ex,
                     "Asset membership was saved; runtime reconciliation was queued",
@@ -10128,7 +10234,7 @@ namespace GmodAddonManager.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    QueueRuntimeApplyProvider?.Invoke();
+                    QueueRuntimeApplyOrRemember("AddAddonsToAssetAsync");
                     errorHandler.HandleError(
                         ex,
                         "Asset membership was saved; runtime reconciliation was queued",
@@ -10420,7 +10526,7 @@ namespace GmodAddonManager.Core.Services
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("ApplyAssetDefaultStateAsync");
                 errorHandler.HandleError(
                     ex,
                     "Asset state was saved; runtime reconciliation was queued",
@@ -10649,8 +10755,11 @@ namespace GmodAddonManager.Core.Services
                             RuntimeAttributionConflictFailureCode,
                             StringComparison.Ordinal))
                     {
-                        QueueRuntimeApplyProvider?.Invoke();
-                        if (allowConflictSupersede &&
+                        var queued = QueueRuntimeApplyOrRemember(
+                            "UpdateAddonStatesWithResultAsync",
+                            propagateQueueFailure: true);
+                        if (queued &&
+                            allowConflictSupersede &&
                             !string.IsNullOrWhiteSpace(
                                 result.SupersededConflictOperationId))
                         {
@@ -12807,7 +12916,7 @@ namespace GmodAddonManager.Core.Services
                     {
                         // The desired state is already durable. Runtime failure follows
                         // the same latest-full-reconcile contract as other mutations.
-                        QueueRuntimeApplyProvider?.Invoke();
+                        QueueRuntimeApplyOrRemember("UndoAsync.RuntimeReconcile");
                         errorHandler.HandleError(
                             ex,
                             "Undo was saved; runtime reconciliation was queued",
@@ -12822,7 +12931,7 @@ namespace GmodAddonManager.Core.Services
             {
                 if (configurationPersisted)
                 {
-                    QueueRuntimeApplyProvider?.Invoke();
+                    QueueRuntimeApplyOrRemember("UndoAsync.PersistedFailure");
                     errorHandler.HandleError(
                         ex,
                         "Undo was saved; runtime reconciliation was queued",
@@ -13384,13 +13493,13 @@ namespace GmodAddonManager.Core.Services
                         observeExternalChanges: false);
                     if (!resetResult.Succeeded)
                     {
-                        QueueRuntimeApplyProvider?.Invoke();
+                        QueueRuntimeApplyOrRemember("ResetManagerAsync.ResultFailure");
                     }
                 }
             }
             catch (Exception ex)
             {
-                QueueRuntimeApplyProvider?.Invoke();
+                QueueRuntimeApplyOrRemember("ResetManagerAsync.Exception");
                 errorHandler.HandleError(
                     ex,
                     "GAM reset was saved; runtime reconciliation was queued",

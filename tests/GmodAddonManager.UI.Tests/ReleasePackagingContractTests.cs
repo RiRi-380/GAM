@@ -22,8 +22,8 @@ public sealed class ReleasePackagingContractTests
         var localBuild = ReadRepositoryFile("build-release.ps1");
         var installer = ReadRepositoryFile2("installer", "setup.iss");
 
-        Assert.Contains("Compress-Archive -Path publish/*", workflow, StringComparison.Ordinal);
-        Assert.Contains("Compress-Archive -Path publish/*", localBuild, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Compression.ZipFile]::CreateFromDirectory", workflow, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Compression.ZipFile]::CreateFromDirectory", localBuild, StringComparison.Ordinal);
         Assert.Contains(
             "Source: \"..\\publish\\*\"; DestDir: \"{app}\"; Flags: ignoreversion recursesubdirs",
             installer,
@@ -36,7 +36,8 @@ public sealed class ReleasePackagingContractTests
         var localBuild = ReadRepositoryFile("build-release.ps1");
         var installer = ReadRepositoryFile2("installer", "setup.iss");
 
-        Assert.Contains("publish\\GmodAddonManager.UI.exe", localBuild, StringComparison.Ordinal);
+        Assert.Contains("portableExecutable", localBuild, StringComparison.Ordinal);
+        Assert.Contains("GmodAddonManager.UI.exe", localBuild, StringComparison.Ordinal);
         Assert.Contains(
             "Filename: \"{app}\\GmodAddonManager.UI.exe\"",
             installer,
@@ -100,33 +101,33 @@ public sealed class ReleasePackagingContractTests
             project,
             StringComparison.Ordinal);
         Assert.Contains("PrivilegesRequired=lowest", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "VersionInfoVersion={#MyAppVersion}.0",
+            installer,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("runascurrentuser", installer, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void InstallerPropagatesVCRedistFailuresAndLocalizesUserMessages()
+    public void InstallerDoesNotBundleOrLaunchAnUnnecessaryVCRedist()
     {
         var installer = ReadRepositoryFile2("installer", "setup.iss");
+        var workflow = ReadRepositoryFile3(".github", "workflows", "release.yml");
+        var localBuild = ReadRepositoryFile("build-release.ps1");
 
-        Assert.Contains("/install /quiet /norestart", installer, StringComparison.Ordinal);
-        Assert.Contains("if ResultCode = 3010", installer, StringComparison.Ordinal);
-        Assert.Contains("ResultCode <> 1638", installer, StringComparison.Ordinal);
-        Assert.Contains(
-            "RaiseException(ExpandConstant('{cm:VCRedistLaunchFailed}'))",
-            installer,
-            StringComparison.Ordinal);
-        Assert.Contains("if FileExists(ExpandConstant('{tmp}\\VC_redist.x64.exe'))", installer, StringComparison.Ordinal);
-        Assert.Contains("{cm:VCRedistInstallFailed}", installer, StringComparison.Ordinal);
-        Assert.Contains("function NeedRestart(): Boolean;", installer, StringComparison.Ordinal);
-        Assert.Contains(
-            "japanese.VCRedistMissing=Microsoft Visual C++ 再頒布可能パッケージ",
-            installer,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("VC_redist", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("VC_redist", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("VC_redist", localBuild, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("VCRedist", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Invoke-WebRequest", workflow, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AssertSelfContainedMultiFilePublish(string source)
     {
-        Assert.Contains("--self-contained true", source, StringComparison.Ordinal);
+        Assert.True(
+            source.Contains("--self-contained true", StringComparison.Ordinal) ||
+            source.Contains("\"--self-contained\", \"true\"", StringComparison.Ordinal),
+            "Release publish must explicitly be self-contained.");
         Assert.Contains("-p:PublishSingleFile=false", source, StringComparison.Ordinal);
         Assert.DoesNotContain("-p:PublishSingleFile=true", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IncludeNativeLibrariesForSelfExtract", source, StringComparison.Ordinal);

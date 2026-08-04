@@ -1985,15 +1985,17 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var targetAssets = assetListVm.Assets
                 .Where(asset => !asset.IsSystem)
                 .Where(asset => !asset.IsSmart)
-                .OrderBy(asset => asset.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToList();
 
             var newlyCreatedAssetIds = new HashSet<string>(StringComparer.Ordinal);
-            var dialog = new AssetSelectionDialog(
+            using var dialog = new AssetSelectionDialog(
+                addonManager,
                 targetAssets,
-                async name =>
+                async (name, parentGroupId) =>
                 {
-                    var created = await CreateAssetFromSelectionAsync(name);
+                    var created = await CreateAssetFromSelectionAsync(
+                        name,
+                        parentGroupId);
                     if (created != null)
                     {
                         newlyCreatedAssetIds.Add(created.Id);
@@ -2006,14 +2008,22 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            var selectedAsset = await dialog.ShowDialog<AssetItemViewModel?>(mainWindow);
-            if (selectedAsset == null)
+            var selectedAssetId = await dialog.ShowDialog<string?>(mainWindow);
+            if (string.IsNullOrWhiteSpace(selectedAssetId))
             {
                 return;
             }
 
+            var selectedAssetModel = addonManager.GetConfiguration().Assets.FirstOrDefault(
+                asset => string.Equals(asset.Id, selectedAssetId, StringComparison.Ordinal));
+            if (selectedAssetModel == null)
+            {
+                throw new InvalidOperationException(
+                    $"Selected Asset no longer exists: {selectedAssetId}");
+            }
+
             var existingIds = new HashSet<string>(
-                selectedAsset.GetAddonIds(),
+                selectedAssetModel.Addons.Where(id => id != "*"),
                 StringComparer.Ordinal);
             var newAddons = selectedAddons
                 .Where(addon => !existingIds.Contains(addon.AddonId))
@@ -2030,25 +2040,34 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             using var progressDialog = ProgressDialogService.Show(
                 mainWindow,
                 L.Get("Busy.AddingAddonsToAsset"),
-                L.Format("Busy.Detail.AssetNameWithCount", selectedAsset.Name, newAddons.Count));
+                L.Format(
+                    "Busy.Detail.AssetNameWithCount",
+                    selectedAssetModel.Name,
+                    newAddons.Count));
             var newAddonIds = newAddons.Select(addon => addon.AddonId).ToList();
-            if (newlyCreatedAssetIds.Contains(selectedAsset.Id))
+            if (newlyCreatedAssetIds.Contains(selectedAssetId))
             {
                 addonManager.AddAddonsToNewAssetBatch(
-                    selectedAsset.Id,
+                    selectedAssetId,
                     newAddonIds,
                     progress: progressDialog?.CreateProgress());
             }
             else
             {
                 addonManager.AddAddonsToAssetBatch(
-                    selectedAsset.Id,
+                    selectedAssetId,
                     newAddonIds,
                     progress: progressDialog?.CreateProgress());
             }
 
-            selectedAsset.RefreshFromModel(
-                addonManager.GetConfiguration().Assets.First(asset => asset.Id == selectedAsset.Id));
+            assetListVm.LoadAssets();
+            var selectedAsset = assetListVm.Assets.FirstOrDefault(asset =>
+                string.Equals(asset.Id, selectedAssetId, StringComparison.Ordinal));
+            if (selectedAsset == null)
+            {
+                throw new InvalidOperationException(
+                    $"Added-to Asset could not be reloaded: {selectedAssetId}");
+            }
 
             progressDialog?.Close();
             var successMessage = newAddons.Count == 1
@@ -2070,7 +2089,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task<AssetItemViewModel?> CreateAssetFromSelectionAsync(string name)
+    internal async Task<AssetItemViewModel?> CreateAssetFromSelectionAsync(
+        string name,
+        string? parentGroupId)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -2083,7 +2104,12 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             return null;
         }
 
-        var newAsset = await addonManager.CreateAssetAsync(trimmedName);
+        var newAsset = string.IsNullOrWhiteSpace(parentGroupId)
+            ? await addonManager.CreateAssetAsync(trimmedName)
+            : await addonManager.CreateAssetInGroupAsync(
+                trimmedName,
+                parentGroupId,
+                rule: null);
 
         return new AssetItemViewModel(
             newAsset,
@@ -2215,6 +2241,21 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         void SelectCore()
         {
+            var targetModel = addonManager.GetConfiguration().Assets.FirstOrDefault(asset =>
+                string.Equals(asset.Id, assetId, StringComparison.Ordinal));
+            if (targetModel == null)
+            {
+                return;
+            }
+
+            if (!string.Equals(
+                    assetListVm.CurrentGroupId,
+                    targetModel.ParentGroupId,
+                    StringComparison.Ordinal))
+            {
+                assetListVm.NavigateToGroup(targetModel.ParentGroupId);
+            }
+
             var assetVm = FindAsset();
             if (assetVm == null)
             {

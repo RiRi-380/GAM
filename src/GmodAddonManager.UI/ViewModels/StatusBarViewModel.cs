@@ -1,55 +1,150 @@
+using Avalonia.Threading;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using ReactiveUI;
 using System;
-using System.Reactive.Linq;
-using System.Timers;
+using System.Threading;
 
 namespace GmodAddonManager.UI.ViewModels;
 
-public sealed class StatusBarViewModel : ViewModelBase, IDisposable
+internal interface IStatusBarRuntimeSource
+{
+    bool IsGmodRunning { get; }
+
+    int PendingChangesCount { get; }
+
+    event EventHandler? GmodStarted;
+
+    event EventHandler? GmodStopped;
+
+    event EventHandler? ChangeApplied;
+
+    event EventHandler? ChangeFailed;
+}
+
+internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposable
 {
     private readonly GmodProcessWatcher processWatcher;
     private readonly PendingChangeManager pendingChangeManager;
-    private readonly Timer updateTimer;
-    
+    private bool disposed;
+
+    public StatusBarRuntimeSource(
+        GmodProcessWatcher processWatcher,
+        PendingChangeManager pendingChangeManager)
+    {
+        this.processWatcher = processWatcher ??
+            throw new ArgumentNullException(nameof(processWatcher));
+        this.pendingChangeManager = pendingChangeManager ??
+            throw new ArgumentNullException(nameof(pendingChangeManager));
+
+        processWatcher.GmodStarted += OnGmodStarted;
+        processWatcher.GmodStopped += OnGmodStopped;
+        pendingChangeManager.ChangeApplied += OnChangeApplied;
+        pendingChangeManager.ChangeFailed += OnChangeFailed;
+    }
+
+    public bool IsGmodRunning => processWatcher.IsGmodRunning;
+
+    public int PendingChangesCount => pendingChangeManager.GetPendingChangeCount();
+
+    public event EventHandler? GmodStarted;
+
+    public event EventHandler? GmodStopped;
+
+    public event EventHandler? ChangeApplied;
+
+    public event EventHandler? ChangeFailed;
+
+    private void OnGmodStarted(object? sender, ProcessEventArgs e) =>
+        GmodStarted?.Invoke(this, EventArgs.Empty);
+
+    private void OnGmodStopped(object? sender, ProcessEventArgs e) =>
+        GmodStopped?.Invoke(this, EventArgs.Empty);
+
+    private void OnChangeApplied(object? sender, ChangeAppliedEventArgs e) =>
+        ChangeApplied?.Invoke(this, EventArgs.Empty);
+
+    private void OnChangeFailed(object? sender, ChangeFailedEventArgs e) =>
+        ChangeFailed?.Invoke(this, EventArgs.Empty);
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        processWatcher.GmodStarted -= OnGmodStarted;
+        processWatcher.GmodStopped -= OnGmodStopped;
+        pendingChangeManager.ChangeApplied -= OnChangeApplied;
+        pendingChangeManager.ChangeFailed -= OnChangeFailed;
+    }
+}
+
+public sealed class StatusBarViewModel : ViewModelBase, IDisposable
+{
+    private readonly IStatusBarRuntimeSource runtimeSource;
+    private readonly IDisposable? ownedRuntimeSource;
+    private readonly DispatcherTimer updateTimer;
+
     private bool isGmodRunning;
     private int pendingChangesCount;
     private string statusMessage = "";
     private bool isApplyingChanges;
     private string temporaryMessage = "";
     private StatusMessageType temporaryMessageType = StatusMessageType.Info;
-    private Timer? temporaryMessageTimer;
+    private DispatcherTimer? temporaryMessageTimer;
+    private int disposed;
 
     public StatusBarViewModel(
-        GmodProcessWatcher processWatcher, 
+        GmodProcessWatcher processWatcher,
         PendingChangeManager pendingChangeManager)
+        : this(new StatusBarRuntimeSource(processWatcher, pendingChangeManager), true)
     {
-        this.processWatcher = processWatcher;
-        this.pendingChangeManager = pendingChangeManager;
+    }
 
-        // タイマーの設定（1秒ごとに更新）
-        updateTimer = new Timer(1000);
-        updateTimer.Elapsed += OnTimerElapsed;
-        updateTimer.Start();
+    internal StatusBarViewModel(
+        IStatusBarRuntimeSource runtimeSource,
+        bool startPeriodicUpdates = true)
+    {
+        this.runtimeSource = runtimeSource ??
+            throw new ArgumentNullException(nameof(runtimeSource));
+        ownedRuntimeSource = runtimeSource as IDisposable;
 
-        // Gmodプロセス監視イベントの登録
-        processWatcher.GmodStarted += OnGmodStarted;
-        processWatcher.GmodStopped += OnGmodStopped;
+        updateTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        updateTimer.Tick += OnTimerTick;
+        if (startPeriodicUpdates)
+        {
+            updateTimer.Start();
+        }
 
-        // 保留変更マネージャーのイベント登録
-        pendingChangeManager.ChangeApplied += OnChangeApplied;
-        pendingChangeManager.ChangeFailed += OnChangeFailed;
+        runtimeSource.GmodStarted += OnGmodStarted;
+        runtimeSource.GmodStopped += OnGmodStopped;
+        runtimeSource.ChangeApplied += OnChangeApplied;
+        runtimeSource.ChangeFailed += OnChangeFailed;
 
-        // 初期状態の設定
         statusMessage = L.Get("Status.Ready");
-        UpdateStatus();
+        RequestStatusUpdate();
     }
 
     public bool IsGmodRunning
     {
         get => isGmodRunning;
-        private set => SetAndRaise(ref isGmodRunning, value);
+        private set
+        {
+            if (isGmodRunning == value)
+            {
+                return;
+            }
+
+            SetAndRaise(ref isGmodRunning, value);
+            this.RaisePropertyChanged(nameof(GmodStatusText));
+            this.RaisePropertyChanged(nameof(GmodStatusColor));
+        }
     }
 
     public int PendingChangesCount
@@ -60,15 +155,14 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
             var oldValue = pendingChangesCount;
             SetAndRaise(ref pendingChangesCount, value);
             this.RaisePropertyChanged(nameof(HasPendingChanges));
-            
-            // 保留中の変更が適用された（0になった）時にイベントを発生
+
             if (oldValue > 0 && value == 0 && !IsGmodRunning)
             {
                 PendingChangesApplied?.Invoke(this, EventArgs.Empty);
             }
         }
     }
-    
+
     public event EventHandler? PendingChangesApplied;
 
     public string StatusMessage
@@ -76,7 +170,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         get => !string.IsNullOrEmpty(temporaryMessage) ? temporaryMessage : statusMessage;
         private set => SetAndRaise(ref statusMessage, value);
     }
-    
+
     public string StatusMessageColor
     {
         get
@@ -85,13 +179,14 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
             {
                 return temporaryMessageType switch
                 {
-                    StatusMessageType.Warning => "#FF9800", // Orange
-                    StatusMessageType.Error => "#F44336", // Red
-                    StatusMessageType.Success => "#4CAF50", // Green
-                    _ => "#2196F3" // Blue (Info)
+                    StatusMessageType.Warning => "#FF9800",
+                    StatusMessageType.Error => "#F44336",
+                    StatusMessageType.Success => "#4CAF50",
+                    _ => "#2196F3"
                 };
             }
-            return "#666666"; // Default gray
+
+            return "#666666";
         }
     }
 
@@ -101,76 +196,80 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         private set => SetAndRaise(ref isApplyingChanges, value);
     }
 
-    public string GmodStatusText => IsGmodRunning ? L.Get("Status.GmodRunning") : L.Get("Status.GmodStopped");
-    public string GmodStatusColor => IsGmodRunning ? "#FFA500" : "#4CAF50"; // オレンジ/緑
+    public string GmodStatusText =>
+        IsGmodRunning ? L.Get("Status.GmodRunning") : L.Get("Status.GmodStopped");
+
+    public string GmodStatusColor => IsGmodRunning ? "#FFA500" : "#4CAF50";
+
     public bool HasPendingChanges => PendingChangesCount > 0;
 
-    private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
-    {
-        UpdateStatus();
-    }
+    private void OnTimerTick(object? sender, EventArgs e) => RequestStatusUpdate();
 
-    private void OnGmodStarted(object? sender, EventArgs e)
-    {
-        UpdateStatus();
-    }
+    private void OnGmodStarted(object? sender, EventArgs e) => RequestStatusUpdate();
 
     private void OnGmodStopped(object? sender, EventArgs e)
     {
-        IsApplyingChanges = true;
-        StatusMessage = L.Get("Status.ApplyingChanges");
-        UpdateStatus();
+        RunOnUiThread(() =>
+        {
+            IsApplyingChanges = true;
+            StatusMessage = L.Get("Status.ApplyingChanges");
+            UpdateStatusCore();
+        });
     }
 
-    private void OnChangeApplied(object? sender, ChangeAppliedEventArgs e)
+    private void OnChangeApplied(object? sender, EventArgs e) => RequestStatusUpdate();
+
+    private void OnChangeFailed(object? sender, EventArgs e) => RequestStatusUpdate();
+
+    private void RequestStatusUpdate() => RunOnUiThread(UpdateStatusCore);
+
+    private void RunOnUiThread(Action action)
     {
-        UpdateStatus();
+        if (Volatile.Read(ref disposed) != 0)
+        {
+            return;
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (Volatile.Read(ref disposed) == 0)
+            {
+                action();
+            }
+        });
     }
 
-    private void OnChangeFailed(object? sender, ChangeFailedEventArgs e)
-    {
-        UpdateStatus();
-    }
-
-    private void UpdateStatus()
+    private void UpdateStatusCore()
     {
         try
         {
-            // デバッグログを削除（ファイルI/Oが遅延の原因）
-            
-            // Gmodの実行状態を更新
-            IsGmodRunning = processWatcher.IsGmodRunning;
+            IsGmodRunning = runtimeSource.IsGmodRunning;
+            PendingChangesCount = runtimeSource.PendingChangesCount;
 
-            // 保留中の変更数を更新
-            PendingChangesCount = pendingChangeManager.GetPendingChangeCount();
-
-            // ステータスメッセージを更新
             if (IsApplyingChanges && !IsGmodRunning && PendingChangesCount > 0)
             {
                 StatusMessage = L.Format("Status.ApplyingChangesCount", PendingChangesCount);
             }
             else if (IsGmodRunning)
             {
-                if (PendingChangesCount > 0)
-                {
-                    StatusMessage = L.Format("Status.GmodRunningWithChanges", PendingChangesCount);
-                }
-                else
-                {
-                    StatusMessage = L.Get("Status.GmodRunning");
-                }
+                StatusMessage = PendingChangesCount > 0
+                    ? L.Format("Status.GmodRunningWithChanges", PendingChangesCount)
+                    : L.Get("Status.GmodRunning");
+            }
+            else if (PendingChangesCount > 0)
+            {
+                StatusMessage = L.Format("Status.PendingChanges", PendingChangesCount);
             }
             else
             {
-                if (PendingChangesCount > 0)
-                {
-                    StatusMessage = L.Format("Status.PendingChanges", PendingChangesCount);
-                }
-                else
-                {
-                    StatusMessage = L.Get("Status.Ready");
-                    IsApplyingChanges = false;
-                }
+                StatusMessage = L.Get("Status.Ready");
+                IsApplyingChanges = false;
             }
         }
         catch (Exception ex)
@@ -179,43 +278,81 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void ShowMessage(string message, StatusMessageType type, int durationSeconds = 5)
+    public void ShowMessage(
+        string message,
+        StatusMessageType type,
+        int durationSeconds = 5)
     {
-        // 既存の一時メッセージタイマーを停止
-        temporaryMessageTimer?.Stop();
-        temporaryMessageTimer?.Dispose();
-        
-        // 新しいメッセージを設定
+        RunOnUiThread(() => ShowMessageCore(message, type, durationSeconds));
+    }
+
+    private void ShowMessageCore(
+        string message,
+        StatusMessageType type,
+        int durationSeconds)
+    {
+        StopTemporaryMessageTimer();
+
         temporaryMessage = message;
         temporaryMessageType = type;
         this.RaisePropertyChanged(nameof(StatusMessage));
         this.RaisePropertyChanged(nameof(StatusMessageColor));
-        
-        // 指定時間後にメッセージをクリア
-        temporaryMessageTimer = new Timer(durationSeconds * 1000);
-        temporaryMessageTimer.AutoReset = false;
-        temporaryMessageTimer.Elapsed += (s, e) =>
+
+        temporaryMessageTimer = new DispatcherTimer
         {
-            temporaryMessage = "";
-            this.RaisePropertyChanged(nameof(StatusMessage));
-            this.RaisePropertyChanged(nameof(StatusMessageColor));
-            temporaryMessageTimer?.Dispose();
-            temporaryMessageTimer = null;
+            Interval = TimeSpan.FromSeconds(Math.Max(1, durationSeconds))
         };
+        temporaryMessageTimer.Tick += OnTemporaryMessageTimerTick;
         temporaryMessageTimer.Start();
     }
-    
+
+    private void OnTemporaryMessageTimerTick(object? sender, EventArgs e)
+    {
+        StopTemporaryMessageTimer();
+        temporaryMessage = "";
+        this.RaisePropertyChanged(nameof(StatusMessage));
+        this.RaisePropertyChanged(nameof(StatusMessageColor));
+    }
+
+    private void StopTemporaryMessageTimer()
+    {
+        if (temporaryMessageTimer is null)
+        {
+            return;
+        }
+
+        temporaryMessageTimer.Stop();
+        temporaryMessageTimer.Tick -= OnTemporaryMessageTimerTick;
+        temporaryMessageTimer = null;
+    }
+
     public void Dispose()
     {
-        updateTimer?.Stop();
-        updateTimer?.Dispose();
-        temporaryMessageTimer?.Stop();
-        temporaryMessageTimer?.Dispose();
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        {
+            return;
+        }
 
-        // イベントの登録解除
-        processWatcher.GmodStarted -= OnGmodStarted;
-        processWatcher.GmodStopped -= OnGmodStopped;
-        pendingChangeManager.ChangeApplied -= OnChangeApplied;
-        pendingChangeManager.ChangeFailed -= OnChangeFailed;
+        runtimeSource.GmodStarted -= OnGmodStarted;
+        runtimeSource.GmodStopped -= OnGmodStopped;
+        runtimeSource.ChangeApplied -= OnChangeApplied;
+        runtimeSource.ChangeFailed -= OnChangeFailed;
+        ownedRuntimeSource?.Dispose();
+
+        void StopTimers()
+        {
+            updateTimer.Stop();
+            updateTimer.Tick -= OnTimerTick;
+            StopTemporaryMessageTimer();
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            StopTimers();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(StopTimers);
+        }
     }
 }

@@ -55,6 +55,7 @@
                 <Button Grid.Column="1"
                         Command="{Binding OpenSettingsCommand}"
                         ToolTip.Tip="{loc:Localize MainWindow.Settings}"
+                        AutomationProperties.Name="{loc:Localize MainWindow.Settings}"
                         Width="40" Height="40"
                         Margin="0,0,12,0"
                         VerticalAlignment="Center">
@@ -81,6 +82,7 @@
                     <Button Name="AssetPaneToggleButton"
                             Click="OnAssetPaneToggleClick"
                             ToolTip.Tip="{loc:Localize AssetList.Header}"
+                            AutomationProperties.Name="{loc:Localize AssetList.Header}"
                             Width="32" Height="32"
                             IsVisible="False">
                         <TextBlock Text="☰" FontSize="16"/>
@@ -89,12 +91,14 @@
                     <Button Command="{Binding RefreshCommand}" 
                             IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
                             ToolTip.Tip="{loc:Localize MainWindow.RescanAddons}"
+                            AutomationProperties.Name="{loc:Localize MainWindow.RescanAddons}"
                             Width="32" Height="32">
                         <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
                     </Button>
 
                     <Button Command="{Binding UndoCommand}"
                             ToolTip.Tip="{loc:Localize MainWindow.UndoLastAction}"
+                            AutomationProperties.Name="{loc:Localize MainWindow.UndoLastAction}"
                             Width="32" Height="32">
                         <Button.IsEnabled>
                             <MultiBinding Converter="{x:Static BoolConverters.And}">
@@ -108,6 +112,8 @@
                     <Button Command="{Binding AllOffCommand}"
                             IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
                             ToolTip.Tip="{loc:Localize MainWindow.AllOffTooltip}"
+                            AutomationProperties.Name="{loc:Localize MainWindow.AllOff}"
+                            AutomationProperties.HelpText="{loc:Localize MainWindow.AllOffTooltip}"
                             Width="32" Height="32"
                             Classes="danger">
                         <PathIcon Data="{StaticResource DisabledIcon}" Width="16" Height="16"/>
@@ -192,9 +198,12 @@
                        PanePlacement="Left"
                        OpenPaneLength="340"
                        CompactPaneLength="0"
-                       IsPaneOpen="True">
+                       IsPaneOpen="True"
+                       PaneOpening="OnAssetPaneOpening"
+                       PaneClosed="OnAssetPaneClosed">
                 <SplitView.Pane>
-                    <views:AssetListView DataContext="{Binding AssetListViewModel}"/>
+                    <views:AssetListView Name="AssetPaneContent"
+                                         DataContext="{Binding AssetListViewModel}"/>
                 </SplitView.Pane>
 
                 <Grid>

@@ -14,8 +14,13 @@ namespace GmodAddonManager.UI.Views;
 
 public partial class MainWindow : Window, IDisposable
 {
+    private static readonly TimeSpan PaneCloseVisibilityDelay =
+        TimeSpan.FromMilliseconds(120);
+
     private TextBox? _searchTextBox;
     private readonly CancellationTokenSource _startupCancellation = new();
+    private readonly KeyboardNavigationMode _assetPaneOpenTabNavigationMode;
+    private IDisposable? _assetPaneHideTimer;
     private int _activationRefreshGeneration;
     private int _resourcesDisposed;
     private int _startupStarted;
@@ -25,6 +30,8 @@ public partial class MainWindow : Window, IDisposable
     public MainWindow()
     {
         InitializeComponent();
+        _assetPaneOpenTabNavigationMode =
+            KeyboardNavigation.GetTabNavigation(AssetPaneContent);
         Activated += OnWindowActivated;
         SizeChanged += OnWindowSizeChanged;
     }
@@ -63,6 +70,80 @@ public partial class MainWindow : Window, IDisposable
     {
         AssetSplitView.IsPaneOpen = !AssetSplitView.IsPaneOpen;
     }
+
+    private void OnAssetPaneOpening(object? sender, CancelRoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, AssetSplitView))
+        {
+            return;
+        }
+
+        RestoreAssetPaneContent();
+    }
+
+    private void OnAssetPaneClosed(object? sender, RoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, AssetSplitView))
+        {
+            return;
+        }
+
+        if (!IsOverlayMode(AssetSplitView.DisplayMode))
+        {
+            RestoreAssetPaneContent();
+            return;
+        }
+
+        var returnFocusToToggle = AssetPaneContent.IsKeyboardFocusWithin;
+        AssetPaneContent.IsEnabled = false;
+        AssetPaneContent.IsHitTestVisible = false;
+        KeyboardNavigation.SetTabNavigation(
+            AssetPaneContent,
+            KeyboardNavigationMode.None);
+
+        if (returnFocusToToggle && AssetPaneToggleButton.IsVisible)
+        {
+            AssetPaneToggleButton.Focus();
+        }
+
+        _assetPaneHideTimer?.Dispose();
+        _assetPaneHideTimer = DispatcherTimer.RunOnce(
+            () =>
+            {
+                _assetPaneHideTimer = null;
+                if (!AssetSplitView.IsPaneOpen &&
+                    IsOverlayMode(AssetSplitView.DisplayMode))
+                {
+                    AssetPaneContent.IsVisible = false;
+                    if (ReferenceEquals(AssetSplitView.Pane, AssetPaneContent))
+                    {
+                        AssetSplitView.Pane = null;
+                    }
+                }
+            },
+            PaneCloseVisibilityDelay,
+            DispatcherPriority.Normal);
+    }
+
+    private void RestoreAssetPaneContent()
+    {
+        _assetPaneHideTimer?.Dispose();
+        _assetPaneHideTimer = null;
+        AssetPaneContent.IsVisible = true;
+        AssetPaneContent.IsEnabled = true;
+        AssetPaneContent.IsHitTestVisible = true;
+        KeyboardNavigation.SetTabNavigation(
+            AssetPaneContent,
+            _assetPaneOpenTabNavigationMode);
+        if (!ReferenceEquals(AssetSplitView.Pane, AssetPaneContent))
+        {
+            AssetSplitView.Pane = AssetPaneContent;
+        }
+    }
+
+    private static bool IsOverlayMode(SplitViewDisplayMode displayMode) =>
+        displayMode is SplitViewDisplayMode.Overlay or
+            SplitViewDisplayMode.CompactOverlay;
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {
@@ -192,6 +273,8 @@ public partial class MainWindow : Window, IDisposable
 
         _startupCancellation.Cancel();
         _startupCancellation.Dispose();
+        _assetPaneHideTimer?.Dispose();
+        _assetPaneHideTimer = null;
         GC.SuppressFinalize(this);
     }
 }

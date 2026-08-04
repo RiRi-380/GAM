@@ -131,7 +131,11 @@ namespace GmodAddonManager.Core.Services
 
             var metadataCandidates = BuildMetadataRepairCandidates(configuration, currentSnapshot);
             var addonNoMountPlan = BuildAddonNoMountMigrationPlan(configuration, currentSnapshot);
-            var managedCandidates = BuildManagedMigrationCandidates(configuration, addonsPath, issues);
+            var managedCandidates = BuildManagedMigrationCandidates(
+                configuration,
+                managerPath,
+                addonsPath,
+                issues);
 
             if (metadataCandidates.Count > 0)
             {
@@ -215,7 +219,10 @@ namespace GmodAddonManager.Core.Services
             return new PathHealthOperationResult { ChangedCount = added };
         }
 
-        public static PathHealthOperationResult MigrateManagedData(IEnumerable<ManagedDataMigrationCandidate> candidates)
+        public static PathHealthOperationResult MigrateManagedData(
+            IEnumerable<ManagedDataMigrationCandidate> candidates,
+            string currentManagerPath,
+            string currentAddonsPath)
         {
             var moved = 0;
             var skipped = 0;
@@ -223,6 +230,17 @@ namespace GmodAddonManager.Core.Services
 
             foreach (var candidate in candidates)
             {
+                if (!IsStructurallySafeManagedMigrationCandidate(
+                        candidate,
+                        currentManagerPath,
+                        currentAddonsPath))
+                {
+                    skipped++;
+                    messages.Add(
+                        $"Skipped {candidate.SourcePath}: the path is not an owned GAM managed-addon entry.");
+                    continue;
+                }
+
                 if (candidate.IsDirectory)
                 {
                     if (!Directory.Exists(candidate.SourcePath) ||
@@ -359,20 +377,35 @@ namespace GmodAddonManager.Core.Services
 
         private static List<ManagedDataMigrationCandidate> BuildManagedMigrationCandidates(
             Configuration configuration,
+            string currentManagerPath,
             string currentAddonsPath,
             List<string> issues)
         {
             var candidates = new List<ManagedDataMigrationCandidate>();
-            var previousAddonsPath = configuration.PathState?.PreviousAddonsPath;
-            if (string.IsNullOrWhiteSpace(previousAddonsPath) &&
-                !PathsEqual(configuration.PathState?.LastAddonsPath, currentAddonsPath))
+            var pathState = configuration.PathState;
+            var previousManagerPath = pathState?.PreviousManagerPath;
+            var previousAddonsPath = pathState?.PreviousAddonsPath;
+            if ((string.IsNullOrWhiteSpace(previousManagerPath) ||
+                 string.IsNullOrWhiteSpace(previousAddonsPath)) &&
+                !PathsEqual(pathState?.LastAddonsPath, currentAddonsPath))
             {
-                previousAddonsPath = configuration.PathState?.LastAddonsPath;
+                previousManagerPath = pathState?.LastManagerPath;
+                previousAddonsPath = pathState?.LastAddonsPath;
             }
-            if (string.IsNullOrWhiteSpace(previousAddonsPath) ||
+
+            if (string.IsNullOrWhiteSpace(previousManagerPath) ||
+                string.IsNullOrWhiteSpace(previousAddonsPath) ||
                 PathsEqual(previousAddonsPath, currentAddonsPath) ||
                 !Directory.Exists(previousAddonsPath))
             {
+                return candidates;
+            }
+
+            if (!IsLegacyManagedAddonsRoot(previousManagerPath, previousAddonsPath) ||
+                !IsCurrentManagedAddonsRoot(currentManagerPath, currentAddonsPath))
+            {
+                issues.Add(
+                    $"Skipped untrusted previous managed addons root: {previousAddonsPath}");
                 return candidates;
             }
 
@@ -385,7 +418,7 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 var isDirectory = Directory.Exists(entry);
-                if (isDirectory && IsReparsePoint(entry))
+                if (IsReparsePoint(entry))
                 {
                     issues.Add($"Skipped managed migration candidate because it is a reparse point: {entry}");
                     continue;
@@ -415,6 +448,172 @@ namespace GmodAddonManager.Core.Services
             }
 
             return candidates;
+        }
+
+        private static bool IsStructurallySafeManagedMigrationCandidate(
+            ManagedDataMigrationCandidate? candidate,
+            string currentManagerPath,
+            string currentAddonsPath)
+        {
+            if (candidate == null ||
+                string.IsNullOrWhiteSpace(candidate.AddonId) ||
+                string.IsNullOrWhiteSpace(candidate.SourcePath) ||
+                string.IsNullOrWhiteSpace(candidate.TargetPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var sourcePath = NormalizePath(candidate.SourcePath);
+                var targetPath = NormalizePath(candidate.TargetPath);
+                var sourceAddonsRoot = Path.GetDirectoryName(sourcePath);
+                var targetAddonsRoot = Path.GetDirectoryName(targetPath);
+                var sourceManagerRoot = string.IsNullOrWhiteSpace(sourceAddonsRoot)
+                    ? null
+                    : Path.GetDirectoryName(sourceAddonsRoot);
+                if (string.IsNullOrWhiteSpace(sourceAddonsRoot) ||
+                    string.IsNullOrWhiteSpace(targetAddonsRoot) ||
+                    string.IsNullOrWhiteSpace(sourceManagerRoot) ||
+                    !IsLegacyManagedAddonsRoot(sourceManagerRoot, sourceAddonsRoot) ||
+                    !IsCurrentManagedAddonsRoot(currentManagerPath, currentAddonsPath) ||
+                    !PathsEqual(targetAddonsRoot, currentAddonsPath))
+                {
+                    return false;
+                }
+
+                var sourceName = Path.GetFileName(sourcePath);
+                var targetName = Path.GetFileName(targetPath);
+                if (!string.Equals(sourceName, targetName, StringComparison.OrdinalIgnoreCase) ||
+                    !IsGamManagedEntryName(sourceName) ||
+                    !string.Equals(
+                        candidate.AddonId,
+                        Path.GetFileNameWithoutExtension(sourceName),
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!PathEntryExists(sourcePath) ||
+                    IsReparsePoint(sourcePath) ||
+                    PathEntryExists(targetPath))
+                {
+                    return false;
+                }
+
+                return candidate.IsDirectory == Directory.Exists(sourcePath);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsCurrentManagedAddonsRoot(
+            string? managerPath,
+            string? addonsPath)
+        {
+            if (string.IsNullOrWhiteSpace(managerPath) ||
+                string.IsNullOrWhiteSpace(addonsPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var managerRoot = NormalizePath(managerPath);
+                var managedAddonsRoot = NormalizePath(addonsPath);
+                if (!PathsEqual(
+                        managedAddonsRoot,
+                        Path.Combine(managerRoot, "addons")) ||
+                    !Directory.Exists(managerRoot) ||
+                    !Directory.Exists(managedAddonsRoot) ||
+                    IsReparsePoint(managerRoot) ||
+                    IsReparsePoint(managedAddonsRoot))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsLegacyManagedAddonsRoot(
+            string? managerPath,
+            string? addonsPath)
+        {
+            if (!IsCurrentManagedAddonsRoot(managerPath, addonsPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var managerRoot = NormalizePath(managerPath!);
+                if (!string.Equals(
+                        Path.GetFileName(managerRoot),
+                        ".addon-manager",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var workshopRoot = Path.GetDirectoryName(managerRoot);
+                var contentRoot = string.IsNullOrWhiteSpace(workshopRoot)
+                    ? null
+                    : Path.GetDirectoryName(workshopRoot);
+                var workshopContainer = string.IsNullOrWhiteSpace(contentRoot)
+                    ? null
+                    : Path.GetDirectoryName(contentRoot);
+                var steamAppsRoot = string.IsNullOrWhiteSpace(workshopContainer)
+                    ? null
+                    : Path.GetDirectoryName(workshopContainer);
+                return !string.IsNullOrWhiteSpace(workshopRoot) &&
+                       !string.IsNullOrWhiteSpace(contentRoot) &&
+                       !string.IsNullOrWhiteSpace(workshopContainer) &&
+                       !string.IsNullOrWhiteSpace(steamAppsRoot) &&
+                       string.Equals(
+                           Path.GetFileName(workshopRoot),
+                           "4000",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(
+                           Path.GetFileName(contentRoot),
+                           "content",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(
+                           Path.GetFileName(workshopContainer),
+                           "workshop",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(
+                           Path.GetFileName(steamAppsRoot),
+                           "steamapps",
+                           StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool PathEntryExists(string path)
+        {
+            try
+            {
+                _ = File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
         }
 
         public static HashSet<string> ReadAddonNoMountIds(string? path)

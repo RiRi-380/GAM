@@ -25,6 +25,15 @@ namespace GmodAddonManager.Core.Services
         public const int LegacyFlatFormatVersion = 3;
         public const int MaximumPortableIdLength = 128;
         public const int MaximumNestedGroupDepth = Configuration.MaximumNestedGroupDepth;
+        public const int MaximumManifestBytes = 64 * 1024 * 1024;
+        public const int MaximumAssetCount = 100_000;
+        public const int MaximumGroupCount = 100_000;
+        public const int MaximumTopologyReferenceCount = 1_000_000;
+        public const int MaximumMembershipAddonIdCount = 5_000_000;
+        public const int MaximumImageCount = 4096;
+        public const long MaximumAggregateEncodedImageBytes = 512L * 1024L * 1024L;
+        public const long MaximumAggregateNormalizedImageBytes = 512L * 1024L * 1024L;
+        public const long MaximumArchiveBytes = 640L * 1024L * 1024L;
 
         private const string ManifestEntryName = "manifest.json";
         private const string ManifestChecksumEntryName = "manifest.sha256";
@@ -32,6 +41,10 @@ namespace GmodAddonManager.Core.Services
         private const string GroupImagePrefix = "images/groups/";
         private const int MaximumJsonDepth = 24;
         private const int MaximumArchiveEntryNameLength = 512;
+        private const int MaximumArchiveEntryCount = MaximumImageCount + 2;
+        private const int MaximumCentralDirectoryBytes = 8 * 1024 * 1024;
+        private const int EndOfCentralDirectoryMinimumLength = 22;
+        private const int MaximumZipCommentLength = ushort.MaxValue;
         private const int BufferSize = 81_920;
 
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(
@@ -61,6 +74,7 @@ namespace GmodAddonManager.Core.Services
             var validated = ValidateForWrite(document, cancellationToken);
             var assetImages = new Dictionary<string, ImageDescriptor>(StringComparer.Ordinal);
             var groupImages = new Dictionary<string, ImageDescriptor>(StringComparer.Ordinal);
+            var imageBudget = new ImageImportBudget();
 
             using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
 
@@ -76,7 +90,12 @@ namespace GmodAddonManager.Core.Services
                 var path = AssetImagePrefix + asset.Source.LocalId + ".png";
                 assetImages.Add(
                     asset.Source.LocalId,
-                    WriteNormalizedImage(archive, path, sourceImage, cancellationToken));
+                    WriteNormalizedImage(
+                        archive,
+                        path,
+                        sourceImage,
+                        imageBudget,
+                        cancellationToken));
             }
 
             foreach (var group in validated.Groups)
@@ -91,7 +110,12 @@ namespace GmodAddonManager.Core.Services
                 var path = GroupImagePrefix + group.Source.LocalId + ".png";
                 groupImages.Add(
                     group.Source.LocalId,
-                    WriteNormalizedImage(archive, path, sourceImage, cancellationToken));
+                    WriteNormalizedImage(
+                        archive,
+                        path,
+                        sourceImage,
+                        imageBudget,
+                        cancellationToken));
             }
 
             var manifestHash = WriteManifest(
@@ -123,6 +147,7 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
+                ValidateArchiveEnvelope(source, cancellationToken);
                 using var archive = new ZipArchive(source, ZipArchiveMode.Read, leaveOpen: true);
                 var entries = IndexAndValidateEntries(archive, cancellationToken);
                 if (!entries.TryGetValue(ManifestEntryName, out var manifestEntry) ||
@@ -140,6 +165,7 @@ namespace GmodAddonManager.Core.Services
                 ValidateParsedStructure(parsed, cancellationToken);
 
                 var referencedImages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var imageBudget = new ImageImportBudget();
                 var assets = new List<GamAssetBundleAsset>(parsed.Assets.Count);
                 foreach (var asset in parsed.Assets)
                 {
@@ -149,6 +175,7 @@ namespace GmodAddonManager.Core.Services
                         asset.Image,
                         AssetImagePrefix + asset.LocalId + ".png",
                         referencedImages,
+                        imageBudget,
                         cancellationToken);
                     assets.Add(new GamAssetBundleAsset(
                         asset.LocalId,
@@ -168,6 +195,7 @@ namespace GmodAddonManager.Core.Services
                         group.Image,
                         GroupImagePrefix + group.LocalId + ".png",
                         referencedImages,
+                        imageBudget,
                         cancellationToken);
                     groups.Add(new GamAssetBundleGroup(
                         group.LocalId,
@@ -227,6 +255,7 @@ namespace GmodAddonManager.Core.Services
 
             var validated = ValidateForWrite(document, cancellationToken);
             var assets = new List<GamAssetBundleAsset>(validated.Assets.Count);
+            var imageBudget = new ImageImportBudget();
             foreach (var asset in validated.Assets)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -243,6 +272,10 @@ namespace GmodAddonManager.Core.Services
                 var image = sourceImage == null
                     ? null
                     : GamAssetDocumentImageNormalizer.Normalize(sourceImage);
+                if (image != null)
+                {
+                    imageBudget.AddNormalizedBytes(image.Length);
+                }
                 assets.Add(new GamAssetBundleAsset(
                     source.LocalId,
                     asset.Name,
@@ -261,6 +294,10 @@ namespace GmodAddonManager.Core.Services
                 var image = sourceImage == null
                     ? null
                     : GamAssetDocumentImageNormalizer.Normalize(sourceImage);
+                if (image != null)
+                {
+                    imageBudget.AddNormalizedBytes(image.Length);
+                }
                 groups.Add(new GamAssetBundleGroup(
                     source.LocalId,
                     group.Name,
@@ -281,10 +318,24 @@ namespace GmodAddonManager.Core.Services
             GamAssetBundleDocument document,
             CancellationToken cancellationToken)
         {
+            if (document.Assets.Count > MaximumAssetCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"A .gam bundle exceeds the {MaximumAssetCount}-Asset safety limit.");
+            }
+
+            if (document.Groups.Count > MaximumGroupCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"A .gam bundle exceeds the {MaximumGroupCount}-Group safety limit.");
+            }
+
             if (document.Assets.Count == 0 && document.Groups.Count == 0)
             {
                 throw new GamAssetDocumentException("A .gam bundle cannot be empty.");
             }
+
+            ValidateAggregateResourceCounts(document);
 
             var localIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -364,6 +415,219 @@ namespace GmodAddonManager.Core.Services
                 groupsById,
                 cancellationToken);
             return new ValidatedBundle(validatedAssets, validatedGroups, validatedRoot);
+        }
+
+        private static void ValidateArchiveEnvelope(
+            Stream source,
+            CancellationToken cancellationToken)
+        {
+            if (!source.CanSeek)
+            {
+                throw new GamAssetDocumentException(
+                    "The .gam bundle stream must be seekable for safe archive validation.");
+            }
+
+            var archiveStart = source.Position;
+            var archiveLength = source.Length - archiveStart;
+            if (archiveLength < EndOfCentralDirectoryMinimumLength)
+            {
+                throw new GamAssetDocumentException("The .gam bundle ZIP envelope is incomplete.");
+            }
+
+            if (archiveLength > MaximumArchiveBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"The .gam bundle exceeds the {MaximumArchiveBytes}-byte archive safety limit.");
+            }
+
+            var tailLength = checked((int)Math.Min(
+                archiveLength,
+                EndOfCentralDirectoryMinimumLength + MaximumZipCommentLength));
+            var tail = new byte[tailLength];
+            try
+            {
+                source.Position = archiveStart + archiveLength - tailLength;
+                var offset = 0;
+                while (offset < tail.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var read = source.Read(tail, offset, tail.Length - offset);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException(
+                            "The .gam bundle ended while reading its ZIP directory.");
+                    }
+
+                    offset += read;
+                }
+
+                var eocdOffset = FindEndOfCentralDirectory(tail);
+                if (eocdOffset < 0)
+                {
+                    throw new GamAssetDocumentException(
+                        "The .gam bundle ZIP directory is missing or has trailing data.");
+                }
+
+                var diskNumber = ReadUInt16LittleEndian(tail, eocdOffset + 4);
+                var centralDirectoryDisk = ReadUInt16LittleEndian(tail, eocdOffset + 6);
+                var entriesOnDisk = ReadUInt16LittleEndian(tail, eocdOffset + 8);
+                var totalEntries = ReadUInt16LittleEndian(tail, eocdOffset + 10);
+                var centralDirectorySize = ReadUInt32LittleEndian(tail, eocdOffset + 12);
+                var centralDirectoryOffset = ReadUInt32LittleEndian(tail, eocdOffset + 16);
+
+                // GAM never emits split or ZIP64 archives. Rejecting those
+                // envelopes before ZipArchive constructs its directory table
+                // keeps attacker-controlled central-directory memory bounded.
+                if (diskNumber != 0 ||
+                    centralDirectoryDisk != 0 ||
+                    entriesOnDisk != totalEntries ||
+                    totalEntries == ushort.MaxValue ||
+                    centralDirectorySize == uint.MaxValue ||
+                    centralDirectoryOffset == uint.MaxValue)
+                {
+                    throw new GamAssetDocumentException(
+                        "Split and ZIP64 .gam bundles are not supported.");
+                }
+
+                if (totalEntries > MaximumArchiveEntryCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumArchiveEntryCount}-entry " +
+                        "image/archive safety limit.");
+                }
+
+                if (centralDirectorySize > MaximumCentralDirectoryBytes)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle central directory exceeds the " +
+                        $"{MaximumCentralDirectoryBytes}-byte safety limit.");
+                }
+
+                var eocdAbsoluteOffset = archiveLength - tailLength + eocdOffset;
+                if ((ulong)centralDirectoryOffset + centralDirectorySize >
+                    (ulong)eocdAbsoluteOffset)
+                {
+                    throw new GamAssetDocumentException(
+                        "The .gam bundle central directory points outside its ZIP envelope.");
+                }
+            }
+            finally
+            {
+                source.Position = archiveStart;
+            }
+        }
+
+        private static int FindEndOfCentralDirectory(byte[] tail)
+        {
+            for (var index = tail.Length - EndOfCentralDirectoryMinimumLength;
+                 index >= 0;
+                 index--)
+            {
+                if (tail[index] != 0x50 ||
+                    tail[index + 1] != 0x4b ||
+                    tail[index + 2] != 0x05 ||
+                    tail[index + 3] != 0x06)
+                {
+                    continue;
+                }
+
+                var commentLength = ReadUInt16LittleEndian(tail, index + 20);
+                if (index + EndOfCentralDirectoryMinimumLength + commentLength == tail.Length)
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private static ushort ReadUInt16LittleEndian(byte[] bytes, int offset)
+        {
+            return (ushort)(bytes[offset] | (bytes[offset + 1] << 8));
+        }
+
+        private static uint ReadUInt32LittleEndian(byte[] bytes, int offset)
+        {
+            return (uint)(bytes[offset] |
+                          (bytes[offset + 1] << 8) |
+                          (bytes[offset + 2] << 16) |
+                          (bytes[offset + 3] << 24));
+        }
+
+        private static void ValidateAggregateResourceCounts(GamAssetBundleDocument document)
+        {
+            long topologyReferences = document.RootChildren.Count;
+            long membershipAddonIds = 0;
+            long imageCount = 0;
+            long imageBytes = 0;
+
+            if (topologyReferences > MaximumTopologyReferenceCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"A .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
+            }
+
+            foreach (var asset in document.Assets)
+            {
+                if (asset == null)
+                {
+                    continue;
+                }
+
+                membershipAddonIds += asset.Membership.Kind ==
+                    GamAssetDocumentMembershipKind.Fixed
+                    ? asset.Membership.AddonIds.Count
+                    : asset.Membership.SnapshotAddonIds.Count;
+                if (membershipAddonIds > MaximumMembershipAddonIdCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"A .gam bundle exceeds the {MaximumMembershipAddonIdCount}-addon-ID safety limit.");
+                }
+
+                if (asset.ImageBytes != null)
+                {
+                    imageCount++;
+                    imageBytes += asset.ImageBytes.Length;
+                    ValidateAggregateImageBudget(imageCount, imageBytes);
+                }
+            }
+
+            foreach (var group in document.Groups)
+            {
+                if (group == null)
+                {
+                    continue;
+                }
+
+                topologyReferences += group.Children.Count;
+                if (topologyReferences > MaximumTopologyReferenceCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"A .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
+                }
+
+                if (group.ImageBytes != null)
+                {
+                    imageCount++;
+                    imageBytes += group.ImageBytes.Length;
+                    ValidateAggregateImageBudget(imageCount, imageBytes);
+                }
+            }
+        }
+
+        private static void ValidateAggregateImageBudget(long imageCount, long imageBytes)
+        {
+            if (imageCount > MaximumImageCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"A .gam bundle exceeds the {MaximumImageCount}-image safety limit.");
+            }
+
+            if (imageBytes > MaximumAggregateEncodedImageBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"A .gam bundle exceeds the {MaximumAggregateEncodedImageBytes}-byte aggregate image safety limit.");
+            }
         }
 
         private static IReadOnlyList<GamAssetBundleEntryReference> ValidateTopology(
@@ -552,10 +816,12 @@ namespace GmodAddonManager.Core.Services
             ZipArchive archive,
             string path,
             byte[] sourceImage,
+            ImageImportBudget imageBudget,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var normalized = GamAssetDocumentImageNormalizer.Normalize(sourceImage);
+            imageBudget.AddNormalizedBytes(normalized.Length);
             var hash = ComputeSha256(normalized);
             var entry = archive.CreateEntry(path, CompressionLevel.Optimal);
             using (var stream = entry.Open())
@@ -576,7 +842,12 @@ namespace GmodAddonManager.Core.Services
             var entry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
             using var sha256 = SHA256.Create();
             using (var entryStream = entry.Open())
-            using (var hashingStream = new CryptoStream(entryStream, sha256, CryptoStreamMode.Write))
+            using (var boundedStream = new BoundedWriteStream(
+                entryStream,
+                MaximumManifestBytes,
+                ManifestEntryName,
+                cancellationToken))
+            using (var hashingStream = new CryptoStream(boundedStream, sha256, CryptoStreamMode.Write))
             {
                 using (var textWriter = new StreamWriter(
                     hashingStream,
@@ -783,7 +1054,15 @@ namespace GmodAddonManager.Core.Services
             ZipArchive archive,
             CancellationToken cancellationToken)
         {
+            if (archive.Entries.Count > MaximumImageCount + 2)
+            {
+                throw new GamAssetDocumentException(
+                    $"The .gam bundle exceeds the {MaximumImageCount}-image archive safety limit.");
+            }
+
             var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
+            var imageCount = 0;
+            long aggregateImageBytes = 0;
             foreach (var entry in archive.Entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -804,6 +1083,28 @@ namespace GmodAddonManager.Core.Services
                 {
                     throw new GamAssetDocumentException(
                         $"The .gam bundle contains duplicate archive entry '{name}'.");
+                }
+
+                if (IsImageEntry(name))
+                {
+                    imageCount++;
+                    if (entry.Length < 0 ||
+                        entry.Length > GamAssetDocumentImageNormalizer.MaximumInputBytes)
+                    {
+                        throw new GamAssetDocumentException(
+                            $"Archive entry '{name}' exceeds its " +
+                            $"{GamAssetDocumentImageNormalizer.MaximumInputBytes}-byte limit.");
+                    }
+
+                    if (aggregateImageBytes > MaximumAggregateEncodedImageBytes - entry.Length)
+                    {
+                        throw new GamAssetDocumentException(
+                            $"The .gam bundle exceeds the {MaximumAggregateEncodedImageBytes}-byte " +
+                            "aggregate image safety limit.");
+                    }
+
+                    aggregateImageBytes += entry.Length;
+                    ValidateAggregateImageBudget(imageCount, aggregateImageBytes);
                 }
             }
 
@@ -903,10 +1204,21 @@ namespace GmodAddonManager.Core.Services
             string expectedHash,
             CancellationToken cancellationToken)
         {
+            if (entry.Length < 0 || entry.Length > MaximumManifestBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"The .gam bundle manifest exceeds the {MaximumManifestBytes}-byte safety limit.");
+            }
+
             using var sha256 = SHA256.Create();
             ParsedManifest parsed;
             using (var entryStream = entry.Open())
-            using (var hashingStream = new CryptoStream(entryStream, sha256, CryptoStreamMode.Read))
+            using (var boundedStream = new BoundedReadStream(
+                entryStream,
+                MaximumManifestBytes,
+                entry.FullName,
+                cancellationToken))
+            using (var hashingStream = new CryptoStream(boundedStream, sha256, CryptoStreamMode.Read))
             using (var textReader = new StreamReader(
                 hashingStream,
                 StrictUtf8,
@@ -1063,6 +1375,11 @@ namespace GmodAddonManager.Core.Services
                 }
             }
 
+            ValidateParsedResourceCounts(
+                assets,
+                groups,
+                rootChildren ?? new List<GamAssetBundleEntryReference>());
+
             return new ParsedManifest(
                 version.Value,
                 assets,
@@ -1082,6 +1399,12 @@ namespace GmodAddonManager.Core.Services
                 if (reader.TokenType == JsonToken.EndArray)
                 {
                     return assets;
+                }
+
+                if (assets.Count >= MaximumAssetCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumAssetCount}-Asset safety limit.");
                 }
 
                 assets.Add(ParseAsset(reader, cancellationToken));
@@ -1168,6 +1491,12 @@ namespace GmodAddonManager.Core.Services
                 if (reader.TokenType == JsonToken.EndArray)
                 {
                     return groups;
+                }
+
+                if (groups.Count >= MaximumGroupCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumGroupCount}-Group safety limit.");
                 }
 
                 groups.Add(ParseGroup(reader, cancellationToken));
@@ -1266,6 +1595,12 @@ namespace GmodAddonManager.Core.Services
                 if (reader.TokenType == JsonToken.EndArray)
                 {
                     return entries;
+                }
+
+                if (entries.Count >= MaximumTopologyReferenceCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
                 }
 
                 RequireToken(reader, JsonToken.StartObject, owner + " child object");
@@ -1495,6 +1830,12 @@ namespace GmodAddonManager.Core.Services
                     return values;
                 }
 
+                if (values.Count >= MaximumMembershipAddonIdCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumMembershipAddonIdCount}-addon-ID safety limit.");
+                }
+
                 var value = ValidateWorkshopId(ReadString(reader, fieldName));
                 if (!seen.Add(value))
                 {
@@ -1521,7 +1862,67 @@ namespace GmodAddonManager.Core.Services
                     return values;
                 }
 
+                if (values.Count >= MaximumTopologyReferenceCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
+                }
+
                 values.Add(ValidatePortableId(ReadString(reader, fieldName)));
+            }
+        }
+
+        private static void ValidateParsedResourceCounts(
+            IReadOnlyList<ParsedAsset> assets,
+            IReadOnlyList<ParsedGroup> groups,
+            IReadOnlyList<GamAssetBundleEntryReference> rootChildren)
+        {
+            long membershipAddonIds = 0;
+            long imageCount = 0;
+            foreach (var asset in assets)
+            {
+                membershipAddonIds += asset.Membership.Kind ==
+                    GamAssetDocumentMembershipKind.Fixed
+                    ? asset.Membership.AddonIds.Count
+                    : asset.Membership.SnapshotAddonIds.Count;
+                if (membershipAddonIds > MaximumMembershipAddonIdCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumMembershipAddonIdCount}-addon-ID safety limit.");
+                }
+
+                if (asset.Image != null)
+                {
+                    imageCount++;
+                }
+            }
+
+            long topologyReferences = rootChildren.Count;
+            if (topologyReferences > MaximumTopologyReferenceCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"The .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
+            }
+
+            foreach (var group in groups)
+            {
+                topologyReferences += group.Children.Count;
+                if (topologyReferences > MaximumTopologyReferenceCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumTopologyReferenceCount}-reference safety limit.");
+                }
+
+                if (group.Image != null)
+                {
+                    imageCount++;
+                }
+            }
+
+            if (imageCount > MaximumImageCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"The .gam bundle exceeds the {MaximumImageCount}-image safety limit.");
             }
         }
 
@@ -1557,6 +1958,7 @@ namespace GmodAddonManager.Core.Services
             ImageDescriptor? descriptor,
             string expectedPath,
             ISet<string> referencedImages,
+            ImageImportBudget imageBudget,
             CancellationToken cancellationToken)
         {
             if (descriptor == null)
@@ -1594,7 +1996,9 @@ namespace GmodAddonManager.Core.Services
                     $"The .gam bundle image checksum does not match for '{descriptor.Path}'.");
             }
 
-            return GamAssetDocumentImageNormalizer.NormalizePortablePng(encoded);
+            var normalized = GamAssetDocumentImageNormalizer.NormalizePortablePng(encoded);
+            imageBudget.AddNormalizedBytes(normalized.Length);
+            return normalized;
         }
 
         private static byte[] ReadBoundedEntry(
@@ -1857,6 +2261,181 @@ namespace GmodAddonManager.Core.Services
             }
 
             return builder.ToString();
+        }
+
+        private sealed class ImageImportBudget
+        {
+            private long normalizedBytes;
+
+            public void AddNormalizedBytes(int byteCount)
+            {
+                if (byteCount < 0 ||
+                    normalizedBytes > MaximumAggregateNormalizedImageBytes - byteCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam bundle exceeds the {MaximumAggregateNormalizedImageBytes}-byte " +
+                        "normalized image safety limit.");
+                }
+
+                normalizedBytes += byteCount;
+            }
+        }
+
+        private sealed class BoundedReadStream : Stream
+        {
+            private readonly Stream inner;
+            private readonly long maximumBytes;
+            private readonly string entryName;
+            private readonly CancellationToken cancellationToken;
+            private long bytesRead;
+
+            public BoundedReadStream(
+                Stream inner,
+                long maximumBytes,
+                string entryName,
+                CancellationToken cancellationToken)
+            {
+                this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                this.maximumBytes = maximumBytes;
+                this.entryName = entryName;
+                this.cancellationToken = cancellationToken;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => bytesRead;
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (count == 0)
+                {
+                    return 0;
+                }
+
+                if (bytesRead >= maximumBytes)
+                {
+                    var probe = inner.ReadByte();
+                    if (probe != -1)
+                    {
+                        ThrowLimitExceeded();
+                    }
+
+                    return 0;
+                }
+
+                var allowed = (int)Math.Min(count, maximumBytes - bytesRead);
+                var read = inner.Read(buffer, offset, allowed);
+                bytesRead += read;
+                return read;
+            }
+
+            public override int ReadByte()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (bytesRead >= maximumBytes)
+                {
+                    var probe = inner.ReadByte();
+                    if (probe != -1)
+                    {
+                        ThrowLimitExceeded();
+                    }
+
+                    return -1;
+                }
+
+                var value = inner.ReadByte();
+                if (value != -1)
+                {
+                    bytesRead++;
+                }
+
+                return value;
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) =>
+                throw new NotSupportedException();
+
+            public override void SetLength(long value) =>
+                throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) =>
+                throw new NotSupportedException();
+
+            private void ThrowLimitExceeded()
+            {
+                throw new GamAssetDocumentException(
+                    $"Archive entry '{entryName}' exceeds its {maximumBytes}-byte limit.");
+            }
+        }
+
+        private sealed class BoundedWriteStream : Stream
+        {
+            private readonly Stream inner;
+            private readonly long maximumBytes;
+            private readonly string entryName;
+            private readonly CancellationToken cancellationToken;
+            private long bytesWritten;
+
+            public BoundedWriteStream(
+                Stream inner,
+                long maximumBytes,
+                string entryName,
+                CancellationToken cancellationToken)
+            {
+                this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                this.maximumBytes = maximumBytes;
+                this.entryName = entryName;
+                this.cancellationToken = cancellationToken;
+            }
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => bytesWritten;
+            public override long Position
+            {
+                get => bytesWritten;
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                inner.Flush();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (count < 0 || bytesWritten > maximumBytes - count)
+                {
+                    throw new GamAssetDocumentException(
+                        $"Archive entry '{entryName}' exceeds its {maximumBytes}-byte limit.");
+                }
+
+                inner.Write(buffer, offset, count);
+                bytesWritten += count;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                throw new NotSupportedException();
+
+            public override long Seek(long offset, SeekOrigin origin) =>
+                throw new NotSupportedException();
+
+            public override void SetLength(long value) =>
+                throw new NotSupportedException();
         }
 
         private sealed class ValidatedBundle

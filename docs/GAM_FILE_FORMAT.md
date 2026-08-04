@@ -1,7 +1,7 @@
 # GAM `.gam` ファイル形式仕様
 
 この文書は、AIや外部ツールからGAMへ取り込める `.gam` ファイルを生成するための仕様書です。
-GAMの現行実装（2026-08-03時点）を真実源としており、新規作成では次の2形式だけを使用してください。
+GAMの現行実装（2026-08-05時点）を真実源としており、新規作成では次の2形式だけを使用してください。
 
 - 単一Assetを渡す: **Single Asset v3**（UTF-8 JSON）
 - 複数Asset、Asset Group、入れ子Groupを渡す: **Bundle v4**（ZIP）
@@ -80,7 +80,7 @@ GAMは先頭2バイトがZIP署名 `PK` ならBundle、それ以外ならSingle 
 "18446744073709551616"    上限超過
 ```
 
-Addon数にGAM独自の固定上限はありません。数万件のIDもcodecで扱えますが、実際にはメモリ、ディスク、処理時間の制約を受けます。
+過大入力によるメモリ・CPU枯渇を防ぐ技術的安全上限として、Single Assetの1 membershipは最大5,000,000 ID、Bundleは全Assetのmembership合計で最大5,000,000 IDです。これは通常のAsset整理を制限するための製品上限ではなく、信頼できない入力を有限時間・有限メモリで拒否するための高い防御上限です。
 
 ### 3.2 名前
 
@@ -207,7 +207,7 @@ Water
 - `version`: JSON整数の `3`
 - JSON最大深度: 16
 
-Single Assetはファイル全体を1個のbyte配列へ読み込むため、実装上 `int.MaxValue` bytes以上のファイルは拒否されます。それ未満でも利用可能メモリの実用上限を受けます。極端に大きい共有物にはstreamingで読むBundle v4を使用してください。
+Single Assetは読込前にファイル長を確認し、最大67,108,864 bytes（64 MiB）まで受け付けます。上限を超えるファイルは全体をメモリへ確保する前に拒否されます。Bundle v4にも別の構造別上限があるため、Bundleを使えば無制限になるわけではありません。
 
 フィールド順は問いません。重複キー、未知フィールド、JSON本体後方の別コンテンツは拒否されます。
 
@@ -521,6 +521,23 @@ AssetとGroupの両方が0件の空Bundleは不可です。空のGroupを1件だ
 
 JSONフィールド順は問いませんが、未知・重複フィールドは拒否されます。JSON最大深度は24です。
 
+Bundleの技術的安全上限:
+
+| 対象 | 上限 |
+|---|---:|
+| `.gam` archive全体 | 671,088,640 bytes（640 MiB） |
+| ZIP central directory | 8,388,608 bytes（8 MiB） |
+| 展開後の `manifest.json` | 67,108,864 bytes（64 MiB） |
+| Asset定義 | 100,000件 |
+| Group定義 | 100,000件 |
+| `rootChildren` と全 `children` の参照合計 | 1,000,000件 |
+| 全Assetの `addonIds` / `snapshotAddonIds` 合計 | 5,000,000 ID |
+| 画像entry | 4,096件 |
+
+これらは通常利用向けの容量プランではなく、圧縮bombや巨大配列を早期に拒否するDoS防止の上限です。ZIPは既知entryだけを許可し、manifestと各画像を展開後サイズで制限します。
+
+Smart Assetの種類推定でGMAを読む場合も、信頼できないAddonメタデータとして扱います。GMAはentry最大100,000件、各entry path最大4,096 bytesに加え、対応形式を試す全解析fallbackを通じたpath metadata合計を16,777,216 bytes（16 MiB）までとします。この上限を超えたGMAは分類情報として採用しません。
+
 ### 5.3 Bundle内Asset
 
 Fixed Asset:
@@ -794,7 +811,7 @@ images/groups/<localId>.png
 - 同じ画像エントリの使い回し、未参照画像、参照先なしは不可
 - 画像1枚ごとの入力・正規化制限はSingle Assetと同じ
 
-画像総数や非画像データ全体に32 MiBなどの製品上の固定上限はありません。各画像だけが個別の安全上限を受けます。画像はGAMの書き出し時と読み込み時に圧縮・正規化されます。
+画像以外を一律32 MiBに制限するような製品上の共有容量制限はありません。一方、信頼できない入力への技術的安全上限として、画像は最大4,096枚、展開後の入力画像合計は最大536,870,912 bytes（512 MiB）、正規化後画像合計も最大536,870,912 bytes（512 MiB）です。各画像には前述の4 MiB入力、寸法、pixel数、デコード64 MiB、正規化後2 MiBの個別上限も適用されます。画像はGAMの書き出し時と読み込み時に圧縮・正規化されます。
 
 ### 5.9 `manifest.sha256`
 
@@ -1109,5 +1126,6 @@ Bundle v4の.gamファイルを1個作成してください。
 - `tests/GmodAddonManager.Core.Tests/GamAssetFileServiceTests.cs`
 - `tests/GmodAddonManager.Core.Tests/GamAssetManagerIntegrationTests.cs`
 - `tests/GmodAddonManager.Core.Tests/GamAssetBundleManagerIntegrationTests.cs`
+- `tests/GmodAddonManager.Core.Tests/UntrustedInputResourceLimitTests.cs`
 
 形式versionやcodecを変更した場合は、この文書も同時に更新してください。

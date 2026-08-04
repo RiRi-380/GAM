@@ -1,128 +1,92 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Create a new release for GAM
+    Validate and publish an exact GAM release tag.
 .DESCRIPTION
-    This script creates a new release by adding a release trigger to the commit message
-.PARAMETER Type
-    The type of release: major, minor, or patch (default: patch)
-.PARAMETER Message
-    Additional commit message (optional)
+    This script never stages or commits files and never pushes a branch. It only
+    creates and pushes an annotated tag after verifying that clean local main is
+    exactly origin/main and that version metadata and release notes match.
 .EXAMPLE
-    .\release.ps1
-    Creates a patch release with the latest changes
-.EXAMPLE
-    .\release.ps1 -Type minor -Message "Add new feature"
-    Creates a minor release with a custom message
+    .\scripts\release.ps1 -Version v2.0.0 -Push
 #>
 
+[CmdletBinding()]
 param(
-    [ValidateSet("major", "minor", "patch")]
-    [string]$Type = "patch",
-    [string]$Message = ""
+    [Parameter(Mandatory = $true)]
+    [string]$Version,
+    [switch]$Push
 )
 
-# Colors for output
 $ErrorActionPreference = "Stop"
-
-function Write-Success {
-    Write-Host $args[0] -ForegroundColor Green
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$versionPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if ($Version -notmatch $versionPattern) {
+    throw "Version must be an exact stable semantic version such as v2.0.0."
 }
 
-function Write-Info {
-    Write-Host $args[0] -ForegroundColor Cyan
-}
-
-function Write-Warning {
-    Write-Host $args[0] -ForegroundColor Yellow
-}
-
-# Check if we're in a git repository
-if (!(Test-Path .git)) {
-    Write-Error "This script must be run from the root of the GAM repository"
-    exit 1
-}
-
-# Check for uncommitted changes
-$status = git status --porcelain
-if ($status) {
-    Write-Warning "You have uncommitted changes:"
-    Write-Host $status
-    $response = Read-Host "Do you want to commit these changes? (y/n)"
-    if ($response -ne 'y') {
-        Write-Info "Aborting release"
-        exit 0
+function Invoke-Git {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    & git -C $repoRoot @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "git $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
     }
 }
 
-# Get the latest tag
-$latestTag = git describe --tags --abbrev=0 2>$null
-if (!$latestTag) {
-    $latestTag = "v0.0.0"
-}
-Write-Info "Latest tag: $latestTag"
-
-# Calculate next version
-$version = $latestTag -replace '^v', ''
-$versionParts = $version -split '\.'
-$major = [int]$versionParts[0]
-$minor = [int]$versionParts[1]
-$patch = [int]$versionParts[2]
-
-switch ($Type) {
-    "major" {
-        $major++
-        $minor = 0
-        $patch = 0
-    }
-    "minor" {
-        $minor++
-        $patch = 0
-    }
-    "patch" {
-        $patch++
-    }
+$branch = (& git -C $repoRoot branch --show-current).Trim()
+if ($LASTEXITCODE -ne 0 -or $branch -ne "main") {
+    throw "Releases may only be created from the main branch (current: '$branch')."
 }
 
-$newVersion = "v$major.$minor.$patch"
-Write-Info "Next version will be: $newVersion"
-
-# Build commit message
-$commitMessage = if ($Message) {
-    "$Message `n`n[release:$Type]"
-} else {
-    "Release $newVersion`n`n[release:$Type]"
+$status = & git -C $repoRoot status --porcelain
+if ($LASTEXITCODE -ne 0 -or $status) {
+    throw "The worktree must be clean. This script will not stage or commit changes."
 }
 
-# Commit any changes
-if ($status) {
-    Write-Info "Committing changes..."
-    git add -A
-    git commit -m $commitMessage
-    Write-Success "Changes committed"
-} else {
-    # Create empty commit to trigger release
-    Write-Info "Creating release commit..."
-    git commit --allow-empty -m $commitMessage
+Invoke-Git fetch origin main
+$head = (& git -C $repoRoot rev-parse HEAD).Trim()
+$originMain = (& git -C $repoRoot rev-parse origin/main).Trim()
+if ($head -ne $originMain) {
+    throw "HEAD ($head) must exactly match origin/main ($originMain)."
 }
 
-# Create tag for release workflow
-$existingTag = git tag -l $newVersion
-if ($existingTag) {
-    Write-Error "Tag $newVersion already exists. Aborting to avoid duplicate release."
-    exit 1
+$normalizedVersion = $Version.Substring(1)
+[xml]$buildProperties = Get-Content -LiteralPath (Join-Path $repoRoot "Directory.Build.props") -Raw
+$declaredVersion = $buildProperties.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
+if ($declaredVersion -ne $normalizedVersion) {
+    throw "Directory.Build.props declares $declaredVersion, not $normalizedVersion."
 }
 
-git tag $newVersion
+$releaseNotes = Join-Path $repoRoot "docs\releases\$Version.md"
+if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
+    throw "Release notes are missing: $releaseNotes"
+}
 
-# Push to trigger the release workflow
-Write-Info "Pushing to GitHub..."
-git push origin main
-git push origin $newVersion
+& git -C $repoRoot rev-parse --quiet --verify "refs/tags/$Version" *> $null
+if ($LASTEXITCODE -eq 0) {
+    throw "Local tag $Version already exists."
+}
 
-Write-Success "Release process started!"
-Write-Info "Check the Actions tab on GitHub for build progress:"
-Write-Info "https://github.com/RiRi-380/GAM/actions"
-Write-Info ""
-Write-Info "Once the build completes, the release will be available at:"
-Write-Info "https://github.com/RiRi-380/GAM/releases/tag/$newVersion"
+$null = & git -C $repoRoot ls-remote --exit-code --tags origin "refs/tags/$Version" 2>$null
+$remoteTagExitCode = $LASTEXITCODE
+if ($remoteTagExitCode -eq 0) {
+    throw "Remote tag $Version already exists."
+}
+if ($remoteTagExitCode -ne 2) {
+    throw "Could not verify the remote tag state (git exit code $remoteTagExitCode)."
+}
+
+if (-not $Push) {
+    Write-Host "Release preflight passed for $Version at $head." -ForegroundColor Green
+    Write-Host "Re-run with -Push to create and push the annotated tag." -ForegroundColor Cyan
+    exit 0
+}
+
+Invoke-Git tag -a $Version -m "GAM $Version"
+try {
+    Invoke-Git push origin "refs/tags/$Version"
+} catch {
+    Write-Warning "The annotated local tag remains at $Version because the push failed."
+    throw
+}
+
+Write-Host "Pushed annotated tag $Version. The Release workflow is now responsible for publication." -ForegroundColor Green

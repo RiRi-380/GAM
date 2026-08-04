@@ -10,8 +10,8 @@
         Height="600"
         WindowStartupLocation="CenterOwner"
         CanResize="True"
-        MinWidth="600"
-        MinHeight="500">
+        MinWidth="480"
+        MinHeight="360">
     
     <Grid Margin="20">
         <Grid.RowDefinitions>

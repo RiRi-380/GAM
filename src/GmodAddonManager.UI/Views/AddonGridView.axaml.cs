@@ -18,6 +18,9 @@ namespace GmodAddonManager.UI.Views;
 
 public sealed partial class AddonGridView : UserControl, IDisposable
 {
+    private static readonly TimeSpan PaneCloseVisibilityDelay =
+        TimeSpan.FromMilliseconds(120);
+
     private Point? _dragStartPoint;
     private bool _isDragging;
     private bool _realizedItemExceptionLogged;
@@ -25,11 +28,15 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     private CancellationTokenSource? _scrollIdleCts;
     private ItemsRepeater? _itemsRepeater;
     private readonly Dictionary<Control, int> _realizedAddonIndices = new();
+    private readonly KeyboardNavigationMode _filterPaneOpenTabNavigationMode;
+    private IDisposable? _filterPaneHideTimer;
     private ResponsiveLayoutKind? _responsiveLayoutKind;
 
     public AddonGridView()
     {
         InitializeComponent();
+        _filterPaneOpenTabNavigationMode =
+            KeyboardNavigation.GetTabNavigation(FilterPaneContent);
     }
 
     public void ApplyResponsiveLayout(ResponsiveLayoutState layout)
@@ -59,6 +66,80 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     {
         FilterSplitView.IsPaneOpen = !FilterSplitView.IsPaneOpen;
     }
+
+    private void OnFilterPaneOpening(object? sender, CancelRoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, FilterSplitView))
+        {
+            return;
+        }
+
+        RestoreFilterPaneContent();
+    }
+
+    private void OnFilterPaneClosed(object? sender, RoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, FilterSplitView))
+        {
+            return;
+        }
+
+        if (!IsOverlayMode(FilterSplitView.DisplayMode))
+        {
+            RestoreFilterPaneContent();
+            return;
+        }
+
+        var returnFocusToToggle = FilterPaneContent.IsKeyboardFocusWithin;
+        FilterPaneContent.IsEnabled = false;
+        FilterPaneContent.IsHitTestVisible = false;
+        KeyboardNavigation.SetTabNavigation(
+            FilterPaneContent,
+            KeyboardNavigationMode.None);
+
+        if (returnFocusToToggle && FilterPaneToggleButton.IsVisible)
+        {
+            FilterPaneToggleButton.Focus();
+        }
+
+        _filterPaneHideTimer?.Dispose();
+        _filterPaneHideTimer = DispatcherTimer.RunOnce(
+            () =>
+            {
+                _filterPaneHideTimer = null;
+                if (!FilterSplitView.IsPaneOpen &&
+                    IsOverlayMode(FilterSplitView.DisplayMode))
+                {
+                    FilterPaneContent.IsVisible = false;
+                    if (ReferenceEquals(FilterSplitView.Pane, FilterPaneContent))
+                    {
+                        FilterSplitView.Pane = null;
+                    }
+                }
+            },
+            PaneCloseVisibilityDelay,
+            DispatcherPriority.Normal);
+    }
+
+    private void RestoreFilterPaneContent()
+    {
+        _filterPaneHideTimer?.Dispose();
+        _filterPaneHideTimer = null;
+        FilterPaneContent.IsVisible = true;
+        FilterPaneContent.IsEnabled = true;
+        FilterPaneContent.IsHitTestVisible = true;
+        KeyboardNavigation.SetTabNavigation(
+            FilterPaneContent,
+            _filterPaneOpenTabNavigationMode);
+        if (!ReferenceEquals(FilterSplitView.Pane, FilterPaneContent))
+        {
+            FilterSplitView.Pane = FilterPaneContent;
+        }
+    }
+
+    private static bool IsOverlayMode(SplitViewDisplayMode displayMode) =>
+        displayMode is SplitViewDisplayMode.Overlay or
+            SplitViewDisplayMode.CompactOverlay;
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -141,6 +222,30 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         {
             gridVm.SelectedAddon = addonVm;
         }
+    }
+
+    private void OnAddonKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not Border border ||
+            !ReferenceEquals(e.Source, border) ||
+            e.Key is not (Key.Enter or Key.Space) ||
+            border.DataContext is not AddonItemViewModel addonVm ||
+            DataContext is not AddonGridViewModel gridVm ||
+            addonVm.IsLocal)
+        {
+            return;
+        }
+
+        gridVm.SelectAddon(
+            addonVm.AddonId,
+            e.KeyModifiers.HasFlag(KeyModifiers.Control));
+
+        if (!gridVm.IsSelectionMode && gridVm.HasSelectedAddons)
+        {
+            gridVm.IsSelectionMode = true;
+        }
+
+        e.Handled = true;
     }
 
     private async void OnAddonPointerMoved(object? sender, PointerEventArgs e)
@@ -454,5 +559,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         _scrollIdleCts?.Cancel();
         _scrollIdleCts?.Dispose();
         _scrollIdleCts = null;
+        _filterPaneHideTimer?.Dispose();
+        _filterPaneHideTimer = null;
     }
 }

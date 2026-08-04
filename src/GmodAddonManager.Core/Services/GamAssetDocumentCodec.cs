@@ -25,6 +25,8 @@ namespace GmodAddonManager.Core.Services
         public const int MaximumAssetNameLength = 200;
         public const int MaximumRuleValueLength = 64;
         public const int MaximumMemoLength = 4096;
+        public const int MaximumDocumentBytes = 64 * 1024 * 1024;
+        public const int MaximumAddonIdCount = 5_000_000;
 
         private const string LegacyHeader = "# GAM Collection Export v1";
         private const int MaximumJsonDepth = 16;
@@ -92,10 +94,24 @@ namespace GmodAddonManager.Core.Services
             }
 
             var json = root.ToString(Formatting.Indented) + Environment.NewLine;
-            return StrictUtf8.GetBytes(json);
+            var bytes = StrictUtf8.GetBytes(json);
+            if (bytes.Length > MaximumDocumentBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"The single-Asset .gam document exceeds the {MaximumDocumentBytes}-byte safety limit.");
+            }
+
+            return bytes;
         }
 
         public static GamAssetDocument Deserialize(byte[] documentBytes)
+        {
+            return Deserialize(documentBytes, CancellationToken.None);
+        }
+
+        public static GamAssetDocument Deserialize(
+            byte[] documentBytes,
+            CancellationToken cancellationToken)
         {
             if (documentBytes == null)
             {
@@ -106,6 +122,14 @@ namespace GmodAddonManager.Core.Services
             {
                 throw new GamAssetDocumentException("The .gam document is empty.");
             }
+
+            if (documentBytes.Length > MaximumDocumentBytes)
+            {
+                throw new GamAssetDocumentException(
+                    $"The single-Asset .gam document exceeds the {MaximumDocumentBytes}-byte safety limit.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             string text;
             try
@@ -125,7 +149,7 @@ namespace GmodAddonManager.Core.Services
             var trimmedStart = text.TrimStart();
             if (trimmedStart.StartsWith(LegacyHeader, StringComparison.Ordinal))
             {
-                return DeserializeLegacyV1(text);
+                return DeserializeLegacyV1(text, cancellationToken);
             }
 
             if (!trimmedStart.StartsWith("{", StringComparison.Ordinal))
@@ -133,7 +157,7 @@ namespace GmodAddonManager.Core.Services
                 throw new GamAssetDocumentException("The .gam document format is not recognized.");
             }
 
-            return DeserializeJson(text);
+            return DeserializeJson(text, cancellationToken);
         }
 
         public static string CanonicalizeRuleValue(
@@ -169,13 +193,17 @@ namespace GmodAddonManager.Core.Services
             return canonical;
         }
 
-        private static GamAssetDocument DeserializeJson(string text)
+        private static GamAssetDocument DeserializeJson(
+            string text,
+            CancellationToken cancellationToken)
         {
             JObject root;
             try
             {
                 using var stringReader = new StringReader(text);
-                using var strictReader = new GamAssetStrictJsonTextReader(stringReader);
+                using var strictReader = new GamAssetStrictJsonTextReader(
+                    stringReader,
+                    cancellationToken);
                 using var jsonReader = new JsonTextReader(strictReader)
                 {
                     DateParseHandling = DateParseHandling.None,
@@ -269,7 +297,9 @@ namespace GmodAddonManager.Core.Services
             return new GamAssetDocument(name, state, membership, image, version, memo);
         }
 
-        private static GamAssetDocument DeserializeLegacyV1(string text)
+        private static GamAssetDocument DeserializeLegacyV1(
+            string text,
+            CancellationToken cancellationToken)
         {
             var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             var headerSeen = false;
@@ -279,6 +309,7 @@ namespace GmodAddonManager.Core.Services
 
             foreach (var rawLine in lines)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (rawLine.Length > MaximumLegacyLineLength)
                 {
                     throw new GamAssetDocumentException("A legacy .gam line is too long.");
@@ -334,6 +365,12 @@ namespace GmodAddonManager.Core.Services
                     }
 
                     continue;
+                }
+
+                if (parsedIds.Count >= MaximumAddonIdCount)
+                {
+                    throw new GamAssetDocumentException(
+                        $"The .gam membership exceeds the {MaximumAddonIdCount}-ID safety limit.");
                 }
 
                 parsedIds.Add(ValidateWorkshopId(line));
@@ -498,6 +535,12 @@ namespace GmodAddonManager.Core.Services
             }
 
             var array = (JArray)token;
+            if (array.Count > MaximumAddonIdCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"The {propertyName} entry exceeds the {MaximumAddonIdCount}-ID safety limit.");
+            }
+
             var values = new List<string>(array.Count);
             foreach (var item in array)
             {
@@ -515,6 +558,12 @@ namespace GmodAddonManager.Core.Services
 
         private static IReadOnlyList<string> ValidateAddonIds(IReadOnlyList<string> addonIds)
         {
+            if (addonIds.Count > MaximumAddonIdCount)
+            {
+                throw new GamAssetDocumentException(
+                    $"The addonIds entry exceeds the {MaximumAddonIdCount}-ID safety limit.");
+            }
+
             var result = new List<string>(addonIds.Count);
             foreach (var addonId in addonIds)
             {

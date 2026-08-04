@@ -1,13 +1,14 @@
-# Developer Mode Phrase
+# Developer Mode Phrase (Archived)
 
-Commands:
+The phrase-based v1 developer menu is not connected to the v2.0.0 product UI.
+The following values are retained only to explain old logs and screenshots; do
+not enter or distribute them as supported release features.
+
+Historical commands:
 - `JUNCTION_MODE` (ジャンクション/ハード設定の表示)
 - `INVESTIGATION_MODE` (アセット排他適用ボタンの表示)
 
-Usage:
-- コマンドは空白/カンマ/改行で区切って複数指定可能
-- 同じコマンドの重複指定も可
-
-Warning:
-- 完全自己責任
-- 使う出来じゃない
+GAM v2 supports neither the junction/Hard settings unlocked by
+`JUNCTION_MODE` nor the old exclusive-apply investigation control. Current
+experimental settings are exposed explicitly in Settings and are OFF by
+default.

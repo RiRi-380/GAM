@@ -78,9 +78,21 @@ namespace GmodAddonManager.UI.ViewModels
             
             try
             {
-                await updateService.DownloadAndInstallUpdateAsync(
+                var disposition = await updateService.DownloadAndInstallUpdateAsync(
                     updateInfo.DownloadUrl,
                     updateInfo.DownloadDigest);
+
+                if (disposition == UpdateInstallDisposition.PortableArchiveReady)
+                {
+                    // A portable copy must not silently install a second copy in
+                    // LocalAppData. Reveal the verified ZIP and keep the current
+                    // app running so the user can replace this folder explicitly.
+                    UpdateProgress = L.Get("UpdateDialog.PortableArchiveReady");
+                    DialogResult = true;
+                    await Task.Delay(2500);
+                    RequestClose(true);
+                    return;
+                }
 
                 DialogResult = true;
                 RequestClose(true);

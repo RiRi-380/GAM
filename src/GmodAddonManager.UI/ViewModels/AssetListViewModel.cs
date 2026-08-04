@@ -499,41 +499,12 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             {
                 AddSystemEntry(AssetItemViewModel.GmodDisabledSystemAssetId);
             }
-
-            var rootEntries = configuration.Assets
-                .Where(asset => !asset.IsSystem && string.IsNullOrWhiteSpace(asset.ParentGroupId))
-                .Select(asset => new VisibleModelEntry(asset))
-                .Concat(configuration.AssetGroups
-                    .Where(group => string.IsNullOrWhiteSpace(group.ParentGroupId))
-                    .Select(group => new VisibleModelEntry(group)))
-                .OrderBy(entry => entry.IsFavorite ? 0 : 1)
-                .ThenBy(entry => NormalizeSortOrder(entry.SortOrder))
-                .ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(entry => entry.Kind)
-                .ThenBy(entry => entry.Id, StringComparer.Ordinal);
-            foreach (var modelEntry in rootEntries)
-            {
-                AddVisibleModelEntry(modelEntry);
-            }
-            return;
         }
 
-        var children = configuration.Assets
-            .Where(asset => !asset.IsSystem &&
-                            string.Equals(asset.ParentGroupId, currentGroupId, StringComparison.Ordinal))
-            .Select(asset => new VisibleModelEntry(asset))
-            .Concat(configuration.AssetGroups
-                .Where(group => string.Equals(
-                    group.ParentGroupId,
-                    currentGroupId,
-                    StringComparison.Ordinal))
-                .Select(group => new VisibleModelEntry(group)))
-            .OrderBy(entry => entry.IsFavorite ? 0 : 1)
-            .ThenBy(entry => NormalizeSortOrder(entry.SortOrder))
-            .ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)
-            .ThenBy(entry => entry.Kind)
-            .ThenBy(entry => entry.Id, StringComparer.Ordinal);
-        foreach (var child in children)
+        foreach (var child in AssetHierarchyOrdering.GetChildren(
+                     configuration,
+                     currentGroupId,
+                     static asset => !asset.IsSystem))
         {
             AddVisibleModelEntry(child);
         }
@@ -548,7 +519,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void AddVisibleModelEntry(VisibleModelEntry entry)
+    private void AddVisibleModelEntry(AssetHierarchyModelEntry entry)
     {
         if (entry.Asset != null)
         {
@@ -1223,14 +1194,9 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             })
             .ThenBy(asset => string.IsNullOrWhiteSpace(asset.ParentGroupId) ? 0 : 1)
             .ThenBy(asset => asset.IsFavorite ? 0 : 1)
-            .ThenBy(asset => NormalizeSortOrder(asset.SortOrder))
+            .ThenBy(asset => AssetHierarchyOrdering.NormalizeSortOrder(asset.SortOrder))
             .ThenBy(asset => asset.Name, StringComparer.CurrentCultureIgnoreCase)
             .ThenBy(asset => asset.Id, StringComparer.Ordinal);
-    }
-
-    private static int NormalizeSortOrder(int value)
-    {
-        return value < 0 ? int.MaxValue : value;
     }
 
     private static int IndexOfEntry(
@@ -1264,28 +1230,6 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private sealed class VisibleModelEntry
-    {
-        public VisibleModelEntry(Asset asset)
-        {
-            Asset = asset;
-            Kind = AssetListEntryKind.Asset;
-        }
-
-        public VisibleModelEntry(AssetGroup group)
-        {
-            Group = group;
-            Kind = AssetListEntryKind.Group;
-        }
-
-        public Asset? Asset { get; }
-        public AssetGroup? Group { get; }
-        public AssetListEntryKind Kind { get; }
-        public string Id => Asset?.Id ?? Group!.Id;
-        public string Name => Asset?.Name ?? Group!.Name;
-        public bool IsFavorite => Asset?.IsFavorite ?? Group!.IsFavorite;
-        public int SortOrder => Asset?.SortOrder ?? Group!.SortOrder;
-    }
 }
 
 public sealed class ShareSelectionItemViewModel

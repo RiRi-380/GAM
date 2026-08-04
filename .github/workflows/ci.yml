@@ -2,8 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   push:
     branches:
       - main
@@ -12,30 +11,40 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: windows-2022
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.302'
 
-      - name: Build UI
-        run: dotnet build src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Debug
+      - name: Restore locked dependencies and audit vulnerabilities
+        run: dotnet restore GmodAddonManager.sln --locked-mode
+
+      - name: Build
+        run: dotnet build GmodAddonManager.sln -c Debug --no-restore -p:TreatWarningsAsErrors=true
 
       - name: Verify release notice inventory
+        shell: pwsh
         run: |
           ./scripts/verify-release-notices.ps1 `
             -ProjectAssetsPath src/GmodAddonManager.UI/obj/project.assets.json
-        shell: pwsh
 
       - name: Test Core
-        run: dotnet test tests/GmodAddonManager.Core.Tests/GmodAddonManager.Core.Tests.csproj -c Debug
+        run: dotnet test tests/GmodAddonManager.Core.Tests/GmodAddonManager.Core.Tests.csproj -c Debug --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"
 
       - name: Test UI
-        run: dotnet test tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj -c Debug
+        run: dotnet test tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj -c Debug --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"
