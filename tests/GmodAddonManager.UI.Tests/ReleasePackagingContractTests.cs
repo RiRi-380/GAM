@@ -66,9 +66,11 @@ public sealed class ReleasePackagingContractTests
             StringComparison.Ordinal);
         Assert.Contains("function ShouldLaunchApplication(): Boolean;", installer, StringComparison.Ordinal);
         Assert.Contains("{param:LAUNCHAFTERINSTALL|0}", installer, StringComparison.Ordinal);
+        Assert.Contains("IsSelectedLegacyV1Upgrade();", installer, StringComparison.Ordinal);
         Assert.Contains("AppId=Gmod Addon Manager", installer, StringComparison.Ordinal);
         Assert.Contains("Uninstallable=yes", installer, StringComparison.Ordinal);
         Assert.Contains("CreateUninstallRegKey=yes", installer, StringComparison.Ordinal);
+        Assert.Contains("UninstallLogMode=append", installer, StringComparison.Ordinal);
         Assert.Contains(
             "Filename: \"{uninstallexe}\"",
             installer,
@@ -77,7 +79,7 @@ public sealed class ReleasePackagingContractTests
     }
 
     [Fact]
-    public void ApplicationAndInstallerDoNotForceElevation()
+    public void ApplicationDoesNotForceElevationAndInstallerPreservesExistingScope()
     {
         var manifest = ReadRepositoryFile3(
             "src",
@@ -101,6 +103,9 @@ public sealed class ReleasePackagingContractTests
             project,
             StringComparison.Ordinal);
         Assert.Contains("PrivilegesRequired=lowest", installer, StringComparison.Ordinal);
+        Assert.Contains("PrivilegesRequiredOverridesAllowed=dialog commandline", installer, StringComparison.Ordinal);
+        Assert.Contains("UsePreviousPrivileges=yes", installer, StringComparison.Ordinal);
+        Assert.Contains("UsePreviousAppDir=yes", installer, StringComparison.Ordinal);
         Assert.Contains(
             "VersionInfoVersion={#MyAppVersion}.0",
             installer,
@@ -120,6 +125,20 @@ public sealed class ReleasePackagingContractTests
         Assert.DoesNotContain("VC_redist", localBuild, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("VCRedist", installer, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Invoke-WebRequest", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LocalReleaseBuildCreatesTheStableV1UpdaterAliasAndOptionalSignedMetadata()
+    {
+        var localBuild = ReadRepositoryFile("build-release.ps1");
+
+        Assert.Contains("$stableInstaller = Join-Path $repoRoot \"GAM-Setup.exe\"", localBuild, StringComparison.Ordinal);
+        Assert.Contains("Copy-Item -LiteralPath $versionedInstaller -Destination $stableInstaller", localBuild, StringComparison.Ordinal);
+        Assert.Contains("stable and versioned installer files are not byte-identical", localBuild, StringComparison.Ordinal);
+        Assert.Contains("GAM_UPDATE_SIGNING_KEY_B64", localBuild, StringComparison.Ordinal);
+        Assert.Contains("GAM_UPDATE_SIGNING_KEY_PEM", localBuild, StringComparison.Ordinal);
+        Assert.Contains("scripts\\sign-update-manifest.ps1", localBuild, StringComparison.Ordinal);
+        Assert.Contains("no update signing key is configured", localBuild, StringComparison.Ordinal);
     }
 
     private static void AssertSelfContainedMultiFilePublish(string source)

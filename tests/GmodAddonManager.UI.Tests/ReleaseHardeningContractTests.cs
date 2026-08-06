@@ -79,7 +79,8 @@ public sealed partial class ReleaseHardeningContractTests
         var release = ReadRepositoryFile(".github", "workflows", "release.yml");
 
         Assert.Contains("permissions:\n  contents: read", NormalizeNewlines(release), StringComparison.Ordinal);
-        Assert.Contains("publish:\n    needs: build", NormalizeNewlines(release), StringComparison.Ordinal);
+        Assert.Contains("upgrade-e2e:\n    needs: build", NormalizeNewlines(release), StringComparison.Ordinal);
+        Assert.Contains("publish:\n    needs: [build, upgrade-e2e]", NormalizeNewlines(release), StringComparison.Ordinal);
         Assert.Contains("contents: write", release, StringComparison.Ordinal);
         Assert.Contains("Release tag is not an exact stable semantic version", release, StringComparison.Ordinal);
         Assert.Contains("Release tag must be annotated", release, StringComparison.Ordinal);
@@ -97,7 +98,7 @@ public sealed partial class ReleaseHardeningContractTests
 
         Assert.Contains("TAG_NAME: ${{ github.ref_name }}", release, StringComparison.Ordinal);
         Assert.DoesNotContain("'${{ github.ref_name }}'", release, StringComparison.Ordinal);
-        Assert.Equal(5, Regex.Count(release, @"\$env:TAG_NAME"));
+        Assert.Equal(7, Regex.Count(release, @"\$env:TAG_NAME"));
     }
 
     [Fact]
@@ -165,34 +166,125 @@ public sealed partial class ReleaseHardeningContractTests
     }
 
     [Fact]
-    public void InstallerBlocksOnlyTheExactLegacyAdminInstallationContract()
+    public void InstallerUpgradesRegisteredV1InPlaceAcrossBothInstallModes()
     {
         var installer = ReadRepositoryFile("installer", "setup.iss");
 
-        Assert.Contains("RegQueryStringValue(HKLM64, LegacyUninstallKey", installer, StringComparison.Ordinal);
+        Assert.Contains("AppId=Gmod Addon Manager", installer, StringComparison.Ordinal);
         Assert.Contains("Gmod Addon Manager_is1", installer, StringComparison.Ordinal);
-        Assert.Contains("Copy(DisplayVersion, 1, 2) <> '1.'", installer, StringComparison.Ordinal);
+        Assert.Contains("PrivilegesRequired=lowest", installer, StringComparison.Ordinal);
+        Assert.Contains("PrivilegesRequiredOverridesAllowed=dialog commandline", installer, StringComparison.Ordinal);
+        Assert.Contains("UsePreviousPrivileges=yes", installer, StringComparison.Ordinal);
+        Assert.Contains("UsePreviousAppDir=yes", installer, StringComparison.Ordinal);
+        Assert.Contains("UninstallLogMode=append", installer, StringComparison.Ordinal);
+        Assert.Contains("{autodesktop}\\Gmod Addon Manager", installer, StringComparison.Ordinal);
+        Assert.Contains("TryGetRegisteredVersionOneInstall(HKCU, LegacyUserInstallPath)", installer, StringComparison.Ordinal);
+        Assert.Contains("TryGetRegisteredVersionOneInstall(HKLM64, LegacyAdminInstallPath)", installer, StringComparison.Ordinal);
         Assert.Contains("IsGAMDisplayName(DisplayName)", installer, StringComparison.Ordinal);
-        Assert.Contains("ProductPublisher = 'RiRi-380'", installer, StringComparison.Ordinal);
-        Assert.Contains("Gmod Addon Manager バージョン 1.0.0", installer, StringComparison.Ordinal);
-        Assert.Contains("ProductName + ' '", installer, StringComparison.Ordinal);
-        Assert.Contains("GmodAddonManager.UI.exe", installer, StringComparison.Ordinal);
-        Assert.Contains("TryGetLegacyAdminInstall", installer, StringComparison.Ordinal);
-        Assert.Contains("Result := False;", installer, StringComparison.Ordinal);
+        Assert.Contains("GetVersionComponents(", installer, StringComparison.Ordinal);
+        Assert.Contains("(ExecutableMajor = 1)", installer, StringComparison.Ordinal);
+        Assert.Contains("function IsSelectedLegacyV1Upgrade(): Boolean;", installer, StringComparison.Ordinal);
+        Assert.Contains("if IsAdminInstallMode then", installer, StringComparison.Ordinal);
+        Assert.Contains("CompareText(SelectedPath, LegacyAdminInstallPath) = 0", installer, StringComparison.Ordinal);
+        Assert.Contains("CompareText(SelectedPath, LegacyUserInstallPath) = 0", installer, StringComparison.Ordinal);
+        Assert.Contains("IsSelectedLegacyV1Upgrade();", installer, StringComparison.Ordinal);
+        Assert.Contains("DuplicateInstallModes", installer, StringComparison.Ordinal);
+        Assert.Contains("(LegacyUserInstallPath <> '') and (LegacyAdminInstallPath <> '')", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryGetLegacyAdminInstall", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryGetUnmanagedPerUserInstall", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("LegacyAdminInstallFound", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("UnmanagedPreviousInstallFound", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("uninstall it first", installer, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Exec(UninstallCommand", installer, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("has not removed anything automatically", installer, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void InstallerBlocksExactPreManifestPerUserInstallWithoutDeletingIt()
+    public void InstallerRemovesOnlyExactKnownV1ResidueAfterSuccessfulCopy()
     {
         var installer = ReadRepositoryFile("installer", "setup.iss");
 
-        Assert.Contains("RegQueryStringValue(HKCU, LegacyUninstallKey", installer, StringComparison.Ordinal);
-        Assert.Contains("TryGetUnmanagedPerUserInstall", installer, StringComparison.Ordinal);
-        Assert.Contains("FileExists(AddBackslash(RegisteredInstallPath) + ManagedManifestName)", installer, StringComparison.Ordinal);
-        Assert.Contains("AppData is not removed", installer, StringComparison.Ordinal);
-        Assert.DoesNotContain("Exec(UninstallCommand", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LegacySteamApi64Size = 296408", installer, StringComparison.Ordinal);
+        Assert.Contains("46688ecd8849a86bf8b807c5de1adbb8b8dddaa48583d68b3518b72c77c15bd0", installer, StringComparison.Ordinal);
+        Assert.Contains("LegacySteamAppIdSize = 4", installer, StringComparison.Ordinal);
+        Assert.Contains("b090147020e033534635010c4f7eb6fc270d44e5df67ea9e744a8087df9ca106", installer, StringComparison.Ordinal);
+        Assert.Contains("FileSize64(FilePath, ActualSize)", installer, StringComparison.Ordinal);
+        Assert.Contains("ActualSha256 := GetSHA256OfFile(FilePath)", installer, StringComparison.Ordinal);
+        Assert.Contains("if (CurStep = ssPostInstall) and IsSelectedLegacyV1Upgrade()", installer, StringComparison.Ordinal);
+        Assert.Contains("DeleteFile(FilePath)", installer, StringComparison.Ordinal);
+        Assert.Contains("Preserving legacy filename with an unknown hash", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("[InstallDelete]", installer, StringComparison.Ordinal);
+        Assert.DoesNotContain("DelTree", installer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReleasePublishesSignedManifestForLegacyV1Updaters()
+    {
+        var release = ReadRepositoryFile(".github", "workflows", "release.yml");
+        var signingScript = ReadRepositoryFile("scripts", "sign-update-manifest.ps1");
+
+        Assert.Contains("GAM_UPDATE_SIGNING_KEY_B64: ${{ secrets.GAM_UPDATE_SIGNING_KEY_B64 }}", release, StringComparison.Ordinal);
+        Assert.Contains("GAM_UPDATE_SIGNING_KEY_PEM: ${{ secrets.GAM_UPDATE_SIGNING_KEY_PEM }}", release, StringComparison.Ordinal);
+        Assert.Contains("./scripts/sign-update-manifest.ps1", release, StringComparison.Ordinal);
+        Assert.Contains("-Version $env:TAG_NAME", release, StringComparison.Ordinal);
+        Assert.Contains("-InstallerPath 'GAM-Setup.exe'", release, StringComparison.Ordinal);
+        Assert.Contains("The stable and versioned installer assets are not byte-identical", release, StringComparison.Ordinal);
+        Assert.Contains("GAM-UpdateManifest-*.json", release, StringComparison.Ordinal);
+        Assert.Contains("GAM-UpdateManifest-*.sig", release, StringComparison.Ordinal);
+        Assert.Contains("installerAssetName = $installer.Name", signingScript, StringComparison.Ordinal);
+        Assert.Contains("$trimmedPrivateKey.StartsWith(", signingScript, StringComparison.Ordinal);
+        Assert.Contains("\"-----BEGIN\"", signingScript, StringComparison.Ordinal);
+        Assert.Contains("openssl dgst -sha256 -verify", signingScript, StringComparison.Ordinal);
+        Assert.Contains("public key embedded in GAM v1.0.3-v1.0.5", signingScript, StringComparison.Ordinal);
+
+        var keyMatch = Regex.Match(
+            signingScript,
+            "ExpectedPublicKeySpkiBase64\\s*=\\s*\\r?\\n\\s*\\\"(?<key>[A-Za-z0-9+/=]+)\\\"");
+        Assert.True(keyMatch.Success, "The v1 update public key was not found in the signing script.");
+        var publicKey = Convert.FromBase64String(keyMatch.Groups["key"].Value);
+        var publicKeyHash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(publicKey))
+            .ToLowerInvariant();
+        Assert.Equal(
+            "4aaa197fc5caa324bb86822c8dba6e7b443157433af68f17f4366da4c111b19a",
+            publicKeyHash);
+    }
+
+    [Fact]
+    public void ReleaseIsGatedByNativeWindowsV1UpgradeE2E()
+    {
+        var release = ReadRepositoryFile(".github", "workflows", "release.yml");
+        var upgradeTest = ReadRepositoryFile("scripts", "test-v1-to-v2-installer-upgrade.ps1");
+
+        Assert.Contains("upgrade-e2e:", release, StringComparison.Ordinal);
+        Assert.Contains("runs-on: windows-2022", release, StringComparison.Ordinal);
+        Assert.Contains("needs: [build, upgrade-e2e]", release, StringComparison.Ordinal);
+        Assert.Contains("gh release download v1.0.0", release, StringComparison.Ordinal);
+        Assert.Contains("gh release download v1.0.26", release, StringComparison.Ordinal);
+        Assert.Contains("./scripts/test-v1-to-v2-installer-upgrade.ps1", release, StringComparison.Ordinal);
+        Assert.Contains("083fb68a4fce57f3f01282f68946c71da48e40a98b77a00bd0886710c704aa79", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("a6f61f971cf96c4c9d3bc79e81bd7a4edebbaa74e51cff42be136e500628a81d", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario A: v1.0.0 all-users installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario B: v1.0.26 per-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario C: clean v2 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("'/CLOSEAPPLICATIONS'", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("-RequireLaunch", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("FileVersion does not match", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("$script:LaunchStabilityWindow", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Assert-ManagedApplicationRemoved", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Assert-TreeUnchanged -Label 'GMod tree'", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Assert-TreeUnchanged -Label 'Workshop tree'", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Assert-Sentinel -Path $appDataSentinel", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Refusing to recursively remove a reparse-point work root", upgradeTest, StringComparison.Ordinal);
+
+        var scenarioA = upgradeTest.IndexOf("Scenario A: v1.0.0 all-users installation", StringComparison.Ordinal);
+        var scenarioB = upgradeTest.IndexOf("Scenario B: v1.0.26 per-user installation", StringComparison.Ordinal);
+        var scenarioC = upgradeTest.IndexOf("Scenario C: clean v2 current-user installation", StringComparison.Ordinal);
+        var adminManagedFiles = upgradeTest.IndexOf("$adminManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
+        var perUserManagedFiles = upgradeTest.IndexOf("$perUserManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
+        var cleanManagedFiles = upgradeTest.IndexOf("$cleanManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
+        Assert.True(scenarioA < adminManagedFiles && adminManagedFiles < scenarioB);
+        Assert.True(scenarioB < perUserManagedFiles && perUserManagedFiles < scenarioC);
+        Assert.True(scenarioC < cleanManagedFiles);
     }
 
     [Fact]

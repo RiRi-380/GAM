@@ -26,6 +26,9 @@ $publishDirectory = Join-Path $repoRoot "publish"
 $portableDirectory = Join-Path $repoRoot "publish-portable"
 $distDirectory = Join-Path $repoRoot "dist"
 $portableZip = Join-Path $repoRoot "GAM-Portable-$normalizedVersion.zip"
+$stableInstaller = Join-Path $repoRoot "GAM-Setup.exe"
+$legacyManifest = Join-Path $repoRoot "GAM-UpdateManifest-$normalizedVersion.json"
+$legacySignature = Join-Path $repoRoot "GAM-UpdateManifest-$normalizedVersion.sig"
 $managedManifestName = "GAM-ReleaseFiles.txt"
 $portableMarkerName = ".gam-portable.json"
 $solutionPath = Join-Path $repoRoot "GmodAddonManager.sln"
@@ -73,8 +76,14 @@ foreach ($directory in @($publishDirectory, $portableDirectory, $distDirectory))
         Remove-Item -LiteralPath $directory -Recurse -Force
     }
 }
-if (Test-Path -LiteralPath $portableZip) {
-    Remove-Item -LiteralPath $portableZip -Force
+foreach ($generatedFile in @(
+        $portableZip,
+        $stableInstaller,
+        $legacyManifest,
+        $legacySignature)) {
+    if (Test-Path -LiteralPath $generatedFile) {
+        Remove-Item -LiteralPath $generatedFile -Force
+    }
 }
 
 Write-Host "Restoring locked dependencies and auditing vulnerabilities..." -ForegroundColor Yellow
@@ -148,11 +157,33 @@ if (-not $innoSetupPath) {
 }
 
 if ($innoSetupPath) {
-    Write-Host "Building the per-user installer..." -ForegroundColor Yellow
+    Write-Host "Building the upgrade-compatible installer..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
     & $innoSetupPath (Join-Path $repoRoot "installer\setup.iss") "/DMyAppVersion=$normalizedVersion"
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup failed with exit code $LASTEXITCODE."
+    }
+
+    $versionedInstaller = Join-Path $distDirectory "GAM-Setup-$normalizedVersion.exe"
+    Copy-Item -LiteralPath $versionedInstaller -Destination $stableInstaller -Force
+    $versionedInstallerHash = (Get-FileHash -LiteralPath $versionedInstaller -Algorithm SHA256).Hash
+    $stableInstallerHash = (Get-FileHash -LiteralPath $stableInstaller -Algorithm SHA256).Hash
+    if ($versionedInstallerHash -ne $stableInstallerHash) {
+        throw "The stable and versioned installer files are not byte-identical."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GAM_UPDATE_SIGNING_KEY_B64) -or
+        -not [string]::IsNullOrWhiteSpace($env:GAM_UPDATE_SIGNING_KEY_PEM)) {
+        & (Join-Path $repoRoot "scripts\sign-update-manifest.ps1") `
+            -Version $tagVersion `
+            -InstallerPath $stableInstaller `
+            -OutputDirectory $repoRoot
+    }
+    else {
+        Write-Warning (
+            "Legacy v1.0.3-v1.0.5 signature assets were not generated because " +
+            "no update signing key is configured. The GitHub release workflow " +
+            "generates and verifies them with repository secrets.")
     }
 } else {
     Write-Warning "Inno Setup was not found; installer verification was skipped."
@@ -163,6 +194,12 @@ Write-Host "Portable: $portableZip" -ForegroundColor Cyan
 Write-Host "Installer staging: $publishDirectory" -ForegroundColor Cyan
 if (Test-Path -LiteralPath (Join-Path $distDirectory "GAM-Setup-$normalizedVersion.exe")) {
     Write-Host "Installer: $(Join-Path $distDirectory "GAM-Setup-$normalizedVersion.exe")" -ForegroundColor Cyan
+    Write-Host "Stable v1 updater alias: $stableInstaller" -ForegroundColor Cyan
+    if ((Test-Path -LiteralPath $legacyManifest) -and
+        (Test-Path -LiteralPath $legacySignature)) {
+        Write-Host "Signed v1 update metadata: $legacyManifest" -ForegroundColor Cyan
+        Write-Host "Signed v1 update signature: $legacySignature" -ForegroundColor Cyan
+    }
 }
 
 $portableExecutable = Join-Path $portableDirectory "GmodAddonManager.UI.exe"

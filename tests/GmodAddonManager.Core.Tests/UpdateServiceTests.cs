@@ -422,6 +422,8 @@ public sealed class UpdateServiceTests
         Assert.Equal(
             "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /LAUNCHAFTERINSTALL=1",
             args);
+        Assert.DoesNotContain("/CURRENTUSER", args, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/ALLUSERS", args, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

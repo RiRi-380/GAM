@@ -64,9 +64,9 @@ Steamの購読・購読解除はSteamクライアント側で行います。`.ga
 ## インストール
 - [GitHub Releases](https://github.com/RiRi-380/GAM/releases) からSetup版またはPortable版を入手できます
 - 例: `GAM-Setup-X.Y.Z.exe` / `GAM-Portable-X.Y.Z.zip`
-- **v1から移行する場合:** 先にWindowsの「インストールされているアプリ」から旧GAMをアンインストールしてください。Setupは登録済みの旧v1を検出すると、安全のため何も削除せず停止します。未登録のPortable／コピーは自動検出できないため、v2移行後に旧v1の実行ファイルを起動しないでください
+- **Setup版v1から移行する場合:** アンインストールは不要です。GAM内の更新通知から進めても、v2のSetupを直接起動しても、同じGAMとして既存のインストール先へ上書き更新します。旧全ユーザー版では必要なUACが表示され、旧ユーザー単位版では不要な昇格を行いません。`%APPDATA%\GmodAddonManager`、GMod設定、Workshopデータ、Steam購読状態はSetupから削除・移動しません。未登録のPortable／コピーは自動検出できないため、v2移行後に旧v1の実行ファイルを起動しないでください
 - Setup版はWindowsの「インストールされているアプリ」からアンインストールできます。アンインストールしても、再導入時に引き継げるよう `%APPDATA%\GmodAddonManager` のAsset構成・設定・ログは保持します
-- **旧private v2.x（2.0.0～2.2.0）を導入済みのテスター:** 今回はそれらを `v2.0.0` へ統合してReleaseを再作成するため、同一versionまたはdowngradeとなり自動更新では差替えを検出できません。Setup版は先にWindowsの「インストールされているアプリ」から旧GAMをアンインストールし、新しいReleaseから取得したSetupで再導入してください。Portable版はGAMを終了して新ZIPを展開し、旧Portableフォルダーを手動で置き換えてください。どちらも `%APPDATA%\GmodAddonManager` の構成は保持されます
+- **旧private v2.x（2.0.0～2.2.0）を導入済みのテスター:** 今回はそれらを `v2.0.0` へ統合してReleaseを再作成するため、同一versionまたはdowngradeとなり自動更新では差替えを検出できません。Setup版は新しいReleaseからSetupを手動取得し、旧版をアンインストールせず、そのまま実行して上書きしてください。Portable版はGAMを終了して新ZIPを展開し、旧Portableフォルダーを手動で置き換えてください。どちらも `%APPDATA%\GmodAddonManager` の構成は保持されます
 
 ## データ保存場所
 

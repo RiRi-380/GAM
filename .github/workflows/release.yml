@@ -149,7 +149,7 @@ jobs:
             throw 'Pinned Inno Setup 6.7.1 compiler was not installed.'
           }
 
-      - name: Build per-user installer
+      - name: Build upgrade-compatible installer
         shell: pwsh
         run: |
           $version = $env:TAG_NAME.Substring(1)
@@ -162,6 +162,17 @@ jobs:
           Copy-Item -LiteralPath "dist/GAM-Setup-$version.exe" `
             -Destination 'GAM-Setup.exe' -Force
 
+      - name: Sign legacy v1 update manifest
+        shell: pwsh
+        env:
+          GAM_UPDATE_SIGNING_KEY_B64: ${{ secrets.GAM_UPDATE_SIGNING_KEY_B64 }}
+          GAM_UPDATE_SIGNING_KEY_PEM: ${{ secrets.GAM_UPDATE_SIGNING_KEY_PEM }}
+        run: |
+          ./scripts/sign-update-manifest.ps1 `
+            -Version $env:TAG_NAME `
+            -InstallerPath 'GAM-Setup.exe' `
+            -OutputDirectory '.'
+
       - name: Verify and stage release artifacts
         shell: pwsh
         run: |
@@ -169,10 +180,31 @@ jobs:
           $version = $tag.Substring(1)
           $portablePath = "GAM-Portable-$version.zip"
           $installerPath = "dist/GAM-Setup-$version.exe"
-          foreach ($path in @($portablePath, $installerPath, 'GAM-Setup.exe')) {
+          $manifestPath = "GAM-UpdateManifest-$version.json"
+          $signaturePath = "GAM-UpdateManifest-$version.sig"
+          foreach ($path in @(
+            $portablePath,
+            $installerPath,
+            'GAM-Setup.exe',
+            $manifestPath,
+            $signaturePath)) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "Release artifact is missing: $path"
             }
+          }
+          $versionedInstallerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+          $stableInstallerHash = (Get-FileHash -LiteralPath 'GAM-Setup.exe' -Algorithm SHA256).Hash
+          if ($versionedInstallerHash -ne $stableInstallerHash) {
+            throw 'The stable and versioned installer assets are not byte-identical.'
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $stableInstaller = Get-Item -LiteralPath 'GAM-Setup.exe'
+          if (($manifest.schemaVersion -ne 1) -or
+              ($manifest.version -ne $tag) -or
+              ($manifest.installerAssetName -ne 'GAM-Setup.exe') -or
+              ($manifest.installerSha256 -ne $stableInstallerHash.ToLowerInvariant()) -or
+              ($manifest.installerSize -ne $stableInstaller.Length)) {
+            throw 'The legacy v1 update manifest does not describe the stable installer exactly.'
           }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $portablePath))
@@ -188,7 +220,8 @@ jobs:
             $zip.Dispose()
           }
           New-Item -ItemType Directory -Path release-artifacts -Force | Out-Null
-          Copy-Item -LiteralPath $portablePath, $installerPath, 'GAM-Setup.exe' `
+          Copy-Item -LiteralPath `
+            $portablePath, $installerPath, 'GAM-Setup.exe', $manifestPath, $signaturePath `
             -Destination release-artifacts
           Copy-Item -LiteralPath "docs/releases/$tag.md" `
             -Destination 'release-artifacts/release-notes.md'
@@ -210,8 +243,61 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  publish:
+  upgrade-e2e:
     needs: build
+    runs-on: windows-2022
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout tagged test source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download verified v2 release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: release-artifacts
+
+      - name: Download audited v1 installer fixtures
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Path v1-fixtures | Out-Null
+          gh release download v1.0.0 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'GAM-Setup-1.0.0.exe' `
+            --dir v1-fixtures
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not download the audited v1.0.0 installer fixture.'
+          }
+          gh release download v1.0.26 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'GAM-Setup-1.0.26.exe' `
+            --dir v1-fixtures
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not download the audited v1.0.26 installer fixture.'
+          }
+
+      - name: Test fresh install and v1 in-place upgrades
+        shell: pwsh
+        run: |
+          $version = $env:TAG_NAME.Substring(1)
+          ./scripts/test-v1-to-v2-installer-upgrade.ps1 `
+            -V100SetupPath 'v1-fixtures/GAM-Setup-1.0.0.exe' `
+            -V1026SetupPath 'v1-fixtures/GAM-Setup-1.0.26.exe' `
+            -V2SetupPath "release-artifacts/GAM-Setup-$version.exe" `
+            -Version $version `
+            -WorkRoot (Join-Path $env:RUNNER_TEMP "gam-v1-upgrade-$env:GITHUB_RUN_ID")
+
+  publish:
+    needs: [build, upgrade-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -224,13 +310,15 @@ jobs:
           name: release-${{ github.ref_name }}
           path: release-artifacts
 
-      - name: Create private-repository Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           files: |
             release-artifacts/GAM-Portable-*.zip
             release-artifacts/GAM-Setup-*.exe
             release-artifacts/GAM-Setup.exe
+            release-artifacts/GAM-UpdateManifest-*.json
+            release-artifacts/GAM-UpdateManifest-*.sig
             release-artifacts/SHA256SUMS.txt
           tag_name: ${{ github.ref_name }}
           name: GAM ${{ github.ref_name }}

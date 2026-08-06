@@ -13,9 +13,11 @@ PowerShell（現在のセッションのみ）:
 $env:GAM_UPDATE_REPO = "owner/repo"
 ```
 
-## 2. 非公開リポジトリの場合（必須）
+## 2. 公開配布と非公開検証
 
-GitHub API にアクセスするためのトークンが必要です。
+公開製品はpublicなGitHub Releaseを更新元にします。通常ユーザーはトークン不要で、GAMへGitHubトークンを配布・埋め込みもしません。
+
+リポジトリが非公開の間に開発者が更新確認を検証する場合だけ、GitHub API にアクセスするためのトークンが必要です。
 
 - 環境変数 `GAM_GITHUB_TOKEN` を設定
 
@@ -25,6 +27,7 @@ $env:GAM_GITHUB_TOKEN = "<your-token>"
 ```
 
 **注意**: トークンはログやスクリーンショットに残さないでください。
+この設定は開発者用です。一般ユーザーへ個別トークンの作成を求めないでください。
 
 ## 3. GitHub Enterprise / 独自API URL の場合
 
@@ -55,6 +58,8 @@ Setup版:
 - `.exe`で、ファイル名に `setup` または `installer` を含む
 - 公式名: `GAM-Setup-X.Y.Z.exe`
 - 更新時はSHA-256検証後にSetupを起動し、GAMを終了する
+- 登録済みv1からは、旧版と同じAppId・権限範囲・インストール先を引き継いで上書き更新する
+- v1.0.6～v1.0.26の旧Updaterはv2用の再起動引数を渡さないため、Setupが検証済みv1更新を認識し、正常完了後にv2を起動する
 
 Portable版:
 
@@ -65,6 +70,13 @@ Portable版:
 - GAMはSetupを起動せず、別のインストール版も作成しない。ユーザーがGAMを終了し、ZIPを展開して現在のPortableフォルダーを手動で置き換える
 
 どちらのassetにも、GitHub Releases APIが返す有効な `sha256:` digestが必要です。異なる配布形態のassetしかないRelease、digestがないasset、HTTPS以外のdownload URLは拒否されます。
+
+v1互換用Release資産:
+
+- `GAM-Setup.exe`: v1.0.0を含む旧Updaterが選択できる固定名。version付きSetupとbyte-identicalにする
+- `GAM-UpdateManifest-X.Y.Z.json` / `.sig`: v1.0.3～v1.0.5が要求するRSA-SHA256署名済みmetadata
+- 署名manifestは固定名Setupのversion、サイズ、SHA-256を正確に記述し、v1へ埋め込まれた公開鍵でRelease前に再検証する
+- 署名秘密鍵はGitHub Actionsのsecretだけに置き、Release資産やアプリへ含めない
 
 ## 6. 動作確認手順
 
@@ -78,6 +90,8 @@ Portable版:
 1. 現在より新しい `vX.Y.Z` Releaseに `GAM-Setup-X.Y.Z.exe` と有効なdigestを用意する
 2. 更新を実行し、digest照合後にSetupが起動することを確認する
 3. 更新後のアプリversionと既存の `%APPDATA%\GmodAddonManager` 構成が維持されることを確認する
+4. 代表的な全ユーザー版v1とユーザー単位版v1の両方で、更新通知経由とv2 Setup直起動を確認する
+5. 以前のInstallLocation、uninstall登録のscope、GMod設定、Workshop payload、Steam購読状態が維持され、登録が二重化していないことを確認する
 
 **Portable版の確認**
 
@@ -89,7 +103,8 @@ Portable版:
 ## 7. よくある失敗原因
 
 - リポジトリ名が間違っている（404）
-- 非公開リポジトリでトークン未設定
+- 非公開検証リポジトリで開発者用トークン未設定
+- v1.0.3～v1.0.5向け署名manifestがない、署名鍵が旧v1公開鍵と一致しない
 - Setup版なのにSetup `.exe` がない、またはPortable版なのにPortable `.zip` がない
 - assetのGitHub digestがない、またはダウンロード結果と一致しない
 - 非公式なZIPから `.gam-portable.json` だけが欠落している
@@ -103,4 +118,4 @@ Portable版:
 - 更新元の上書きとトークンはファイルには保存されません（環境変数のみ）。
 - ダウンロードはHTTPSに限定し、GitHub Releases APIのSHA-256 digestと照合します。一致しないSetupは実行せず、一致しないPortable ZIPも表示・適用しません。
 - 同じversion番号のReleaseを差し替えても自動更新では検出されません。既に同versionを導入した検証環境では、Releaseから手動で再取得してください。
-- 今回削除する旧private `v2.0.0`～`v2.2.0` の導入済み環境は、再構成版 `v2.0.0` が同一versionまたはdowngradeになるため、この条件に該当します。Setup版は先にWindowsの「インストールされているアプリ」から旧GAMをアンインストールし、再作成した `v2.0.0` のSetupで再導入してください。Portable版はGAMを終了し、新しいZIPを展開して旧Portableフォルダーを手動で置き換えてください。アンインストールしても `%APPDATA%\GmodAddonManager` の構成は保持されます。
+- 今回削除する旧private `v2.0.0`～`v2.2.0` の導入済み環境は、再構成版 `v2.0.0` が同一versionまたはdowngradeになるため、この条件に該当します。Setup版は再作成した `v2.0.0` のSetupを手動取得し、旧版をアンインストールせずそのまま上書き実行してください。Portable版はGAMを終了し、新しいZIPを展開して旧Portableフォルダーを手動で置き換えてください。どちらも `%APPDATA%\GmodAddonManager` の構成は保持されます。
