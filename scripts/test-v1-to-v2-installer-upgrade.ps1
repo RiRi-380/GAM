@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [Alias('V1AdminSetupPath')]
+    [Alias('V1LegacySetupPath')]
     [ValidateNotNullOrEmpty()]
     [string]$V100SetupPath,
 
@@ -182,6 +182,102 @@ function Get-Registration {
     return Get-ItemProperty -LiteralPath $keyPath
 }
 
+function Move-CurrentUserRegistrationToAllUsers {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ExpectedInstallDirectory
+    )
+
+    $currentRegistration = Get-Registration -Hive HKCU
+    if ($null -eq $currentRegistration) {
+        throw 'Cannot create the all-users compatibility fixture because the current-user registration is missing.'
+    }
+    if ($null -ne (Get-Registration -Hive HKLM)) {
+        throw 'Cannot create the all-users compatibility fixture because an HKLM registration already exists.'
+    }
+    if (-not (Test-PathsEqual `
+            -Left ([string]$currentRegistration.InstallLocation) `
+            -Right $ExpectedInstallDirectory)) {
+        throw "The current-user registration does not belong to the compatibility fixture: $($currentRegistration.InstallLocation)"
+    }
+
+    $currentUserBase = $null
+    $localMachineBase = $null
+    $sourceKey = $null
+    $targetKey = $null
+    $targetCreated = $false
+    try {
+        $currentUserBase = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::CurrentUser,
+            [Microsoft.Win32.RegistryView]::Registry64)
+        $localMachineBase = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            [Microsoft.Win32.RegistryView]::Registry64)
+        $sourceKey = $currentUserBase.OpenSubKey($script:UninstallSubKey, $false)
+        if ($null -eq $sourceKey) {
+            throw 'The current-user uninstall key disappeared while creating the all-users compatibility fixture.'
+        }
+        if ($sourceKey.SubKeyCount -ne 0) {
+            throw 'The current-user uninstall key unexpectedly contains subkeys; refusing to create a partial fixture.'
+        }
+
+        $targetKey = $localMachineBase.CreateSubKey($script:UninstallSubKey, $true)
+        if ($null -eq $targetKey) {
+            throw 'Could not create the all-users uninstall key for the compatibility fixture.'
+        }
+        $targetCreated = $true
+        foreach ($valueName in $sourceKey.GetValueNames()) {
+            $value = $sourceKey.GetValue(
+                $valueName,
+                $null,
+                [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $targetKey.SetValue($valueName, $value, $sourceKey.GetValueKind($valueName))
+        }
+        $targetKey.Flush()
+        $targetKey.Dispose()
+        $targetKey = $null
+        $sourceKey.Dispose()
+        $sourceKey = $null
+
+        $currentUserBase.DeleteSubKey($script:UninstallSubKey, $false)
+    }
+    catch {
+        if ($null -ne $targetKey) {
+            $targetKey.Dispose()
+            $targetKey = $null
+        }
+        if ($targetCreated -and $null -ne $localMachineBase) {
+            $localMachineBase.DeleteSubKeyTree($script:UninstallSubKey, $false)
+        }
+        throw
+    }
+    finally {
+        if ($null -ne $targetKey) {
+            $targetKey.Dispose()
+        }
+        if ($null -ne $sourceKey) {
+            $sourceKey.Dispose()
+        }
+        if ($null -ne $localMachineBase) {
+            $localMachineBase.Dispose()
+        }
+        if ($null -ne $currentUserBase) {
+            $currentUserBase.Dispose()
+        }
+    }
+
+    if ($null -ne (Get-Registration -Hive HKCU)) {
+        throw 'The current-user registration still exists after creating the all-users compatibility fixture.'
+    }
+    $allUsersRegistration = Get-Registration -Hive HKLM
+    if ($null -eq $allUsersRegistration -or
+        -not (Test-PathsEqual `
+            -Left ([string]$allUsersRegistration.InstallLocation) `
+            -Right $ExpectedInstallDirectory)) {
+        throw 'The all-users compatibility registration was not created correctly.'
+    }
+}
+
 function Assert-NoRegistration {
     $present = @(
         foreach ($hive in @('HKLM', 'HKCU')) {
@@ -211,11 +307,15 @@ function Assert-Registration {
 
     $otherHive = if ($ExpectedHive -eq 'HKLM') { 'HKCU' } else { 'HKLM' }
     $registration = Get-Registration -Hive $ExpectedHive
+    $otherRegistration = Get-Registration -Hive $otherHive
     if ($null -eq $registration) {
+        if ($null -ne $otherRegistration) {
+            throw "Expected a GAM uninstall registration in $ExpectedHive, but it exists in $otherHive at '$($otherRegistration.InstallLocation)' with version '$($otherRegistration.DisplayVersion)'."
+        }
         throw "Expected a GAM uninstall registration in $ExpectedHive, but none exists."
     }
 
-    if ($null -ne (Get-Registration -Hive $otherHive)) {
+    if ($null -ne $otherRegistration) {
         throw "GAM is registered in both $ExpectedHive and $otherHive; exactly one registration is required."
     }
 
@@ -693,10 +793,12 @@ if (Test-Path -LiteralPath $appDataDirectory) {
     throw "GAM AppData already exists. Run this test only in a fresh Windows runner: $appDataDirectory"
 }
 
-$adminInstallDirectory = Join-Path $workRootPath 'admin install'
+$v100InstallDirectory = Join-Path $workRootPath 'v1.0.0 current-user install'
+$adminInstallDirectory = Join-Path $workRootPath 'legacy all-users install'
 $perUserInstallDirectory = Join-Path $workRootPath 'per-user install'
 $cleanInstallDirectory = Join-Path $workRootPath 'clean install'
 $ownedInstallDirectories = @(
+    $v100InstallDirectory,
     $adminInstallDirectory,
     $perUserInstallDirectory,
     $cleanInstallDirectory
@@ -707,6 +809,7 @@ $gmodCfgDirectory = Join-Path $gmodDirectory 'garrysmod\cfg'
 $gmodAddonsDirectory = Join-Path $gmodDirectory 'garrysmod\addons'
 $workshopDirectory = Join-Path $steamLibrary 'steamapps\workshop\content\4000'
 $appDataSentinel = Join-Path $appDataDirectory 'installer-upgrade-sentinel.bin'
+$v100InstallSentinel = Join-Path $v100InstallDirectory 'user-owned-install-sentinel.bin'
 $adminInstallSentinel = Join-Path $adminInstallDirectory 'user-owned-install-sentinel.bin'
 $updaterSetupPath = Join-Path `
     ([System.IO.Path]::GetTempPath()) `
@@ -756,7 +859,7 @@ try {
         ($settings | ConvertTo-Json -Depth 4),
         $utf8NoBom)
 
-    Write-Host 'Scenario A: v1.0.0 all-users installation -> silent v2 in-place upgrade.'
+    Write-Host 'Scenario A: official v1.0.0 current-user installation -> direct silent v2 in-place upgrade.'
     $null = Invoke-SetupExecutable `
         -FilePath $v100Setup `
         -Arguments @(
@@ -765,21 +868,21 @@ try {
             '/NORESTART',
             '/SP-',
             '/NOICONS',
-            "/DIR=$adminInstallDirectory",
+            "/DIR=$v100InstallDirectory",
             "/LOG=$(Join-Path $workRootPath 'v1.0.0-install.log')")
     Assert-Registration `
-        -ExpectedHive HKLM `
-        -ExpectedInstallDirectory $adminInstallDirectory `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $v100InstallDirectory `
         -ExpectedDisplayVersion '1.0.0'
     $knownLegacyPayloadPresent = Test-KnownLegacyPayloadPresent `
-        -InstallDirectory $adminInstallDirectory
+        -InstallDirectory $v100InstallDirectory
     if (-not $knownLegacyPayloadPresent) {
         Write-Host 'The official v1.0.0 fixture does not contain the optional historical Steam payload pair.'
     }
     [System.IO.File]::WriteAllBytes(
-        $adminInstallSentinel,
+        $v100InstallSentinel,
         [System.Text.Encoding]::UTF8.GetBytes('user-owned install sentinel'))
-    $adminInstallSentinelHash = Get-FileSha256 -Path $adminInstallSentinel
+    $v100InstallSentinelHash = Get-FileSha256 -Path $v100InstallSentinel
     $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
     $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
 
@@ -791,24 +894,24 @@ try {
             '/NORESTART',
             '/SP-',
             '/CLOSEAPPLICATIONS',
-            "/LOG=$(Join-Path $workRootPath 'v2-admin-upgrade.log')") `
-        -LaunchInstallDirectory $adminInstallDirectory `
+            "/LOG=$(Join-Path $workRootPath 'v2-v100-current-user-upgrade.log')") `
+        -LaunchInstallDirectory $v100InstallDirectory `
         -RequireLaunch
     Stop-OwnedGamProcesses -OwnedInstallDirectories $ownedInstallDirectories
     Assert-Registration `
-        -ExpectedHive HKLM `
-        -ExpectedInstallDirectory $adminInstallDirectory `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $v100InstallDirectory `
         -ExpectedDisplayVersion $expectedVersion
     if ($knownLegacyPayloadPresent) {
-        Assert-KnownLegacyPayloadRemoved -InstallDirectory $adminInstallDirectory
+        Assert-KnownLegacyPayloadRemoved -InstallDirectory $v100InstallDirectory
     }
-    Assert-Sentinel -Path $adminInstallSentinel -ExpectedSha256 $adminInstallSentinelHash
+    Assert-Sentinel -Path $v100InstallSentinel -ExpectedSha256 $v100InstallSentinelHash
     Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
-    $unknownSteamApi = Join-Path $adminInstallDirectory 'steam_api64.dll'
-    $unknownSteamAppId = Join-Path $adminInstallDirectory 'steam_appid.txt'
+    $unknownSteamApi = Join-Path $v100InstallDirectory 'steam_api64.dll'
+    $unknownSteamAppId = Join-Path $v100InstallDirectory 'steam_appid.txt'
     [System.IO.File]::WriteAllBytes(
         $unknownSteamApi,
         [System.Text.Encoding]::UTF8.GetBytes('not the audited legacy steam_api64 payload'))
@@ -826,19 +929,81 @@ try {
             '/NORESTART',
             '/SP-',
             '/CLOSEAPPLICATIONS',
-            "/LOG=$(Join-Path $workRootPath 'v2-admin-reinstall.log')")
+            "/LOG=$(Join-Path $workRootPath 'v2-v100-current-user-reinstall.log')")
+    Assert-Registration `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $v100InstallDirectory `
+        -ExpectedDisplayVersion $expectedVersion
+    Assert-Sentinel -Path $unknownSteamApi -ExpectedSha256 $unknownSteamApiHash
+    Assert-Sentinel -Path $unknownSteamAppId -ExpectedSha256 $unknownSteamAppIdHash
+    Assert-Sentinel -Path $v100InstallSentinel -ExpectedSha256 $v100InstallSentinelHash
+    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
+    $v100ManagedFiles = Get-ManagedApplicationFiles -InstallDirectory $v100InstallDirectory
+    Remove-Item -LiteralPath $unknownSteamApi, $unknownSteamAppId -Force
+
+    Invoke-OwnedUninstall `
+        -InstallDirectory $v100InstallDirectory `
+        -AllOwnedInstallDirectories $ownedInstallDirectories
+    Assert-NoRegistration
+    Assert-ManagedApplicationRemoved -ManagedFiles $v100ManagedFiles
+    Assert-Sentinel -Path $v100InstallSentinel -ExpectedSha256 $v100InstallSentinelHash
+    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
+
+    # The official v1.0.0 release is current-user. Historical administrative
+    # builds are no longer downloadable, so preserve the exact verified v1
+    # registration values and move only their uninstall key to HKLM64.
+    Write-Host 'Scenario B: verified v1.0.0 registration promoted to all-users -> direct silent v2 in-place upgrade.'
+    $null = Invoke-SetupExecutable `
+        -FilePath $v100Setup `
+        -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            '/NOICONS',
+            "/DIR=$adminInstallDirectory",
+            "/LOG=$(Join-Path $workRootPath 'v1.0.0-admin-fixture-install.log')")
+    Assert-Registration `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $adminInstallDirectory `
+        -ExpectedDisplayVersion '1.0.0'
+    Move-CurrentUserRegistrationToAllUsers -ExpectedInstallDirectory $adminInstallDirectory
+    Assert-Registration `
+        -ExpectedHive HKLM `
+        -ExpectedInstallDirectory $adminInstallDirectory `
+        -ExpectedDisplayVersion '1.0.0'
+    [System.IO.File]::WriteAllBytes(
+        $adminInstallSentinel,
+        [System.Text.Encoding]::UTF8.GetBytes('user-owned all-users install sentinel'))
+    $adminInstallSentinelHash = Get-FileSha256 -Path $adminInstallSentinel
+    $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
+    $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
+
+    $null = Invoke-SetupExecutable `
+        -FilePath $v2Setup `
+        -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            '/CLOSEAPPLICATIONS',
+            "/LOG=$(Join-Path $workRootPath 'v2-legacy-all-users-upgrade.log')") `
+        -LaunchInstallDirectory $adminInstallDirectory `
+        -RequireLaunch
+    Stop-OwnedGamProcesses -OwnedInstallDirectories $ownedInstallDirectories
     Assert-Registration `
         -ExpectedHive HKLM `
         -ExpectedInstallDirectory $adminInstallDirectory `
         -ExpectedDisplayVersion $expectedVersion
-    Assert-Sentinel -Path $unknownSteamApi -ExpectedSha256 $unknownSteamApiHash
-    Assert-Sentinel -Path $unknownSteamAppId -ExpectedSha256 $unknownSteamAppIdHash
     Assert-Sentinel -Path $adminInstallSentinel -ExpectedSha256 $adminInstallSentinelHash
     Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
     $adminManagedFiles = Get-ManagedApplicationFiles -InstallDirectory $adminInstallDirectory
-    Remove-Item -LiteralPath $unknownSteamApi, $unknownSteamAppId -Force
 
     Invoke-OwnedUninstall `
         -InstallDirectory $adminInstallDirectory `
@@ -850,7 +1015,7 @@ try {
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
-    Write-Host 'Scenario B: v1.0.26 per-user installation -> exact legacy updater arguments -> v2.'
+    Write-Host 'Scenario C: v1.0.26 current-user installation -> exact legacy updater arguments -> v2.'
     $null = Invoke-SetupExecutable `
         -FilePath $v1026Setup `
         -Arguments @(
@@ -902,7 +1067,7 @@ try {
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
-    Write-Host 'Scenario C: clean v2 current-user installation.'
+    Write-Host 'Scenario D: clean v2 current-user installation.'
     $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
     $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
     $cleanLaunchObserved = Invoke-SetupExecutable `

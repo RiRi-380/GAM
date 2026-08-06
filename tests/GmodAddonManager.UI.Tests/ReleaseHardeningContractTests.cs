@@ -263,9 +263,11 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("./scripts/test-v1-to-v2-installer-upgrade.ps1", release, StringComparison.Ordinal);
         Assert.Contains("083fb68a4fce57f3f01282f68946c71da48e40a98b77a00bd0886710c704aa79", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("a6f61f971cf96c4c9d3bc79e81bd7a4edebbaa74e51cff42be136e500628a81d", upgradeTest, StringComparison.Ordinal);
-        Assert.Contains("Scenario A: v1.0.0 all-users installation", upgradeTest, StringComparison.Ordinal);
-        Assert.Contains("Scenario B: v1.0.26 per-user installation", upgradeTest, StringComparison.Ordinal);
-        Assert.Contains("Scenario C: clean v2 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario A: official v1.0.0 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario B: verified v1.0.0 registration promoted to all-users", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario C: v1.0.26 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario D: clean v2 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Move-CurrentUserRegistrationToAllUsers", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("'/CLOSEAPPLICATIONS'", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("-RequireLaunch", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("FileVersion does not match", upgradeTest, StringComparison.Ordinal);
@@ -276,15 +278,18 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("Assert-Sentinel -Path $appDataSentinel", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Refusing to recursively remove a reparse-point work root", upgradeTest, StringComparison.Ordinal);
 
-        var scenarioA = upgradeTest.IndexOf("Scenario A: v1.0.0 all-users installation", StringComparison.Ordinal);
-        var scenarioB = upgradeTest.IndexOf("Scenario B: v1.0.26 per-user installation", StringComparison.Ordinal);
-        var scenarioC = upgradeTest.IndexOf("Scenario C: clean v2 current-user installation", StringComparison.Ordinal);
+        var scenarioA = upgradeTest.IndexOf("Scenario A: official v1.0.0 current-user installation", StringComparison.Ordinal);
+        var scenarioB = upgradeTest.IndexOf("Scenario B: verified v1.0.0 registration promoted to all-users", StringComparison.Ordinal);
+        var scenarioC = upgradeTest.IndexOf("Scenario C: v1.0.26 current-user installation", StringComparison.Ordinal);
+        var scenarioD = upgradeTest.IndexOf("Scenario D: clean v2 current-user installation", StringComparison.Ordinal);
+        var v100ManagedFiles = upgradeTest.IndexOf("$v100ManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var adminManagedFiles = upgradeTest.IndexOf("$adminManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var perUserManagedFiles = upgradeTest.IndexOf("$perUserManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var cleanManagedFiles = upgradeTest.IndexOf("$cleanManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
-        Assert.True(scenarioA < adminManagedFiles && adminManagedFiles < scenarioB);
-        Assert.True(scenarioB < perUserManagedFiles && perUserManagedFiles < scenarioC);
-        Assert.True(scenarioC < cleanManagedFiles);
+        Assert.True(scenarioA < v100ManagedFiles && v100ManagedFiles < scenarioB);
+        Assert.True(scenarioB < adminManagedFiles && adminManagedFiles < scenarioC);
+        Assert.True(scenarioC < perUserManagedFiles && perUserManagedFiles < scenarioD);
+        Assert.True(scenarioD < cleanManagedFiles);
     }
 
     [Fact]
