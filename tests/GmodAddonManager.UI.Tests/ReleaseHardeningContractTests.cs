@@ -277,6 +277,7 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("Assert-TreeUnchanged -Label 'Workshop tree'", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Assert-Sentinel -Path $appDataSentinel", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Refusing to recursively remove a reparse-point work root", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Test-InstallDirectoryHasOwnedRegistration", upgradeTest, StringComparison.Ordinal);
 
         var scenarioA = upgradeTest.IndexOf("Scenario A: official v1.0.0 current-user installation", StringComparison.Ordinal);
         var scenarioB = upgradeTest.IndexOf("Scenario B: verified v1.0.0 registration promoted to all-users", StringComparison.Ordinal);
@@ -290,6 +291,19 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.True(scenarioB < adminManagedFiles && adminManagedFiles < scenarioC);
         Assert.True(scenarioC < perUserManagedFiles && perUserManagedFiles < scenarioD);
         Assert.True(scenarioD < cleanManagedFiles);
+
+        var finallyBlock = upgradeTest.LastIndexOf("finally {", StringComparison.Ordinal);
+        Assert.True(finallyBlock >= 0);
+        var fallbackRegistrationGate = upgradeTest.IndexOf(
+            "if (-not (Test-InstallDirectoryHasOwnedRegistration",
+            finallyBlock,
+            StringComparison.Ordinal);
+        var fallbackUninstallerSearch = upgradeTest.IndexOf(
+            "Get-ChildItem -LiteralPath $installDirectory -Filter 'unins*.exe'",
+            finallyBlock,
+            StringComparison.Ordinal);
+        Assert.True(finallyBlock < fallbackRegistrationGate &&
+                    fallbackRegistrationGate < fallbackUninstallerSearch);
     }
 
     [Fact]

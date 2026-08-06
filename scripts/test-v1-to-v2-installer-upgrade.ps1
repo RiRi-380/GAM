@@ -730,6 +730,28 @@ function Assert-Sentinel {
     }
 }
 
+function Test-InstallDirectoryHasOwnedRegistration {
+    param(
+        [Parameter(Mandatory)]
+        [string]$InstallDirectory
+    )
+
+    foreach ($hive in @('HKLM', 'HKCU')) {
+        $registration = Get-Registration -Hive $hive
+        if ($null -eq $registration) {
+            continue
+        }
+
+        $registeredPath = [string]$registration.InstallLocation
+        if (-not [string]::IsNullOrWhiteSpace($registeredPath) -and
+            (Test-PathsEqual -Left $registeredPath -Right $InstallDirectory)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Remove-OwnedRegistrations {
     param(
         [Parameter(Mandatory)]
@@ -1118,18 +1140,30 @@ finally {
 
     foreach ($installDirectory in $ownedInstallDirectories) {
         try {
-            if (Test-Path -LiteralPath $installDirectory -PathType Container) {
-                $uninstaller = @(
-                    Get-ChildItem -LiteralPath $installDirectory -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue |
-                        Sort-Object Name |
-                        Select-Object -First 1
-                )
-                if ($uninstaller.Count -gt 0) {
-                    $null = Invoke-SetupExecutable `
-                        -FilePath $uninstaller[0].FullName `
-                        -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
-                }
+            # Inno may leave unins*.exe visible briefly after a successful
+            # uninstall. Only retry when this exact owned installation is
+            # still registered; file existence alone is not authoritative.
+            if (-not (Test-InstallDirectoryHasOwnedRegistration `
+                    -InstallDirectory $installDirectory)) {
+                continue
             }
+
+            if (-not (Test-Path -LiteralPath $installDirectory -PathType Container)) {
+                throw "A registered owned installation directory is missing: $installDirectory"
+            }
+
+            $uninstaller = @(
+                Get-ChildItem -LiteralPath $installDirectory -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue |
+                    Sort-Object Name |
+                    Select-Object -First 1
+            )
+            if ($uninstaller.Count -eq 0) {
+                throw "A registered owned installation has no uninstaller: $installDirectory"
+            }
+
+            $null = Invoke-SetupExecutable `
+                -FilePath $uninstaller[0].FullName `
+                -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
         }
         catch {
             $cleanupFailures.Add("uninstall cleanup for '$installDirectory': $($_.Exception.Message)")
