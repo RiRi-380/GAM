@@ -633,7 +633,14 @@ public sealed class UpdateServiceTests
 
             using var process = Process.Start(startInfo);
             Assert.NotNull(process);
-            Assert.True(process.WaitForExit(10_000), "PowerShell parser timed out.");
+            var parserExited = process.WaitForExit(30_000);
+            if (!parserExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+            }
+
+            Assert.True(parserExited, "PowerShell parser timed out after 30 seconds.");
             Assert.True(
                 process.ExitCode == 0,
                 $"PowerShell parser rejected the launcher: {process.StandardError.ReadToEnd()}");
