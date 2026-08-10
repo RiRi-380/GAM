@@ -20,6 +20,7 @@ public partial class AssetSelectionDialog : Window, IDisposable
     private string? selectedAssetId;
     private AssetTargetPickerViewModel? pickerViewModel;
     private readonly Func<string, string?, Task<AssetItemViewModel?>>? createAssetAsync;
+    private readonly Func<string, string?>? nameValidator;
     private bool disposed;
 
     public AssetSelectionDialog()
@@ -48,6 +49,9 @@ public partial class AssetSelectionDialog : Window, IDisposable
         DataContext = pickerViewModel;
 
         this.createAssetAsync = createAssetAsync;
+        nameValidator = candidateName => addonManager.AssetNameExists(candidateName)
+            ? L.Format("Error.AssetNameAlreadyExists", candidateName)
+            : null;
         CreateAssetButton.IsVisible = createAssetAsync != null;
     }
 
@@ -174,7 +178,14 @@ public partial class AssetSelectionDialog : Window, IDisposable
                 return;
             }
 
-            var dialog = new SimpleAssetCreateDialog();
+            CreateAssetErrorText.Text = string.Empty;
+            CreateAssetErrorText.IsVisible = false;
+            var dialog = new SimpleAssetCreateDialog(
+                allowSmartAssets: false,
+                allowAssetGroups: false,
+                eligibleGroupAssets: null,
+                eligibleChildGroups: null,
+                nameValidator);
             var name = await dialog.ShowDialog<string?>(this);
             if (disposed ||
                 pickerViewModel == null ||
@@ -204,6 +215,11 @@ public partial class AssetSelectionDialog : Window, IDisposable
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("AssetSelectionDialog.OnCreateAssetClick", ex);
+            if (!disposed)
+            {
+                CreateAssetErrorText.Text = L.Get("Error.AssetCreateFailedGeneric");
+                CreateAssetErrorText.IsVisible = true;
+            }
         }
     }
 

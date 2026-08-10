@@ -486,8 +486,8 @@
                                                 IsEnabled="{Binding CanShowDetails}"
                                                 Width="24" Height="24"
                                                 Padding="4"
-                                                ToolTip.Tip="{loc:Localize AssetList.DetailsTooltip}"
-                                                AutomationProperties.Name="{loc:Localize AssetList.DetailsTooltip}">
+                                                ToolTip.Tip="{Binding DetailsTooltip}"
+                                                AutomationProperties.Name="{Binding DetailsTooltip}">
                                             <PathIcon Data="{StaticResource InfoIcon}" Width="12" Height="12"/>
                                         </Button>
                                         <ToggleButton IsChecked="{Binding IsFavorite, Mode=OneWay}"

@@ -37,7 +37,7 @@ public sealed class AccessibilityContractTests
         var xaml = ReadUiFile("Views", "AssetListView.axaml");
 
         Assert.Contains(
-            "AutomationProperties.Name=\"{loc:Localize AssetList.DetailsTooltip}\"",
+            "AutomationProperties.Name=\"{Binding DetailsTooltip}\"",
             xaml,
             StringComparison.Ordinal);
         Assert.Contains(

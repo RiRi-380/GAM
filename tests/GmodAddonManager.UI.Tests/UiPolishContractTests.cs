@@ -113,7 +113,7 @@ public sealed class UiPolishContractTests
                 "{Binding ShowDetailsCommand}");
 
         Assert.Equal(
-            "{loc:Localize AssetList.DetailsTooltip}",
+            "{Binding DetailsTooltip}",
             (string?)detailsButton.Attribute("ToolTip.Tip"));
         AssertEllipsisAndTooltip(assetList, "{Binding Name}");
         AssertEllipsisAndTooltip(

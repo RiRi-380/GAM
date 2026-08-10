@@ -46,14 +46,15 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         PendingChangeManager pendingChangeManager,
         GmodProcessWatcher processWatcher,
         AppSettings? initialSettings = null,
-        Action<bool>? saveGmodDisabledCollapsePreference = null)
+        Action<bool>? saveGmodDisabledCollapsePreference = null,
+        IDialogService? dialogService = null)
     {
         this.addonManager = addonManager;
         this.pendingChangeManager = pendingChangeManager;
         this.processWatcher = processWatcher;
         this.saveGmodDisabledCollapsePreference =
             saveGmodDisabledCollapsePreference ?? SaveGmodDisabledCollapsePreference;
-        dialogService = new DialogService();
+        this.dialogService = dialogService ?? new DialogService();
         assets = new ObservableCollection<AssetItemViewModel>();
         entries = new ObservableCollection<AssetListEntryViewModel>();
 
@@ -603,14 +604,10 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             var trimmedName = result.Trim();
             if (dialog.SelectedCreationTarget == AssetCreationTarget.AssetGroup)
             {
-                var createdGroup = await addonManager.CreateAssetGroupAsync(
+                await CreateAssetGroupAndConfirmNavigationAsync(
                     trimmedName,
-                    currentGroupId,
                     dialog.SelectedGroupMemberAssetIds,
                     dialog.SelectedGroupMemberGroupIds);
-                currentGroupId = createdGroup.Id;
-                SelectedAsset = null;
-                LoadAssets();
                 return;
             }
 
@@ -642,6 +639,45 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 L.Get("Error.Title"),
                 L.Get("Error.AssetCreateFailedGeneric"));
         }
+    }
+
+    internal async Task<AssetGroup> CreateAssetGroupAndConfirmNavigationAsync(
+        string name,
+        IReadOnlyCollection<string> memberAssetIds,
+        IReadOnlyCollection<string> childGroupIds)
+    {
+        var parentGroupId = currentGroupId;
+        var createdGroup = await addonManager.CreateAssetGroupAsync(
+            name,
+            parentGroupId,
+            memberAssetIds,
+            childGroupIds);
+
+        // Creation changes the current container's contents, but it must not
+        // silently navigate away from the user's current context.
+        LoadAssets();
+        bool shouldOpen;
+        try
+        {
+            shouldOpen = await dialogService.ShowConfirmAsync(
+                L.Get("Success.Title"),
+                L.Format("Confirm.OpenCreatedGroup", createdGroup.Name));
+        }
+        catch (Exception ex)
+        {
+            // The Group is already committed. A prompt failure must not be
+            // reported as a creation failure or trigger a duplicate retry.
+            SafeFileLogger.TryLogException(
+                "AssetListViewModel.ConfirmOpenCreatedGroup",
+                ex);
+            return createdGroup;
+        }
+        if (shouldOpen)
+        {
+            NavigateToGroup(createdGroup.Id);
+        }
+
+        return createdGroup;
     }
 
     private async Task ImportGamAssetAsync()

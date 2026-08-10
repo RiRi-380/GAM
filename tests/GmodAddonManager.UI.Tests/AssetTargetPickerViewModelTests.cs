@@ -409,6 +409,120 @@ public sealed class AssetTargetPickerViewModelTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task DialogCreateActionRejectsDuplicateAssetNameWithVisibleFeedback()
+    {
+        using var manager = await CreateManagerAsync();
+        using var processWatcher = new GmodProcessWatcher();
+        var pendingChangeManager = new PendingChangeManager(
+            manager,
+            Path.Combine(rootPath, "pending-dialog-duplicate"));
+        await manager.CreateAssetAsync("Existing Target");
+        manager.GetConfiguration().AssetGroups.Add(new AssetGroup("Existing Group")
+        {
+            Id = "existing-group-name-collision"
+        });
+        using var leftPane = new AssetListViewModel(
+            manager,
+            pendingChangeManager,
+            processWatcher,
+            new AppSettings());
+        leftPane.LoadAssets();
+
+        var callbackCount = 0;
+        using var dialog = new AssetSelectionDialog(
+            manager,
+            leftPane.Assets.Where(asset => !asset.IsSystem),
+            (_, _) =>
+            {
+                callbackCount++;
+                return Task.FromResult<AssetItemViewModel?>(null);
+            });
+        dialog.Show();
+
+        try
+        {
+            var createAsset = Assert.IsType<Button>(
+                dialog.FindControl<Button>("CreateAssetButton"));
+            createAsset.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var nameDialog = await WaitForOwnedWindowAsync<SimpleAssetCreateDialog>(dialog);
+            var nameBox = Assert.IsType<TextBox>(
+                nameDialog.FindControl<TextBox>("AssetNameTextBox"));
+            var validation = Assert.IsType<TextBlock>(
+                nameDialog.FindControl<TextBlock>("NameValidationText"));
+            var submit = Assert.IsType<Button>(
+                nameDialog.FindControl<Button>("CreateButton"));
+
+            nameBox.Text = "existing target";
+            await WaitUntilAsync(() => validation.IsVisible);
+
+            Assert.Equal(
+                L.Format("Error.AssetNameAlreadyExists", "existing target"),
+                validation.Text);
+            Assert.False(submit.IsEnabled);
+            Assert.Equal(0, callbackCount);
+
+            nameBox.Text = "EXISTING GROUP";
+            await WaitUntilAsync(() =>
+                validation.Text == L.Format(
+                    "Error.AssetNameAlreadyExists",
+                    "EXISTING GROUP"));
+            Assert.True(validation.IsVisible);
+            Assert.False(submit.IsEnabled);
+            Assert.Equal(0, callbackCount);
+        }
+        finally
+        {
+            foreach (var ownedWindow in dialog.OwnedWindows.ToArray())
+            {
+                ownedWindow.Close();
+            }
+            dialog.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task DialogCreateActionShowsUnexpectedCreationFailure()
+    {
+        using var manager = await CreateManagerAsync();
+        using var dialog = new AssetSelectionDialog(
+            manager,
+            Array.Empty<AssetItemViewModel>(),
+            (_, _) => throw new InvalidOperationException("simulated failure"));
+        dialog.Show();
+
+        try
+        {
+            var createAsset = Assert.IsType<Button>(
+                dialog.FindControl<Button>("CreateAssetButton"));
+            var createError = Assert.IsType<TextBlock>(
+                dialog.FindControl<TextBlock>("CreateAssetErrorText"));
+            createAsset.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var nameDialog = await WaitForOwnedWindowAsync<SimpleAssetCreateDialog>(dialog);
+            var nameBox = Assert.IsType<TextBox>(
+                nameDialog.FindControl<TextBox>("AssetNameTextBox"));
+            var submit = Assert.IsType<Button>(
+                nameDialog.FindControl<Button>("CreateButton"));
+            nameBox.Text = "Unique Target";
+            await WaitUntilAsync(() => submit.IsEnabled);
+
+            submit.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await WaitUntilAsync(() => createError.IsVisible);
+
+            Assert.Equal(
+                L.Get("Error.AssetCreateFailedGeneric"),
+                createError.Text);
+        }
+        finally
+        {
+            foreach (var ownedWindow in dialog.OwnedWindows.ToArray())
+            {
+                ownedWindow.Close();
+            }
+            dialog.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task OpeningNestedTransferTargetNavigatesLeftPaneAndSelectsTheAsset()
     {
         using var manager = await CreateManagerAsync();

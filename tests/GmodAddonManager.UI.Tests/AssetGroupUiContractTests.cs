@@ -714,6 +714,77 @@ public sealed class AssetGroupUiContractTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CreatingGroupAsksBeforeLeavingTheCurrentContainer(bool openCreatedGroup)
+    {
+        using var manager = await CreateManagerAsync();
+        var existingAsset = await manager.CreateAssetAsync("Existing Asset");
+        var dialogs = new RecordingDialogService(openCreatedGroup);
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings(),
+            dialogService: dialogs);
+        viewModel.LoadAssets();
+
+        var createdGroup = await viewModel.CreateAssetGroupAndConfirmNavigationAsync(
+            "Created Group",
+            [existingAsset.Id],
+            Array.Empty<string>());
+
+        Assert.Equal(1, dialogs.ConfirmCallCount);
+        Assert.Equal(L.Get("Success.Title"), dialogs.LastConfirmTitle);
+        Assert.Equal(
+            L.Format("Confirm.OpenCreatedGroup", createdGroup.Name),
+            dialogs.LastConfirmMessage);
+        Assert.Equal(createdGroup.Id, manager.GetConfiguration().Assets
+            .Single(asset => asset.Id == existingAsset.Id)
+            .ParentGroupId);
+
+        if (openCreatedGroup)
+        {
+            Assert.Equal(createdGroup.Id, viewModel.CurrentGroupId);
+            Assert.Contains(viewModel.Entries, entry => entry.Id == existingAsset.Id);
+        }
+        else
+        {
+            Assert.Null(viewModel.CurrentGroupId);
+            Assert.Contains(viewModel.Entries, entry => entry.Id == createdGroup.Id);
+            Assert.DoesNotContain(viewModel.Entries, entry => entry.Id == existingAsset.Id);
+        }
+    }
+
+    [Fact]
+    public async Task PromptFailureDoesNotMisreportAnAlreadyCreatedGroup()
+    {
+        using var manager = await CreateManagerAsync();
+        var dialogs = new RecordingDialogService(
+            confirmResult: false,
+            confirmException: new InvalidOperationException("simulated prompt failure"));
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings(),
+            dialogService: dialogs);
+        viewModel.LoadAssets();
+
+        var createdGroup = await viewModel.CreateAssetGroupAndConfirmNavigationAsync(
+            "Committed Group",
+            Array.Empty<string>(),
+            Array.Empty<string>());
+
+        Assert.Equal(1, dialogs.ConfirmCallCount);
+        Assert.Null(viewModel.CurrentGroupId);
+        Assert.Contains(
+            manager.GetConfiguration().AssetGroups,
+            group => group.Id == createdGroup.Id);
+        Assert.Contains(viewModel.Entries, entry => entry.Id == createdGroup.Id);
+    }
+
     [Fact]
     public void AssetAndGroupIconsUseAnImageOnlyCommandAndDialog()
     {
@@ -761,10 +832,16 @@ public sealed class AssetGroupUiContractTests : IDisposable
         Assert.Equal("画像設定", japanese["AssetEdit.Title"]);
         Assert.Equal("画像を変更", japanese["AssetList.Edit"]);
         Assert.Equal("ひとつ上へ戻る", japanese["AssetGroup.BackTooltip"]);
+        Assert.Equal(
+            "詳細・構成を編集",
+            japanese["AssetGroup.DetailsAndStructureTooltip"]);
         Assert.Equal("Asset Group Details", english["AssetGroup.DetailsTitle"]);
         Assert.Equal("Image Settings", english["AssetEdit.Title"]);
         Assert.Equal("Change Image", english["AssetList.Edit"]);
         Assert.Equal("Back one level", english["AssetGroup.BackTooltip"]);
+        Assert.Equal(
+            "View details and edit structure",
+            english["AssetGroup.DetailsAndStructureTooltip"]);
     }
 
     public void Dispose()
@@ -810,6 +887,32 @@ public sealed class AssetGroupUiContractTests : IDisposable
         while (!predicate() && DateTime.UtcNow < deadline)
         {
             await Task.Delay(20);
+        }
+    }
+
+    private sealed class RecordingDialogService(
+        bool confirmResult,
+        Exception? confirmException = null) : IDialogService
+    {
+        public int ConfirmCallCount { get; private set; }
+        public string? LastConfirmTitle { get; private set; }
+        public string? LastConfirmMessage { get; private set; }
+
+        public Task ShowErrorAsync(string title, string message) => Task.CompletedTask;
+        public Task ShowInfoAsync(string title, string message) => Task.CompletedTask;
+        public Task ShowWarningAsync(string title, string message) => Task.CompletedTask;
+        public Task ShowMessageAsync(string title, string message) => Task.CompletedTask;
+
+        public Task<bool> ShowConfirmAsync(string title, string message)
+        {
+            ConfirmCallCount++;
+            LastConfirmTitle = title;
+            LastConfirmMessage = message;
+            if (confirmException != null)
+            {
+                return Task.FromException<bool>(confirmException);
+            }
+            return Task.FromResult(confirmResult);
         }
     }
 

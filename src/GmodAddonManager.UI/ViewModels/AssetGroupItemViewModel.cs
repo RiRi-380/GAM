@@ -76,6 +76,7 @@ public sealed class AssetGroupItemViewModel : ViewModelBase, IDisposable
         DirectGroupCount,
         RecursiveAddonCount);
     public string GroupBadgeTooltip => L.Get("AssetGroup.BadgeTooltip");
+    public string DetailsTooltip => L.Get("AssetGroup.DetailsAndStructureTooltip");
     public bool IsSmart => false;
     public string SmartBadgeText => string.Empty;
     public string SmartRuleText => string.Empty;
@@ -503,6 +504,7 @@ public sealed class AssetGroupItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(AddonCountDisplay));
         this.RaisePropertyChanged(nameof(RecursiveAddonSizeDisplay));
         this.RaisePropertyChanged(nameof(GroupBadgeTooltip));
+        this.RaisePropertyChanged(nameof(DetailsTooltip));
         this.RaisePropertyChanged(nameof(FavoriteButtonText));
         this.RaisePropertyChanged(nameof(MixedStateText));
         this.RaisePropertyChanged(nameof(EnabledStateLabel));

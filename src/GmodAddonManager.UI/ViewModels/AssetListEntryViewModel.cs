@@ -78,6 +78,7 @@ public sealed class AssetListEntryViewModel : ViewModelBase, IDisposable
     public bool IsMixedState => group?.IsMixedState ?? false;
     public string MixedStateText => group?.MixedStateText ?? string.Empty;
     public string GroupBadgeTooltip => group?.GroupBadgeTooltip ?? string.Empty;
+    public string DetailsTooltip => asset?.DetailsTooltip ?? group!.DetailsTooltip;
     public string SmartBadgeText => asset?.SmartBadgeText ?? string.Empty;
     public string SmartRuleText => asset?.SmartRuleText ?? string.Empty;
     public int StateColumnSpan => asset?.StateColumnSpan ?? 1;

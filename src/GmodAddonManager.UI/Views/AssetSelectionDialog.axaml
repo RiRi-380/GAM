@@ -302,6 +302,13 @@
                     Padding="12,4"
                     Click="OnCreateAssetClick"
                     IsVisible="False"/>
+            <TextBlock x:Name="CreateAssetErrorText"
+                       Grid.Column="1"
+                       Foreground="#EF6C6C"
+                       FontSize="11"
+                       TextWrapping="Wrap"
+                       VerticalAlignment="Center"
+                       IsVisible="False"/>
             <Button Name="CancelButton"
                     Grid.Column="2"
                     Content="{loc:Localize Dialog.Cancel}"

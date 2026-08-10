@@ -224,6 +224,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(DisabledStateTooltip));
             this.RaisePropertyChanged(nameof(ExcludedStateTooltip));
             this.RaisePropertyChanged(nameof(FavoriteButtonText));
+            this.RaisePropertyChanged(nameof(DetailsTooltip));
             this.RaisePropertyChanged(nameof(SmartBadgeText));
             this.RaisePropertyChanged(nameof(SmartRuleText));
             this.RaisePropertyChanged(nameof(SmartAutomationStatusText));
@@ -332,6 +333,8 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
 
 
     public string DisabledAddonCountDisplay => L.Format("AssetList.DisabledCount", AddonCount);
+
+    public string DetailsTooltip => L.Get("AssetList.DetailsTooltip");
 
 
 
