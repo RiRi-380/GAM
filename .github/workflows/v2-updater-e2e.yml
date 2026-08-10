@@ -12,7 +12,7 @@ on:
         description: Public latest target version
         required: true
         type: string
-        default: '2.0.3'
+        default: '2.0.4'
 
 permissions:
   contents: read
