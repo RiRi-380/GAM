@@ -160,15 +160,25 @@ public partial class SimpleAssetCreateDialog : Window
 
     private void OnCreationTargetChanged(object? sender, RoutedEventArgs e)
     {
-        if (!allowAssetGroups && GroupTargetRadio.IsChecked == true)
+        if (sender == GroupTargetRadio)
         {
-            AssetTargetRadio.IsChecked = true;
+            if (!allowAssetGroups)
+            {
+                AssetTargetRadio.IsChecked = true;
+                return;
+            }
+
+            SelectedCreationTarget = AssetCreationTarget.AssetGroup;
+        }
+        else if (sender == AssetTargetRadio)
+        {
+            SelectedCreationTarget = AssetCreationTarget.Asset;
+        }
+        else
+        {
             return;
         }
 
-        SelectedCreationTarget = GroupTargetRadio.IsChecked == true
-            ? AssetCreationTarget.AssetGroup
-            : AssetCreationTarget.Asset;
         SelectedMembershipRule = null;
         UpdateTargetPanels();
         UpdateCreateButtonState();

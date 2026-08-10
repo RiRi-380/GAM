@@ -489,6 +489,61 @@ public sealed class AssetGroupUiContractTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task CreateDialogCanSwitchFromGroupBackToAsset()
+    {
+        var dialog = new Views.SimpleAssetCreateDialog(
+            allowSmartAssets: true,
+            allowAssetGroups: true,
+            eligibleGroupAssets: Array.Empty<Asset>(),
+            eligibleChildGroups: Array.Empty<AssetGroup>(),
+            nameValidator: null);
+        dialog.Show();
+        try
+        {
+            await Dispatcher.UIThread.InvokeAsync(static () => { });
+            var assetTarget = Assert.IsType<RadioButton>(
+                dialog.FindControl<RadioButton>("AssetTargetRadio"));
+            var groupTarget = Assert.IsType<RadioButton>(
+                dialog.FindControl<RadioButton>("GroupTargetRadio"));
+            var assetPanel = Assert.IsType<StackPanel>(
+                dialog.FindControl<StackPanel>("AssetModePanel"));
+            var groupPanel = Assert.IsType<StackPanel>(
+                dialog.FindControl<StackPanel>("GroupMemberPanel"));
+            async Task ClickAsync(RadioButton target)
+            {
+                var point = target.TranslatePoint(
+                    new Point(target.Bounds.Width / 2, target.Bounds.Height / 2),
+                    dialog);
+                Assert.NotNull(point);
+                dialog.MouseDown(
+                    point.Value,
+                    MouseButton.Left,
+                    RawInputModifiers.LeftMouseButton);
+                dialog.MouseUp(point.Value, MouseButton.Left, RawInputModifiers.None);
+                await Dispatcher.UIThread.InvokeAsync(static () => { });
+            }
+
+            await ClickAsync(groupTarget);
+            Assert.True(groupTarget.IsChecked);
+            Assert.False(assetTarget.IsChecked);
+            Assert.Equal(Views.AssetCreationTarget.AssetGroup, dialog.SelectedCreationTarget);
+            Assert.False(assetPanel.IsVisible);
+            Assert.True(groupPanel.IsVisible);
+
+            await ClickAsync(assetTarget);
+            Assert.True(assetTarget.IsChecked);
+            Assert.False(groupTarget.IsChecked);
+            Assert.Equal(Views.AssetCreationTarget.Asset, dialog.SelectedCreationTarget);
+            Assert.True(assetPanel.IsVisible);
+            Assert.False(groupPanel.IsVisible);
+        }
+        finally
+        {
+            dialog.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task StructureEditorSwitchesPagesInPlaceAndOnlyApplyChangesPendingMembers()
     {
         using var manager = await CreateManagerAsync();
