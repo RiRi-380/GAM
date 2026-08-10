@@ -117,7 +117,11 @@ public sealed partial class ReleaseHardeningContractTests
             Assert.Contains("release", script, StringComparison.OrdinalIgnoreCase);
         }
 
-        Assert.Contains("Invoke-Git tag -a", powerShell, StringComparison.Ordinal);
+        Assert.Contains(
+            "Invoke-Git -Arguments @(\"tag\", \"-a\", $Version, \"-m\", \"GAM $Version\")",
+            powerShell,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-Git tag -a", powerShell, StringComparison.Ordinal);
         Assert.Contains("tag -a \"$VERSION\"", shell, StringComparison.Ordinal);
         Assert.Contains("$repoRoot", powerShell, StringComparison.Ordinal);
         Assert.Contains("$PSScriptRoot", powerShell, StringComparison.Ordinal);

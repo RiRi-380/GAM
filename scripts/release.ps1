@@ -42,7 +42,7 @@ if ($LASTEXITCODE -ne 0 -or $status) {
     throw "The worktree must be clean. This script will not stage or commit changes."
 }
 
-Invoke-Git fetch origin main
+Invoke-Git -Arguments @("fetch", "origin", "main")
 $head = (& git -C $repoRoot rev-parse HEAD).Trim()
 $originMain = (& git -C $repoRoot rev-parse origin/main).Trim()
 if ($head -ne $originMain) {
@@ -81,9 +81,9 @@ if (-not $Push) {
     exit 0
 }
 
-Invoke-Git tag -a $Version -m "GAM $Version"
+Invoke-Git -Arguments @("tag", "-a", $Version, "-m", "GAM $Version")
 try {
-    Invoke-Git push origin "refs/tags/$Version"
+    Invoke-Git -Arguments @("push", "origin", "refs/tags/$Version")
 } catch {
     Write-Warning "The annotated local tag remains at $Version because the push failed."
     throw
