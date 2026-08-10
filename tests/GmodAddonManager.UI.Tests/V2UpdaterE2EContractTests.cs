@@ -47,7 +47,7 @@ public sealed class V2UpdaterE2EContractTests
         Assert.Contains("fromVersion:", workflow, StringComparison.Ordinal);
         Assert.Contains("default: '2.0.0'", workflow, StringComparison.Ordinal);
         Assert.Contains("toVersion:", workflow, StringComparison.Ordinal);
-        Assert.Contains("default: '2.0.2'", workflow, StringComparison.Ordinal);
+        Assert.Contains("default: '2.0.3'", workflow, StringComparison.Ordinal);
         Assert.Contains("runs-on: windows-2022", workflow, StringComparison.Ordinal);
         Assert.Matches(@"permissions:\s+contents:\s+read", workflow);
         Assert.Contains("persist-credentials: false", workflow, StringComparison.Ordinal);

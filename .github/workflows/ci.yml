@@ -35,7 +35,7 @@ jobs:
         run: dotnet restore GmodAddonManager.sln --locked-mode
 
       - name: Build
-        run: dotnet build GmodAddonManager.sln -c Debug --no-restore -p:TreatWarningsAsErrors=true
+        run: dotnet build GmodAddonManager.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
 
       - name: Verify release notice inventory
         shell: pwsh
@@ -43,8 +43,5 @@ jobs:
           ./scripts/verify-release-notices.ps1 `
             -ProjectAssetsPath src/GmodAddonManager.UI/obj/project.assets.json
 
-      - name: Test Core
-        run: dotnet test tests/GmodAddonManager.Core.Tests/GmodAddonManager.Core.Tests.csproj -c Debug --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"
-
-      - name: Test UI
-        run: dotnet test tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj -c Debug --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"
+      - name: Test release candidate
+        run: dotnet test GmodAddonManager.sln -c Release --no-restore -p:TreatWarningsAsErrors=true --logger "console;verbosity=minimal"

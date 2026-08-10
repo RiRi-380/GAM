@@ -3,10 +3,10 @@
     <Authors>Gmod Addon Manager Team</Authors>
     <Product>Gmod Addon Manager</Product>
     <Copyright>Copyright © 2025-2026</Copyright>
-    <Version>2.0.2</Version>
-    <FileVersion>2.0.2.0</FileVersion>
-    <AssemblyVersion>2.0.2.0</AssemblyVersion>
-    <InformationalVersion>v2.0.2</InformationalVersion>
+    <Version>2.0.3</Version>
+    <FileVersion>2.0.3.0</FileVersion>
+    <AssemblyVersion>2.0.3.0</AssemblyVersion>
+    <InformationalVersion>v2.0.3</InformationalVersion>
     <NeutralLanguage>en-US</NeutralLanguage>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisMode>Recommended</AnalysisMode>

@@ -61,7 +61,11 @@ public sealed partial class ReleaseHardeningContractTests
         var release = ReadRepositoryFile(".github", "workflows", "release.yml");
         var localBuild = ReadRepositoryFile("build-release.ps1");
 
-        Assert.Equal(3, Regex.Count(ci, @"dotnet (?:build|test)[^\r\n]*-p:TreatWarningsAsErrors=true"));
+        Assert.Equal(2, Regex.Count(ci, @"dotnet (?:build|test)[^\r\n]*-p:TreatWarningsAsErrors=true"));
+        Assert.Contains(
+            "dotnet test GmodAddonManager.sln -c Release --no-restore -p:TreatWarningsAsErrors=true",
+            ci,
+            StringComparison.Ordinal);
         Assert.Contains(
             "dotnet test GmodAddonManager.sln -c Release --no-restore -p:TreatWarningsAsErrors=true",
             release,
@@ -323,14 +327,14 @@ public sealed partial class ReleaseHardeningContractTests
     }
 
     [Fact]
-    public void ReleaseBaselineIsVersionTwoPointZeroPointTwoAndDocumented()
+    public void ReleaseBaselineIsVersionTwoPointZeroPointThreeAndDocumented()
     {
         var props = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));
         var version = props.Descendants("Version").Single().Value;
 
-        Assert.Equal("2.0.2", version);
+        Assert.Equal("2.0.3", version);
         Assert.True(File.Exists(Path.Combine(RepositoryRoot, "SECURITY.md")));
-        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.2.md")));
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.3.md")));
     }
 
     private static string NormalizeNewlines(string value) =>

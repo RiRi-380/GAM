@@ -175,18 +175,23 @@ public sealed class ResponsiveLayoutContractTests
                 window.FindControl<AssetListView>("AssetPaneContent"));
             var toggle = Assert.IsType<Button>(
                 window.FindControl<Button>("AssetPaneToggleButton"));
+            var closeAnimationStateObserved = false;
+            splitView.PaneClosed += (_, _) =>
+            {
+                closeAnimationStateObserved =
+                    paneContent.IsVisible &&
+                    !paneContent.IsEnabled &&
+                    !paneContent.IsHitTestVisible &&
+                    KeyboardNavigation.GetTabNavigation(paneContent) ==
+                        KeyboardNavigationMode.None;
+            };
 
             window.Width = 643;
             await Dispatcher.UIThread.InvokeAsync(static () => { });
 
             Assert.Equal(SplitViewDisplayMode.Overlay, splitView.DisplayMode);
             Assert.False(splitView.IsPaneOpen);
-            Assert.True(paneContent.IsVisible);
-            Assert.False(paneContent.IsEnabled);
-            Assert.False(paneContent.IsHitTestVisible);
-            Assert.Equal(
-                KeyboardNavigationMode.None,
-                KeyboardNavigation.GetTabNavigation(paneContent));
+            Assert.True(closeAnimationStateObserved);
 
             await WaitForPaneVisibilityDelayAsync();
 

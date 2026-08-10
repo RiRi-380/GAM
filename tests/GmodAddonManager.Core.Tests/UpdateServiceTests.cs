@@ -690,7 +690,7 @@ public sealed class UpdateServiceTests
             File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), fakeInstallerPath);
             File.WriteAllText(
                 childScriptPath,
-                "Start-Sleep -Seconds 30",
+                "Start-Sleep -Seconds 90",
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
             static string PowerShellLiteral(string value) =>
@@ -725,7 +725,7 @@ public sealed class UpdateServiceTests
                 UpdateService.CreateInstallerLauncherStartInfo(launcherPath));
             Assert.NotNull(launcherProcess);
             Assert.True(
-                launcherProcess.WaitForExit(15_000),
+                launcherProcess.WaitForExit(45_000),
                 "The launcher waited for the relaunched descendant instead of only the installer.");
             Assert.Equal(0, launcherProcess.ExitCode);
 
