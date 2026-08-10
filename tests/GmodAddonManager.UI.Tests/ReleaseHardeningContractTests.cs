@@ -319,14 +319,14 @@ public sealed partial class ReleaseHardeningContractTests
     }
 
     [Fact]
-    public void ReleaseBaselineIsVersionTwoPointZeroPointZeroAndDocumented()
+    public void ReleaseBaselineIsVersionTwoPointZeroPointOneAndDocumented()
     {
         var props = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));
         var version = props.Descendants("Version").Single().Value;
 
-        Assert.Equal("2.0.0", version);
+        Assert.Equal("2.0.1", version);
         Assert.True(File.Exists(Path.Combine(RepositoryRoot, "SECURITY.md")));
-        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.0.md")));
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.1.md")));
     }
 
     private static string NormalizeNewlines(string value) =>
