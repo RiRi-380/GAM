@@ -6,7 +6,7 @@ param(
     [string]$FromVersion = '2.0.0',
 
     [ValidateNotNullOrEmpty()]
-    [string]$ToVersion = '2.0.1',
+    [string]$ToVersion = '2.0.2',
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
