@@ -168,6 +168,45 @@ public sealed class AppSettingsStoreTests : IDisposable
         Assert.True(AppSettings.LoadFrom(collapsedPath).CollapseGmodDisabledAddons);
     }
 
+    [Fact]
+    public void SharePreferences_AreOffForNewAndLegacySettings()
+    {
+        var newSettings = new AppSettings();
+        Assert.False(newSettings.IncludeImagesInShare);
+        Assert.False(newSettings.IncludeMemosInShare);
+
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "legacy-share-settings.json");
+        File.WriteAllText(path, "{ \"Language\": \"ja-JP\" }");
+
+        var loaded = AppSettings.LoadFrom(path);
+
+        Assert.False(loaded.IncludeImagesInShare);
+        Assert.False(loaded.IncludeMemosInShare);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void SharePreferences_PersistEveryCombination(bool includeImages, bool includeMemos)
+    {
+        var path = Path.Combine(
+            root,
+            $"share-{includeImages}-{includeMemos}.json");
+        new AppSettings
+        {
+            IncludeImagesInShare = includeImages,
+            IncludeMemosInShare = includeMemos
+        }.SaveTo(path);
+
+        var loaded = AppSettings.LoadFrom(path);
+
+        Assert.Equal(includeImages, loaded.IncludeImagesInShare);
+        Assert.Equal(includeMemos, loaded.IncludeMemosInShare);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))

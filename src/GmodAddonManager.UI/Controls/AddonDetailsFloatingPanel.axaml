@@ -9,7 +9,7 @@
              x:Class="GmodAddonManager.UI.Controls.AddonDetailsFloatingPanel"
              x:DataType="vm:MainWindowViewModel">
     
-    <Grid>
+    <Grid PointerWheelChanged="OnPanelPointerWheelChanged">
         <!-- 半透明の背景オーバーレイ -->
         <Border Name="BackgroundOverlay"
                 Background="#80000000"
@@ -64,7 +64,8 @@
                 </Border>
                 
                 <!-- コンテンツ -->
-                <controls:AddonDetailsControl Grid.Row="1"
+                <controls:AddonDetailsControl Name="DetailsControl"
+                                            Grid.Row="1"
                                             DataContext="{Binding AddonGridViewModel}"/>
             </Grid>
         </Border>

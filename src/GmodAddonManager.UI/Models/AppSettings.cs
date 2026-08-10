@@ -23,6 +23,16 @@ namespace GmodAddonManager.UI.Models
         /// Asset remains active even while its card is hidden from the list.
         /// </summary>
         public bool CollapseGmodDisabledAddons { get; set; } = false;
+        /// <summary>
+        /// Remembers whether images should be embedded in the next .gam share.
+        /// Legacy settings intentionally default to false.
+        /// </summary>
+        public bool IncludeImagesInShare { get; set; } = false;
+        /// <summary>
+        /// Remembers whether memos should be embedded in the next .gam share.
+        /// Legacy settings intentionally default to false.
+        /// </summary>
+        public bool IncludeMemosInShare { get; set; } = false;
         public string? CustomGmodInstallPath { get; set; }
         public string? CustomWorkshopPath { get; set; }
         public string? ConfirmedGmodInstallPath { get; set; }

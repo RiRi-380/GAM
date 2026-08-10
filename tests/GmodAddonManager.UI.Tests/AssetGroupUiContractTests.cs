@@ -245,6 +245,81 @@ public sealed class AssetGroupUiContractTests : IDisposable
     }
 
     [Fact]
+    public async Task SharePreferencesPersistOnChangeAndSurviveCancelAndNextSession()
+    {
+        using var manager = await CreateManagerAsync();
+        manager.GetConfiguration().Assets.Add(new Asset("Share me")
+        {
+            Id = "share-preference-asset"
+        });
+        var savedValues = new List<(bool IncludeImages, bool IncludeMemos)>();
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings
+            {
+                IncludeImagesInShare = true,
+                IncludeMemosInShare = false
+            },
+            saveSharePreferences: (images, memos) => savedValues.Add((images, memos)));
+        viewModel.LoadAssets();
+
+        viewModel.ToggleShareSelection(
+            viewModel.Entries.Single(entry => entry.Id == "share-preference-asset"));
+        Assert.True(viewModel.IncludeImagesInShare);
+        Assert.False(viewModel.IncludeMemosInShare);
+
+        viewModel.IncludeImagesInShare = false;
+        viewModel.IncludeMemosInShare = true;
+
+        Assert.Equal(
+            [(false, false), (false, true)],
+            savedValues);
+
+        viewModel.CancelShareMode();
+        Assert.False(viewModel.IncludeImagesInShare);
+        Assert.True(viewModel.IncludeMemosInShare);
+
+        viewModel.ToggleShareSelection(
+            viewModel.Entries.Single(entry => entry.Id == "share-preference-asset"));
+        Assert.False(viewModel.IncludeImagesInShare);
+        Assert.True(viewModel.IncludeMemosInShare);
+
+        using var restartedViewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings
+            {
+                IncludeImagesInShare = false,
+                IncludeMemosInShare = true
+            },
+            saveSharePreferences: (_, _) => { });
+
+        Assert.False(restartedViewModel.IncludeImagesInShare);
+        Assert.True(restartedViewModel.IncludeMemosInShare);
+    }
+
+    [Fact]
+    public async Task SharePreferenceSaveFailureDoesNotRejectTheUserChoice()
+    {
+        using var manager = await CreateManagerAsync();
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings(),
+            saveSharePreferences: (_, _) =>
+                throw new IOException("simulated settings failure"));
+
+        var exception = Record.Exception(() => viewModel.IncludeImagesInShare = true);
+
+        Assert.Null(exception);
+        Assert.True(viewModel.IncludeImagesInShare);
+    }
+
+    [Fact]
     public async Task EmptyGroupOwnsTheCenterUntilMembershipChanges()
     {
         using var manager = await CreateManagerAsync();

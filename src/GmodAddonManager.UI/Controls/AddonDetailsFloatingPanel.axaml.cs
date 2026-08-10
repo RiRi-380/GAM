@@ -107,6 +107,17 @@ namespace GmodAddonManager.UI.Controls
             }
         }
 
+        private void OnPanelPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+        {
+            // The overlay covers the previous card after a right-click. Route
+            // only wheel gestures which the actual details ScrollViewer (or a
+            // nested scroller) did not already consume, avoiding double scroll.
+            if (_isPanelOpen && !e.Handled && DetailsControl.ScrollFromUnhandledWheel(e.Delta))
+            {
+                e.Handled = true;
+            }
+        }
+
         private void OnCloseButtonClick(object? sender, RoutedEventArgs e)
         {
             if (DataContext is ViewModels.MainWindowViewModel vm)

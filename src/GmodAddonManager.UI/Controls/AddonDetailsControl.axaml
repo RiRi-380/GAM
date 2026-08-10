@@ -20,7 +20,11 @@
                 BorderBrush="Transparent"
                 BorderThickness="0"
                 IsVisible="{Binding SelectedAddon, Converter={x:Static ObjectConverters.IsNotNull}}">
-            <ScrollViewer Padding="15"
+            <ScrollViewer Name="AddonDetailsScrollViewer"
+                         Padding="15"
+                         HorizontalScrollBarVisibility="Disabled"
+                         VerticalScrollBarVisibility="Auto"
+                         AllowAutoHide="False"
                          DataContext="{Binding SelectedAddon}">
                 <StackPanel Spacing="15">
                 

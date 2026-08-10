@@ -24,6 +24,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     private readonly GmodProcessWatcher processWatcher;
     private readonly IDialogService dialogService;
     private readonly Action<bool> saveGmodDisabledCollapsePreference;
+    private readonly Action<bool, bool> saveSharePreferences;
     private IDisposable? selectedAssetSubscription;
     private bool disposed;
     private ObservableCollection<AssetItemViewModel> assets;
@@ -47,26 +48,32 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         GmodProcessWatcher processWatcher,
         AppSettings? initialSettings = null,
         Action<bool>? saveGmodDisabledCollapsePreference = null,
-        IDialogService? dialogService = null)
+        IDialogService? dialogService = null,
+        Action<bool, bool>? saveSharePreferences = null)
     {
         this.addonManager = addonManager;
         this.pendingChangeManager = pendingChangeManager;
         this.processWatcher = processWatcher;
         this.saveGmodDisabledCollapsePreference =
             saveGmodDisabledCollapsePreference ?? SaveGmodDisabledCollapsePreference;
+        this.saveSharePreferences = saveSharePreferences ?? SaveSharePreferences;
         this.dialogService = dialogService ?? new DialogService();
         assets = new ObservableCollection<AssetItemViewModel>();
         entries = new ObservableCollection<AssetListEntryViewModel>();
 
         try
         {
-            isGmodDisabledCollapsed = (initialSettings ?? AppSettings.Load())
-                .CollapseGmodDisabledAddons;
+            var settings = initialSettings ?? AppSettings.Load();
+            isGmodDisabledCollapsed = settings.CollapseGmodDisabledAddons;
+            includeImagesInShare = settings.IncludeImagesInShare;
+            includeMemosInShare = settings.IncludeMemosInShare;
         }
         catch (Exception ex)
         {
-            SafeFileLogger.TryLogException("AssetListViewModel.LoadCollapsePreference", ex);
+            SafeFileLogger.TryLogException("AssetListViewModel.LoadPreferences", ex);
             isGmodDisabledCollapsed = false;
+            includeImagesInShare = false;
+            includeMemosInShare = false;
         }
 
         CreateAssetCommand = ReactiveCommand.CreateFromTask(CreateAssetAsync);
@@ -170,12 +177,30 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public bool IncludeImagesInShare
     {
         get => includeImagesInShare;
-        set => SetAndRaise(ref includeImagesInShare, value);
+        set
+        {
+            if (includeImagesInShare == value)
+            {
+                return;
+            }
+
+            SetAndRaise(ref includeImagesInShare, value);
+            TrySaveSharePreferences();
+        }
     }
     public bool IncludeMemosInShare
     {
         get => includeMemosInShare;
-        set => SetAndRaise(ref includeMemosInShare, value);
+        set
+        {
+            if (includeMemosInShare == value)
+            {
+                return;
+            }
+
+            SetAndRaise(ref includeMemosInShare, value);
+            TrySaveSharePreferences();
+        }
     }
     public bool IsShareExporting
     {
@@ -379,8 +404,6 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         if (!IsShareMode)
         {
             IsShareMode = true;
-            IncludeImagesInShare = false;
-            IncludeMemosInShare = false;
             ShareErrorText = string.Empty;
         }
 
@@ -413,8 +436,6 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         sharedAssetIds.Clear();
         sharedGroupIds.Clear();
         shareSelectionItems.Clear();
-        IncludeImagesInShare = false;
-        IncludeMemosInShare = false;
         ShareErrorText = string.Empty;
         IsShareMode = false;
         foreach (var entry in Entries)
@@ -815,6 +836,26 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     {
         var settings = AppSettings.Load();
         settings.CollapseGmodDisabledAddons = isCollapsed;
+        settings.Save();
+    }
+
+    private void TrySaveSharePreferences()
+    {
+        try
+        {
+            saveSharePreferences(IncludeImagesInShare, IncludeMemosInShare);
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("AssetListViewModel.SaveSharePreferences", ex);
+        }
+    }
+
+    private static void SaveSharePreferences(bool includeImages, bool includeMemos)
+    {
+        var settings = AppSettings.Load();
+        settings.IncludeImagesInShare = includeImages;
+        settings.IncludeMemosInShare = includeMemos;
         settings.Save();
     }
 
