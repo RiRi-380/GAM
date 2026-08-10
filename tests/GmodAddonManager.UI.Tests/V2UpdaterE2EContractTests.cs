@@ -47,7 +47,11 @@ public sealed class V2UpdaterE2EContractTests
         Assert.Contains("fromVersion:", workflow, StringComparison.Ordinal);
         Assert.Contains("default: '2.0.0'", workflow, StringComparison.Ordinal);
         Assert.Contains("toVersion:", workflow, StringComparison.Ordinal);
-        Assert.Contains("default: '2.0.4'", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "description: Public latest target version (must be newer than fromVersion)",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"(?ms)toVersion:\s+.*?default:", workflow);
         Assert.Contains("runs-on: windows-2022", workflow, StringComparison.Ordinal);
         Assert.Matches(@"permissions:\s+contents:\s+read", workflow);
         Assert.Contains("persist-credentials: false", workflow, StringComparison.Ordinal);
@@ -83,12 +87,14 @@ public sealed class V2UpdaterE2EContractTests
             "scripts",
             "test-v2-updater-e2e.ps1"));
 
-        Assert.Contains("$script:ExpectedSourceVersion = '2.0.0'", script, StringComparison.Ordinal);
-        Assert.Contains("$script:ExpectedSourceSetupLength = [int64]39172870", script, StringComparison.Ordinal);
-        Assert.Contains(
-            "2a2f19c41c97f709b6beac27cd8f236b0d3b742f5dc900299669f9569be14b07",
-            script,
-            StringComparison.Ordinal);
+        Assert.Contains("[Parameter(Mandatory)]\n    [string]$ToVersion", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedSourceSetupLength", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedSourceSetupSha256", script, StringComparison.Ordinal);
+        Assert.Contains("releases/tags/$($SourceVersion.Tag)", script, StringComparison.Ordinal);
+        Assert.Contains("$digestPattern = '^sha256:[0-9a-f]{64}$'", script, StringComparison.Ordinal);
+        Assert.Contains("[string]$versioned.digest -cne [string]$stable.digest", script, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedLength $sourceFixture.Length", script, StringComparison.Ordinal);
+        Assert.Contains("-ExpectedSha256 $sourceFixture.Sha256", script, StringComparison.Ordinal);
         Assert.Contains("$env:ImageOS -ne 'win22'", script, StringComparison.Ordinal);
         Assert.Contains("Assert-NoRegistration", script, StringComparison.Ordinal);
         Assert.Contains("A pre-existing GAM process makes this runner unsafe.", script, StringComparison.Ordinal);

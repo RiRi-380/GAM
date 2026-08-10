@@ -9,10 +9,9 @@ on:
         type: string
         default: '2.0.0'
       toVersion:
-        description: Public latest target version
+        description: Public latest target version (must be newer than fromVersion)
         required: true
         type: string
-        default: '2.0.4'
 
 permissions:
   contents: read

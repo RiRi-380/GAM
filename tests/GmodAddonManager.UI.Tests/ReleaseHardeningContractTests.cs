@@ -258,7 +258,7 @@ public sealed partial class ReleaseHardeningContractTests
     }
 
     [Fact]
-    public void ReleaseIsGatedByNativeWindowsV1UpgradeE2E()
+    public void ReleaseIsGatedByNativeWindowsInstallerCompatibilityE2E()
     {
         var release = ReadRepositoryFile(".github", "workflows", "release.yml");
         var upgradeTest = ReadRepositoryFile("scripts", "test-v1-to-v2-installer-upgrade.ps1");
@@ -268,15 +268,21 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("needs: [build, upgrade-e2e]", release, StringComparison.Ordinal);
         Assert.Contains("gh release download v1.0.0", release, StringComparison.Ordinal);
         Assert.Contains("gh release download v1.0.26", release, StringComparison.Ordinal);
+        Assert.Contains("gh release download v2.0.4", release, StringComparison.Ordinal);
+        Assert.Contains("-V204SetupPath 'v2-fixtures/GAM-Setup-2.0.4.exe'", release, StringComparison.Ordinal);
         Assert.Contains("./scripts/test-v1-to-v2-installer-upgrade.ps1", release, StringComparison.Ordinal);
         Assert.Contains("083fb68a4fce57f3f01282f68946c71da48e40a98b77a00bd0886710c704aa79", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("a6f61f971cf96c4c9d3bc79e81bd7a4edebbaa74e51cff42be136e500628a81d", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("$script:ExpectedV204InstallerLength = [int64]39177402", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("b2dadc14d333b08679bd0bc4db40af7a90021252b8c5899526ca5251566f998c", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario A: official v1.0.0 current-user installation", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario B: verified v1.0.0 registration promoted to all-users", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario C: v1.0.26 current-user installation", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario D: clean v2 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("Scenario E: official v2.0.4 current-user installation", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Move-CurrentUserRegistrationToAllUsers", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("'/CLOSEAPPLICATIONS'", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("'/LAUNCHAFTERINSTALL=1'", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("-RequireLaunch", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("FileVersion does not match", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("$script:LaunchStabilityWindow", upgradeTest, StringComparison.Ordinal);
@@ -291,14 +297,17 @@ public sealed partial class ReleaseHardeningContractTests
         var scenarioB = upgradeTest.IndexOf("Scenario B: verified v1.0.0 registration promoted to all-users", StringComparison.Ordinal);
         var scenarioC = upgradeTest.IndexOf("Scenario C: v1.0.26 current-user installation", StringComparison.Ordinal);
         var scenarioD = upgradeTest.IndexOf("Scenario D: clean v2 current-user installation", StringComparison.Ordinal);
+        var scenarioE = upgradeTest.IndexOf("Scenario E: official v2.0.4 current-user installation", StringComparison.Ordinal);
         var v100ManagedFiles = upgradeTest.IndexOf("$v100ManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var adminManagedFiles = upgradeTest.IndexOf("$adminManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var perUserManagedFiles = upgradeTest.IndexOf("$perUserManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         var cleanManagedFiles = upgradeTest.IndexOf("$cleanManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
+        var v204ReplacementManagedFiles = upgradeTest.IndexOf("$v204ReplacementManagedFiles = Get-ManagedApplicationFiles", StringComparison.Ordinal);
         Assert.True(scenarioA < v100ManagedFiles && v100ManagedFiles < scenarioB);
         Assert.True(scenarioB < adminManagedFiles && adminManagedFiles < scenarioC);
         Assert.True(scenarioC < perUserManagedFiles && perUserManagedFiles < scenarioD);
-        Assert.True(scenarioD < cleanManagedFiles);
+        Assert.True(scenarioD < cleanManagedFiles && cleanManagedFiles < scenarioE);
+        Assert.True(scenarioE < v204ReplacementManagedFiles);
 
         var finallyBlock = upgradeTest.LastIndexOf("finally {", StringComparison.Ordinal);
         Assert.True(finallyBlock >= 0);
@@ -319,22 +328,30 @@ public sealed partial class ReleaseHardeningContractTests
     {
         var releaseNotes = ReadRepositoryFile("docs", "releases", "v2.0.0.md");
 
-        Assert.Contains("consolidates the previous private `2.0.0`", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("`2.0.1`, `2.1.0`, and `2.2.0`", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("replaces the previously published `v2.0.0`, `v2.0.1`, `v2.0.3`,", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("and `v2.0.4` packages", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("same version or a SemVer downgrade", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("this rebuilt package manually once", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("this replacement Setup manually once", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("leaves the configuration", releaseNotes, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ReleaseBaselineIsVersionTwoPointZeroPointFourAndDocumented()
+    public void ReleaseBaselineIsReplacementVersionTwoPointZeroPointZeroAndDocumented()
     {
         var props = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));
         var version = props.Descendants("Version").Single().Value;
+        var fileVersion = props.Descendants("FileVersion").Single().Value;
+        var assemblyVersion = props.Descendants("AssemblyVersion").Single().Value;
+        var informationalVersion = props.Descendants("InformationalVersion").Single().Value;
+        var localBuild = ReadRepositoryFile("build-release.ps1");
 
-        Assert.Equal("2.0.4", version);
+        Assert.Equal("2.0.0", version);
+        Assert.Equal("2.0.0.0", fileVersion);
+        Assert.Equal("2.0.0.0", assemblyVersion);
+        Assert.Equal("v2.0.0", informationalVersion);
+        Assert.Contains("[string]$Version = \"v2.0.0\"", localBuild, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(RepositoryRoot, "SECURITY.md")));
-        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.4.md")));
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.0.md")));
     }
 
     private static string NormalizeNewlines(string value) =>

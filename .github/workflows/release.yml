@@ -264,12 +264,13 @@ jobs:
           name: release-${{ github.ref_name }}
           path: release-artifacts
 
-      - name: Download audited v1 installer fixtures
+      - name: Download audited installer fixtures
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           New-Item -ItemType Directory -Path v1-fixtures | Out-Null
+          New-Item -ItemType Directory -Path v2-fixtures | Out-Null
           gh release download v1.0.0 `
             --repo $env:GITHUB_REPOSITORY `
             --pattern 'GAM-Setup-1.0.0.exe' `
@@ -284,17 +285,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not download the audited v1.0.26 installer fixture.'
           }
+          gh release download v2.0.4 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'GAM-Setup-2.0.4.exe' `
+            --dir v2-fixtures
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not download the audited v2.0.4 installer fixture.'
+          }
 
-      - name: Test fresh install and v1 in-place upgrades
+      - name: Test fresh install and supported in-place replacements
         shell: pwsh
         run: |
           $version = $env:TAG_NAME.Substring(1)
           ./scripts/test-v1-to-v2-installer-upgrade.ps1 `
             -V100SetupPath 'v1-fixtures/GAM-Setup-1.0.0.exe' `
             -V1026SetupPath 'v1-fixtures/GAM-Setup-1.0.26.exe' `
+            -V204SetupPath 'v2-fixtures/GAM-Setup-2.0.4.exe' `
             -V2SetupPath "release-artifacts/GAM-Setup-$version.exe" `
             -Version $version `
-            -WorkRoot (Join-Path $env:RUNNER_TEMP "gam-v1-upgrade-$env:GITHUB_RUN_ID")
+            -WorkRoot (Join-Path $env:RUNNER_TEMP "gam-installer-e2e-$env:GITHUB_RUN_ID")
 
   publish:
     needs: [build, upgrade-e2e]

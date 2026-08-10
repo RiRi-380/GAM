@@ -6,7 +6,8 @@ param(
     [string]$FromVersion = '2.0.0',
 
     [ValidateNotNullOrEmpty()]
-    [string]$ToVersion = '2.0.4',
+    [Parameter(Mandatory)]
+    [string]$ToVersion,
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
@@ -24,10 +25,6 @@ $script:UninstallKeys = @{
     HKCU = "Registry::HKEY_CURRENT_USER\$($script:UninstallSubKey)"
 }
 $script:GamProcessName = 'GmodAddonManager.UI'
-$script:ExpectedSourceVersion = '2.0.0'
-$script:ExpectedSourceSetupLength = [int64]39172870
-$script:ExpectedSourceSetupSha256 =
-    '2a2f19c41c97f709b6beac27cd8f236b0d3b742f5dc900299669f9569be14b07'
 $script:ProcessTimeout = [TimeSpan]::FromMinutes(10)
 $script:UiTimeout = [TimeSpan]::FromMinutes(4)
 $script:UpdateTimeout = [TimeSpan]::FromMinutes(12)
@@ -330,18 +327,31 @@ function Assert-PublicSourceRelease {
         throw "The audited source release is not an exact public stable release: $($SourceVersion.Tag)"
     }
 
-    $assetName = "GAM-Setup-$($SourceVersion.Text).exe"
-    $asset = Get-ExactReleaseAsset -Release $release -Name $assetName
-    if ([string]$asset.state -cne 'uploaded' -or
-        [int64]$asset.size -ne $script:ExpectedSourceSetupLength -or
-        [string]$asset.digest -cne "sha256:$($script:ExpectedSourceSetupSha256)" -or
-        -not ([string]$asset.browser_download_url).StartsWith(
-            'https://',
-            [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The public v2.0.0 Setup metadata no longer matches the audited fixture.'
+    $versioned = Get-ExactReleaseAsset `
+        -Release $release `
+        -Name "GAM-Setup-$($SourceVersion.Text).exe"
+    $stable = Get-ExactReleaseAsset -Release $release -Name 'GAM-Setup.exe'
+    $digestPattern = '^sha256:[0-9a-f]{64}$'
+    if ([string]$versioned.state -cne 'uploaded' -or
+        [string]$stable.state -cne 'uploaded' -or
+        [int64]$versioned.size -le 0 -or
+        [int64]$versioned.size -ne [int64]$stable.size -or
+        [string]$versioned.digest -cnotmatch $digestPattern -or
+        [string]$versioned.digest -cne [string]$stable.digest -or
+        -not ([string]$versioned.browser_download_url).StartsWith(
+             'https://',
+             [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$stable.browser_download_url).StartsWith(
+             'https://',
+             [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The public source Setup assets are invalid or inconsistent: $($SourceVersion.Tag)"
     }
 
-    return $asset
+    return [pscustomobject]@{
+        Asset = $versioned
+        Length = [int64]$versioned.size
+        Sha256 = ([string]$versioned.digest).Substring('sha256:'.Length).ToLowerInvariant()
+    }
 }
 
 function Wait-ForPublicTargetRelease {
@@ -448,7 +458,7 @@ function Save-PublicFile {
                     [int64]$totalBytes = 0
                     while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
                         if ($read -gt $ExpectedLength - $totalBytes) {
-                            throw 'The public Setup download exceeded its fixed audited size.'
+                            throw 'The public Setup download exceeded its release-declared size.'
                         }
                         $output.Write($buffer, 0, $read)
                         $totalBytes += $read
@@ -477,7 +487,7 @@ function Save-PublicFile {
     $file = Get-Item -LiteralPath $Destination
     $actualHash = Get-FileSha256 -Path $Destination
     if ($file.Length -ne $ExpectedLength -or $actualHash -ne $ExpectedSha256) {
-        throw "Downloaded v2.0.0 Setup failed its fixed size/hash check: $($file.Length), $actualHash"
+        throw "Downloaded public Setup failed its release digest check: $($file.Length), $actualHash"
     }
 }
 
@@ -1003,9 +1013,6 @@ function Remove-OwnedDirectory {
 
 $sourceVersion = Convert-ToStableVersion -Value $FromVersion -Label 'FromVersion'
 $targetVersion = Convert-ToStableVersion -Value $ToVersion -Label 'ToVersion'
-if ($sourceVersion.Text -cne $script:ExpectedSourceVersion) {
-    throw "Only the audited v$($script:ExpectedSourceVersion) source fixture is supported."
-}
 if ($targetVersion.Parsed -le $sourceVersion.Parsed) {
     throw 'ToVersion must be newer than FromVersion.'
 }
@@ -1099,13 +1106,13 @@ try {
     $appDataSentinelHash = Get-FileSha256 -Path $appDataSentinel
     $settingsHash = Get-FileSha256 -Path $settingsPath
 
-    $sourceAsset = Assert-PublicSourceRelease -SourceVersion $sourceVersion
+    $sourceFixture = Assert-PublicSourceRelease -SourceVersion $sourceVersion
     $null = Wait-ForPublicTargetRelease -TargetVersion $targetVersion
     Save-PublicFile `
-        -Uri ([string]$sourceAsset.browser_download_url) `
+        -Uri ([string]$sourceFixture.Asset.browser_download_url) `
         -Destination $sourceSetupPath `
-        -ExpectedLength $script:ExpectedSourceSetupLength `
-        -ExpectedSha256 $script:ExpectedSourceSetupSha256
+        -ExpectedLength $sourceFixture.Length `
+        -ExpectedSha256 $sourceFixture.Sha256
 
     Invoke-Executable `
         -FilePath $sourceSetupPath `

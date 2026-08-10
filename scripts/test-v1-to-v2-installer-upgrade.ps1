@@ -14,6 +14,10 @@ param(
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
+    [string]$V204SetupPath,
+
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
     [string]$V2SetupPath,
 
     [Parameter(Mandatory)]
@@ -43,6 +47,9 @@ $script:ExpectedV1InstallerSha256 = @{
     '1.0.0' = '083fb68a4fce57f3f01282f68946c71da48e40a98b77a00bd0886710c704aa79'
     '1.0.26' = 'a6f61f971cf96c4c9d3bc79e81bd7a4edebbaa74e51cff42be136e500628a81d'
 }
+$script:ExpectedV204InstallerLength = [int64]39177402
+$script:ExpectedV204InstallerSha256 =
+    'b2dadc14d333b08679bd0bc4db40af7a90021252b8c5899526ca5251566f998c'
 $script:KnownLegacyPayloads = @(
     [pscustomobject]@{
         Name = 'steam_api64.dll'
@@ -665,6 +672,23 @@ function Assert-InstallerFixtureHash {
     }
 }
 
+function Assert-V204InstallerFixture {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $fixture = Get-Item -LiteralPath $Path
+    if ($fixture.Length -ne $script:ExpectedV204InstallerLength) {
+        throw "The v2.0.4 installer is not the audited GitHub Release asset. Expected size '$($script:ExpectedV204InstallerLength)', actual '$($fixture.Length)'."
+    }
+
+    $actualHash = Get-FileSha256 -Path $Path
+    if ($actualHash -ne $script:ExpectedV204InstallerSha256) {
+        throw "The v2.0.4 installer is not the audited GitHub Release asset. Expected SHA-256 '$($script:ExpectedV204InstallerSha256)', actual '$actualHash'."
+    }
+}
+
 function Test-KnownLegacyPayloadPresent {
     param(
         [Parameter(Mandatory)]
@@ -786,9 +810,11 @@ function Remove-OwnedRegistrations {
 
 $v100Setup = Resolve-SetupFile -Path $V100SetupPath -Label 'v1.0.0 Setup'
 $v1026Setup = Resolve-SetupFile -Path $V1026SetupPath -Label 'v1.0.26 Setup'
+$v204Setup = Resolve-SetupFile -Path $V204SetupPath -Label 'v2.0.4 Setup'
 $v2Setup = Resolve-SetupFile -Path $V2SetupPath -Label 'v2 Setup'
 Assert-InstallerFixtureHash -Path $v100Setup -FixtureVersion '1.0.0'
 Assert-InstallerFixtureHash -Path $v1026Setup -FixtureVersion '1.0.26'
+Assert-V204InstallerFixture -Path $v204Setup
 $expectedVersion = $Version.Trim()
 if ($expectedVersion.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
     $expectedVersion = $expectedVersion.Substring(1)
@@ -819,11 +845,13 @@ $v100InstallDirectory = Join-Path $workRootPath 'v1.0.0 current-user install'
 $adminInstallDirectory = Join-Path $workRootPath 'legacy all-users install'
 $perUserInstallDirectory = Join-Path $workRootPath 'per-user install'
 $cleanInstallDirectory = Join-Path $workRootPath 'clean install'
+$v204InstallDirectory = Join-Path $workRootPath 'v2.0.4 current-user install'
 $ownedInstallDirectories = @(
     $v100InstallDirectory,
     $adminInstallDirectory,
     $perUserInstallDirectory,
-    $cleanInstallDirectory
+    $cleanInstallDirectory,
+    $v204InstallDirectory
 )
 $steamLibrary = Join-Path $workRootPath 'Steam Library'
 $gmodDirectory = Join-Path $steamLibrary 'steamapps\common\GarrysMod'
@@ -833,6 +861,7 @@ $workshopDirectory = Join-Path $steamLibrary 'steamapps\workshop\content\4000'
 $appDataSentinel = Join-Path $appDataDirectory 'installer-upgrade-sentinel.bin'
 $v100InstallSentinel = Join-Path $v100InstallDirectory 'user-owned-install-sentinel.bin'
 $adminInstallSentinel = Join-Path $adminInstallDirectory 'user-owned-install-sentinel.bin'
+$v204InstallSentinel = Join-Path $v204InstallDirectory 'user-owned-install-sentinel.bin'
 $updaterSetupPath = Join-Path `
     ([System.IO.Path]::GetTempPath()) `
     "GAM-Update-Setup-$([Guid]::NewGuid().ToString('N')).exe"
@@ -1125,7 +1154,68 @@ try {
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
-    Write-Host 'All v1-to-v2 installer upgrade scenarios passed.' -ForegroundColor Green
+    Write-Host 'Scenario E: official v2.0.4 current-user installation -> direct candidate in-place replacement.'
+    $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
+    $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
+    $v204LaunchObserved = Invoke-SetupExecutable `
+        -FilePath $v204Setup `
+        -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            '/CURRENTUSER',
+            '/NOICONS',
+            "/DIR=$v204InstallDirectory",
+            "/LOG=$(Join-Path $workRootPath 'v2.0.4-current-user-install.log')")
+    Assert-Registration `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $v204InstallDirectory `
+        -ExpectedDisplayVersion '2.0.4'
+    if ($v204LaunchObserved -or
+        (Test-OwnedGamProcessRunning -InstallDirectory $v204InstallDirectory)) {
+        throw 'The silent v2.0.4 fixture install launched GAM without /LAUNCHAFTERINSTALL=1.'
+    }
+    [System.IO.File]::WriteAllBytes(
+        $v204InstallSentinel,
+        [System.Text.Encoding]::UTF8.GetBytes('user-owned v2.0.4 install sentinel'))
+    $v204InstallSentinelHash = Get-FileSha256 -Path $v204InstallSentinel
+
+    $null = Invoke-SetupExecutable `
+        -FilePath $v2Setup `
+        -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            '/CLOSEAPPLICATIONS',
+            '/LAUNCHAFTERINSTALL=1',
+            "/LOG=$(Join-Path $workRootPath 'v2.0.4-to-candidate-replacement.log')") `
+        -LaunchInstallDirectory $v204InstallDirectory `
+        -RequireLaunch
+    Stop-OwnedGamProcesses -OwnedInstallDirectories $ownedInstallDirectories
+    Assert-Registration `
+        -ExpectedHive HKCU `
+        -ExpectedInstallDirectory $v204InstallDirectory `
+        -ExpectedDisplayVersion $expectedVersion
+    Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
+    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
+    $v204ReplacementManagedFiles = Get-ManagedApplicationFiles `
+        -InstallDirectory $v204InstallDirectory
+
+    Invoke-OwnedUninstall `
+        -InstallDirectory $v204InstallDirectory `
+        -AllOwnedInstallDirectories $ownedInstallDirectories
+    Assert-NoRegistration
+    Assert-ManagedApplicationRemoved -ManagedFiles $v204ReplacementManagedFiles
+    Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
+    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
+
+    Write-Host 'All installer compatibility scenarios passed.' -ForegroundColor Green
 }
 catch {
     $primaryFailure = $_
