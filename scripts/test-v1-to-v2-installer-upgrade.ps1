@@ -12,9 +12,7 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$V1026SetupPath,
 
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$V204SetupPath,
+    [string]$V204SetupPath = '',
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
@@ -810,11 +808,16 @@ function Remove-OwnedRegistrations {
 
 $v100Setup = Resolve-SetupFile -Path $V100SetupPath -Label 'v1.0.0 Setup'
 $v1026Setup = Resolve-SetupFile -Path $V1026SetupPath -Label 'v1.0.26 Setup'
-$v204Setup = Resolve-SetupFile -Path $V204SetupPath -Label 'v2.0.4 Setup'
+$v204Setup = $null
+if (-not [string]::IsNullOrWhiteSpace($V204SetupPath)) {
+    $v204Setup = Resolve-SetupFile -Path $V204SetupPath -Label 'v2.0.4 Setup'
+}
 $v2Setup = Resolve-SetupFile -Path $V2SetupPath -Label 'v2 Setup'
 Assert-InstallerFixtureHash -Path $v100Setup -FixtureVersion '1.0.0'
 Assert-InstallerFixtureHash -Path $v1026Setup -FixtureVersion '1.0.26'
-Assert-V204InstallerFixture -Path $v204Setup
+if ($null -ne $v204Setup) {
+    Assert-V204InstallerFixture -Path $v204Setup
+}
 $expectedVersion = $Version.Trim()
 if ($expectedVersion.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
     $expectedVersion = $expectedVersion.Substring(1)
@@ -1154,66 +1157,68 @@ try {
     Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
     Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
-    Write-Host 'Scenario E: official v2.0.4 current-user installation -> direct candidate in-place replacement.'
-    $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
-    $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
-    $v204LaunchObserved = Invoke-SetupExecutable `
-        -FilePath $v204Setup `
-        -Arguments @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/NORESTART',
-            '/SP-',
-            '/CURRENTUSER',
-            '/NOICONS',
-            "/DIR=$v204InstallDirectory",
-            "/LOG=$(Join-Path $workRootPath 'v2.0.4-current-user-install.log')")
-    Assert-Registration `
-        -ExpectedHive HKCU `
-        -ExpectedInstallDirectory $v204InstallDirectory `
-        -ExpectedDisplayVersion '2.0.4'
-    if ($v204LaunchObserved -or
-        (Test-OwnedGamProcessRunning -InstallDirectory $v204InstallDirectory)) {
-        throw 'The silent v2.0.4 fixture install launched GAM without /LAUNCHAFTERINSTALL=1.'
+    if ($null -ne $v204Setup) {
+        Write-Host 'Scenario E: official v2.0.4 current-user installation -> direct candidate in-place replacement.'
+        $gmodBefore = Get-TreeFingerprint -Root $gmodDirectory
+        $workshopBefore = Get-TreeFingerprint -Root $workshopDirectory
+        $v204LaunchObserved = Invoke-SetupExecutable `
+            -FilePath $v204Setup `
+            -Arguments @(
+                '/VERYSILENT',
+                '/SUPPRESSMSGBOXES',
+                '/NORESTART',
+                '/SP-',
+                '/CURRENTUSER',
+                '/NOICONS',
+                "/DIR=$v204InstallDirectory",
+                "/LOG=$(Join-Path $workRootPath 'v2.0.4-current-user-install.log')")
+        Assert-Registration `
+            -ExpectedHive HKCU `
+            -ExpectedInstallDirectory $v204InstallDirectory `
+            -ExpectedDisplayVersion '2.0.4'
+        if ($v204LaunchObserved -or
+            (Test-OwnedGamProcessRunning -InstallDirectory $v204InstallDirectory)) {
+            throw 'The silent v2.0.4 fixture install launched GAM without /LAUNCHAFTERINSTALL=1.'
+        }
+        [System.IO.File]::WriteAllBytes(
+            $v204InstallSentinel,
+            [System.Text.Encoding]::UTF8.GetBytes('user-owned v2.0.4 install sentinel'))
+        $v204InstallSentinelHash = Get-FileSha256 -Path $v204InstallSentinel
+
+        $null = Invoke-SetupExecutable `
+            -FilePath $v2Setup `
+            -Arguments @(
+                '/VERYSILENT',
+                '/SUPPRESSMSGBOXES',
+                '/NORESTART',
+                '/SP-',
+                '/CLOSEAPPLICATIONS',
+                '/LAUNCHAFTERINSTALL=1',
+                "/LOG=$(Join-Path $workRootPath 'v2.0.4-to-candidate-replacement.log')") `
+            -LaunchInstallDirectory $v204InstallDirectory `
+            -RequireLaunch
+        Stop-OwnedGamProcesses -OwnedInstallDirectories $ownedInstallDirectories
+        Assert-Registration `
+            -ExpectedHive HKCU `
+            -ExpectedInstallDirectory $v204InstallDirectory `
+            -ExpectedDisplayVersion $expectedVersion
+        Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
+        Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+        Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+        Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
+        $v204ReplacementManagedFiles = Get-ManagedApplicationFiles `
+            -InstallDirectory $v204InstallDirectory
+
+        Invoke-OwnedUninstall `
+            -InstallDirectory $v204InstallDirectory `
+            -AllOwnedInstallDirectories $ownedInstallDirectories
+        Assert-NoRegistration
+        Assert-ManagedApplicationRemoved -ManagedFiles $v204ReplacementManagedFiles
+        Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
+        Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
+        Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
+        Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
     }
-    [System.IO.File]::WriteAllBytes(
-        $v204InstallSentinel,
-        [System.Text.Encoding]::UTF8.GetBytes('user-owned v2.0.4 install sentinel'))
-    $v204InstallSentinelHash = Get-FileSha256 -Path $v204InstallSentinel
-
-    $null = Invoke-SetupExecutable `
-        -FilePath $v2Setup `
-        -Arguments @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/NORESTART',
-            '/SP-',
-            '/CLOSEAPPLICATIONS',
-            '/LAUNCHAFTERINSTALL=1',
-            "/LOG=$(Join-Path $workRootPath 'v2.0.4-to-candidate-replacement.log')") `
-        -LaunchInstallDirectory $v204InstallDirectory `
-        -RequireLaunch
-    Stop-OwnedGamProcesses -OwnedInstallDirectories $ownedInstallDirectories
-    Assert-Registration `
-        -ExpectedHive HKCU `
-        -ExpectedInstallDirectory $v204InstallDirectory `
-        -ExpectedDisplayVersion $expectedVersion
-    Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
-    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
-    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
-    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
-    $v204ReplacementManagedFiles = Get-ManagedApplicationFiles `
-        -InstallDirectory $v204InstallDirectory
-
-    Invoke-OwnedUninstall `
-        -InstallDirectory $v204InstallDirectory `
-        -AllOwnedInstallDirectories $ownedInstallDirectories
-    Assert-NoRegistration
-    Assert-ManagedApplicationRemoved -ManagedFiles $v204ReplacementManagedFiles
-    Assert-Sentinel -Path $v204InstallSentinel -ExpectedSha256 $v204InstallSentinelHash
-    Assert-Sentinel -Path $appDataSentinel -ExpectedSha256 $appDataSentinelHash
-    Assert-TreeUnchanged -Label 'GMod tree' -Root $gmodDirectory -ExpectedFingerprint $gmodBefore
-    Assert-TreeUnchanged -Label 'Workshop tree' -Root $workshopDirectory -ExpectedFingerprint $workshopBefore
 
     Write-Host 'All installer compatibility scenarios passed.' -ForegroundColor Green
 }

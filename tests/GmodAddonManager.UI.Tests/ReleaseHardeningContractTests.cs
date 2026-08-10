@@ -102,7 +102,7 @@ public sealed partial class ReleaseHardeningContractTests
 
         Assert.Contains("TAG_NAME: ${{ github.ref_name }}", release, StringComparison.Ordinal);
         Assert.DoesNotContain("'${{ github.ref_name }}'", release, StringComparison.Ordinal);
-        Assert.Equal(7, Regex.Count(release, @"\$env:TAG_NAME"));
+        Assert.Equal(8, Regex.Count(release, @"\$env:TAG_NAME"));
     }
 
     [Fact]
@@ -269,7 +269,10 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("gh release download v1.0.0", release, StringComparison.Ordinal);
         Assert.Contains("gh release download v1.0.26", release, StringComparison.Ordinal);
         Assert.Contains("gh release download v2.0.4", release, StringComparison.Ordinal);
-        Assert.Contains("-V204SetupPath 'v2-fixtures/GAM-Setup-2.0.4.exe'", release, StringComparison.Ordinal);
+        Assert.Contains("$requiresV204ReplacementFixture = $false", release, StringComparison.Ordinal);
+        Assert.Contains("gh release view v2.0.0", release, StringComparison.Ordinal);
+        Assert.Contains("if ($requiresV204ReplacementFixture)", release, StringComparison.Ordinal);
+        Assert.Contains("$parameters.V204SetupPath = $v204Fixture", release, StringComparison.Ordinal);
         Assert.Contains("./scripts/test-v1-to-v2-installer-upgrade.ps1", release, StringComparison.Ordinal);
         Assert.Contains("083fb68a4fce57f3f01282f68946c71da48e40a98b77a00bd0886710c704aa79", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("a6f61f971cf96c4c9d3bc79e81bd7a4edebbaa74e51cff42be136e500628a81d", upgradeTest, StringComparison.Ordinal);
@@ -280,6 +283,8 @@ public sealed partial class ReleaseHardeningContractTests
         Assert.Contains("Scenario C: v1.0.26 current-user installation", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario D: clean v2 current-user installation", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Scenario E: official v2.0.4 current-user installation", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("[string]$V204SetupPath = ''", upgradeTest, StringComparison.Ordinal);
+        Assert.Contains("if ($null -ne $v204Setup)", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("Move-CurrentUserRegistrationToAllUsers", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("'/CLOSEAPPLICATIONS'", upgradeTest, StringComparison.Ordinal);
         Assert.Contains("'/LAUNCHAFTERINSTALL=1'", upgradeTest, StringComparison.Ordinal);

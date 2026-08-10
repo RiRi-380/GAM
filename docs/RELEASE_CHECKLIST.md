@@ -70,7 +70,7 @@
 - [ ] Setup版の更新チェックがSetup assetを選び、Portable版がPortable ZIPだけを選ぶ。
 - [ ] Portable更新は検証済みZIPをエクスプローラーで表示し、Setup版を別にインストールしない。
 - [ ] 非公開Releaseでは読取tokenあり／なしの両方を確認し、tokenをログへ出していない。
-- [ ] 同じversionを再発行した場合、自動更新では検出されないため、既存testerへ手動再取得を案内する。Setup版は旧版を先にアンインストールしてから再導入し、Portable版は終了後にフォルダーを置き換える。
+- [ ] 同じversionを再発行した場合、自動更新では検出されないため、既存testerへ手動再取得を案内する。Setup版は既存の登録先へ直接上書きし、Portable版は終了後にフォルダーを置き換える。
 - [ ] GitHubリポジトリのvisibilityがRelease前と同じである。
 
 ## トラブルが出た場合
