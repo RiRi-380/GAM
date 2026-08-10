@@ -105,6 +105,13 @@ public sealed class V2UpdaterE2EContractTests
         Assert.DoesNotContain("SendKeys", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Authorization", script, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Wait-ForUpdatedRelaunch", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "Stopping the stable updated GAM process to let the v2.0.0 launcher finish cleanup.",
+            script,
+            StringComparison.Ordinal);
+        Assert.Matches(
+            @"Stop-OwnedGamProcesses -InstallDirectory \$installDirectory\s+Wait-ForUpdaterArtifactsRemoved",
+            script);
         Assert.Contains("$settingsHash = Get-FileSha256", script, StringComparison.Ordinal);
         Assert.Contains("Assert-TreeUnchanged", script, StringComparison.Ordinal);
         Assert.Contains("Wait-ForUpdaterArtifactsRemoved", script, StringComparison.Ordinal);

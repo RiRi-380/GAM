@@ -587,7 +587,10 @@ public sealed class UpdateServiceTests
         Assert.Contains("$installerPath = 'C:\\Temp\\GAM''s Setup.exe'", script);
         Assert.Contains("$installerArguments = '/VERYSILENT /SP-'", script);
         Assert.Contains("$ErrorActionPreference = 'Stop'", script);
-        Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait -PassThru", script);
+        Assert.Contains("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -PassThru", script);
+        Assert.Contains("$installerProcess | Wait-Process", script);
+        Assert.DoesNotContain("Start-Process -FilePath $installerPath -Wait", script);
+        Assert.DoesNotContain("Start-Process -FilePath $installerPath -ArgumentList $installerArguments -Wait", script);
         Assert.Contains("if ($installerProcess.ExitCode -ne 0)", script);
         Assert.Contains("update-installer.log", script);
         Assert.Contains("Remove-Item -LiteralPath $installerPath", script);
@@ -664,6 +667,110 @@ public sealed class UpdateServiceTests
         Assert.True(startInfo.CreateNoWindow);
         Assert.Contains("-File", startInfo.ArgumentList);
         Assert.Contains(@"C:\Temp\launcher.ps1", startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void InstallerLauncher_CleansPackageWithoutWaitingForRelaunchedDescendant()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = CreateTemporaryDirectory();
+        var fakeInstallerPath = Path.Combine(directory, "fake-installer.exe");
+        var fakeInstallerScriptPath = Path.Combine(directory, "fake-installer.ps1");
+        var childScriptPath = Path.Combine(directory, "relaunch-child.ps1");
+        var childPidPath = Path.Combine(directory, "relaunch-child.pid");
+        var launcherPath = Path.Combine(directory, "launcher.ps1");
+        Process? launcherProcess = null;
+        Process? childProcess = null;
+        try
+        {
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), fakeInstallerPath);
+            File.WriteAllText(
+                childScriptPath,
+                "Start-Sleep -Seconds 30",
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            static string PowerShellLiteral(string value) =>
+                $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+            var quotedChildPath = PowerShellLiteral($"\"{childScriptPath}\"");
+            File.WriteAllText(
+                fakeInstallerScriptPath,
+                string.Join(
+                    Environment.NewLine,
+                    "$childProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @("
+                        + "'-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "
+                        + quotedChildPath
+                        + ") -PassThru",
+                    $"[System.IO.File]::WriteAllText({PowerShellLiteral(childPidPath)}, [string]$childProcess.Id)",
+                    string.Empty),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            var installerArguments =
+                "/d /s /c powershell.exe -NoProfile -NonInteractive "
+                + "-ExecutionPolicy Bypass -File \""
+                + fakeInstallerScriptPath
+                + "\"";
+            File.WriteAllText(
+                launcherPath,
+                UpdateService.BuildInstallerLauncherScript(
+                    int.MaxValue,
+                    fakeInstallerPath,
+                    installerArguments),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            launcherProcess = Process.Start(
+                UpdateService.CreateInstallerLauncherStartInfo(launcherPath));
+            Assert.NotNull(launcherProcess);
+            Assert.True(
+                launcherProcess.WaitForExit(15_000),
+                "The launcher waited for the relaunched descendant instead of only the installer.");
+            Assert.Equal(0, launcherProcess.ExitCode);
+
+            Assert.True(File.Exists(childPidPath), "The fake installer did not launch its child process.");
+            childProcess = Process.GetProcessById(int.Parse(
+                File.ReadAllText(childPidPath),
+                System.Globalization.CultureInfo.InvariantCulture));
+            Assert.False(childProcess.HasExited);
+            Assert.False(File.Exists(fakeInstallerPath));
+            Assert.False(File.Exists(launcherPath));
+        }
+        finally
+        {
+            if (launcherProcess is { HasExited: false })
+            {
+                launcherProcess.Kill(entireProcessTree: true);
+                launcherProcess.WaitForExit();
+            }
+            if (childProcess is null
+                && File.Exists(childPidPath)
+                && int.TryParse(
+                    File.ReadAllText(childPidPath),
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var childProcessId))
+            {
+                try
+                {
+                    childProcess = Process.GetProcessById(childProcessId);
+                }
+                catch (ArgumentException)
+                {
+                    // The short-lived test child already exited.
+                }
+            }
+            if (childProcess is { HasExited: false })
+            {
+                childProcess.Kill(entireProcessTree: true);
+                childProcess.WaitForExit();
+            }
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Fact]

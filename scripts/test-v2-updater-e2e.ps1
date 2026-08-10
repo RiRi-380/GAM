@@ -1172,6 +1172,11 @@ try {
     Assert-Registration `
         -ExpectedInstallDirectory $installDirectory `
         -ExpectedVersion $targetVersion.Text
+    # v2.0.0 used Start-Process -Wait, which waits for the relaunched GAM child
+    # as well as the installer. Closing the already-proven stable relaunch lets
+    # that legacy launcher finish and proves its eventual cleanup contract.
+    Write-Host 'Stopping the stable updated GAM process to let the v2.0.0 launcher finish cleanup.'
+    Stop-OwnedGamProcesses -InstallDirectory $installDirectory
     Wait-ForUpdaterArtifactsRemoved `
         -TemporaryDirectory $temporaryDirectory `
         -BaselineArtifacts $baselineArtifacts `
