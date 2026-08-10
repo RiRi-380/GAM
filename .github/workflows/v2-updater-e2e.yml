@@ -1,0 +1,80 @@
+name: v2 public updater E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      fromVersion:
+        description: Audited installed source version
+        required: true
+        type: string
+        default: '2.0.0'
+      toVersion:
+        description: Public latest target version
+        required: true
+        type: string
+        default: '2.0.1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-public-updater-e2e-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  update-in-place:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    env:
+      # The app and the fixture download must use the public, tokenless source.
+      GAM_GITHUB_TOKEN: ''
+      GAM_UPDATE_REPO: ''
+      GAM_UPDATE_API_URL: ''
+      GAM_UPDATE_INCLUDE_PRERELEASE: ''
+
+    steps:
+      - name: Checkout updater test source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET for contract test
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.302'
+
+      - name: Parse the PowerShell E2E
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/test-v2-updater-e2e.ps1'),
+            [ref]$tokens,
+            [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'The v2 updater E2E script has PowerShell parser errors.'
+          }
+
+      - name: Run updater E2E contract tests
+        shell: pwsh
+        run: |
+          dotnet restore tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj --locked-mode
+          dotnet test tests/GmodAddonManager.UI.Tests/GmodAddonManager.UI.Tests.csproj `
+            -c Release `
+            --no-restore `
+            -p:TreatWarningsAsErrors=true `
+            --filter 'FullyQualifiedName~V2UpdaterE2EContractTests' `
+            --logger 'console;verbosity=minimal'
+
+      - name: Exercise the real public v2 updater
+        shell: pwsh
+        env:
+          E2E_FROM_VERSION: ${{ inputs.fromVersion }}
+          E2E_TO_VERSION: ${{ inputs.toVersion }}
+        run: |
+          ./scripts/test-v2-updater-e2e.ps1 `
+            -FromVersion $env:E2E_FROM_VERSION `
+            -ToVersion $env:E2E_TO_VERSION `
+            -WorkRoot (Join-Path $env:RUNNER_TEMP "gam-v2-updater-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")

@@ -5,6 +5,7 @@
         xmlns:loc="using:GmodAddonManager.UI.Localization"
         mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="400"
         x:Class="GmodAddonManager.UI.Views.UpdateDialog"
+        AutomationProperties.AutomationId="GAM.UpdateDialog.Window"
         Title="{loc:Localize UpdateDialog.Title}"
         Width="500" Height="400"
         WindowStartupLocation="CenterOwner"
@@ -21,9 +22,11 @@
                            FontSize="18" FontWeight="Bold"
                            Foreground="White"/>
                 <TextBlock Text="{Binding CurrentVersion}"
+                           AutomationProperties.AutomationId="GAM.UpdateDialog.CurrentVersion"
                            Foreground="White" Opacity="0.8"
                            Margin="0,5,0,0"/>
                 <TextBlock Text="{Binding NewVersion}"
+                           AutomationProperties.AutomationId="GAM.UpdateDialog.NewVersion"
                            Foreground="White" FontWeight="Bold"
                            Margin="0,2,0,0"/>
             </StackPanel>
@@ -52,10 +55,12 @@
                             Margin="20"
                             IsVisible="{Binding !IsUpdating}">
                     <Button Content="{loc:Localize UpdateDialog.RemindLater}"
+                            AutomationProperties.AutomationId="GAM.UpdateDialog.RemindLater"
                             Command="{Binding RemindLaterCommand}"
                             Classes="secondary"
                             Margin="0,0,10,0"/>
                     <Button Content="{loc:Localize UpdateDialog.UpdateNow}"
+                            AutomationProperties.AutomationId="GAM.UpdateDialog.UpdateNow"
                             Command="{Binding UpdateCommand}"
                             Classes="accent"/>
                 </StackPanel>
