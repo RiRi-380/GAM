@@ -5,6 +5,7 @@ using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Services;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 
 namespace GmodAddonManager.UI.Views;
@@ -15,12 +16,14 @@ public partial class AssetGroupEditDialog : Window
     private readonly AddonManager? addonManager;
     private readonly Func<string, string?>? nameValidator;
     private readonly IDialogService dialogService = new DialogService();
+    private readonly ObservableCollection<AssetGroupStructureOption> structureOptions = new();
     private IReadOnlyList<string> pendingMemberAssetIds = Array.Empty<string>();
     private IReadOnlyList<string> pendingMemberGroupIds = Array.Empty<string>();
 
     public AssetGroupEditDialog()
     {
         InitializeComponent();
+        InitializeStructurePage();
         EditStructureButton.IsEnabled = false;
         UpdateSaveState();
         ConfigureSummary(null, null);
@@ -37,6 +40,7 @@ public partial class AssetGroupEditDialog : Window
         this.nameValidator = nameValidator ?? throw new ArgumentNullException(nameof(nameValidator));
 
         InitializeComponent();
+        InitializeStructurePage();
         GroupNameTextBox.Text = group.Name;
         MemoTextBox.Text = group.Memo;
         pendingMemberAssetIds = configuration.Assets
@@ -98,24 +102,21 @@ public partial class AssetGroupEditDialog : Window
                 return;
             }
 
-            var dialog = new AssetGroupStructureDialog(
-                latest,
-                configuration,
-                pendingMemberAssetIds.ToHashSet(StringComparer.Ordinal),
-                pendingMemberGroupIds.ToHashSet(StringComparer.Ordinal));
-            var result = await dialog.ShowDialog<AssetGroupStructureEditResult?>(this);
-            if (result is not { IsSaved: true })
+            structureOptions.Clear();
+            foreach (var option in BuildStructureOptions(
+                         latest,
+                         configuration,
+                         pendingMemberAssetIds.ToHashSet(StringComparer.Ordinal),
+                         pendingMemberGroupIds.ToHashSet(StringComparer.Ordinal)))
             {
-                return;
+                structureOptions.Add(option);
             }
 
-            pendingMemberAssetIds = result.MemberAssetIds.ToArray();
-            pendingMemberGroupIds = result.MemberGroupIds.ToArray();
-            ConfigureSummary(
-                latest,
-                configuration,
-                pendingMemberAssetIds,
-                pendingMemberGroupIds);
+            StructureTitleText.Text = L.Format("AssetGroup.EditStructureTitle", latest.Name);
+            Title = L.Get("AssetGroup.EditStructure");
+            DetailsPage.IsVisible = false;
+            StructurePage.IsVisible = true;
+            StructureBackButton.Focus();
         }
         catch (Exception ex)
         {
@@ -124,6 +125,68 @@ public partial class AssetGroupEditDialog : Window
                 L.Get("Error.Title"),
                 L.Format("AssetGroup.OperationFailed", ex.Message));
         }
+    }
+
+    private void OnStructureBack(object? sender, RoutedEventArgs e)
+    {
+        ShowDetailsPage();
+    }
+
+    private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (StructurePage.IsVisible &&
+            !e.IsProgrammatic &&
+            e.CloseReason == WindowCloseReason.WindowClosing)
+        {
+            e.Cancel = true;
+            ShowDetailsPage();
+        }
+    }
+
+    private void OnStructureApply(object? sender, RoutedEventArgs e)
+    {
+        if (group == null || addonManager == null)
+        {
+            ShowDetailsPage();
+            return;
+        }
+
+        pendingMemberAssetIds = structureOptions
+            .Where(option => option.IsSelected && !option.IsGroup)
+            .Select(option => option.Id)
+            .ToArray();
+        pendingMemberGroupIds = structureOptions
+            .Where(option => option.IsSelected && option.IsGroup)
+            .Select(option => option.Id)
+            .ToArray();
+
+        var configuration = addonManager.GetConfiguration();
+        var latest = configuration.AssetGroups.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, group.Id, StringComparison.Ordinal));
+        if (latest != null)
+        {
+            ConfigureSummary(
+                latest,
+                configuration,
+                pendingMemberAssetIds,
+                pendingMemberGroupIds);
+        }
+
+        ShowDetailsPage();
+    }
+
+    private void InitializeStructurePage()
+    {
+        StructureMemberItemsControl.ItemsSource = structureOptions;
+    }
+
+    private void ShowDetailsPage()
+    {
+        StructurePage.IsVisible = false;
+        DetailsPage.IsVisible = true;
+        Title = L.Get("AssetGroup.DetailsTitle");
+        structureOptions.Clear();
+        EditStructureButton.Focus();
     }
 
     private void OnSave(object? sender, RoutedEventArgs e)
@@ -263,6 +326,147 @@ public partial class AssetGroupEditDialog : Window
         }
         return $"{value:0.##} {units[unit]}";
     }
+
+    internal static IReadOnlyList<AssetGroupStructureOption> BuildStructureOptions(
+        AssetGroup group,
+        Configuration configuration,
+        IReadOnlySet<string>? selectedAssetIds,
+        IReadOnlySet<string>? selectedGroupIds)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var parentId = group.ParentGroupId;
+        var assetOptions = configuration.Assets
+            .Where(asset =>
+                !asset.IsSystem &&
+                (string.Equals(asset.ParentGroupId, group.Id, StringComparison.Ordinal) ||
+                 string.Equals(asset.ParentGroupId, parentId, StringComparison.Ordinal)))
+            .Select(asset => new AssetGroupStructureOption(
+                asset.Id,
+                asset.Name,
+                AssetListEntryKind.Asset,
+                asset.IsFavorite,
+                asset.SortOrder,
+                selectedAssetIds?.Contains(asset.Id) ??
+                string.Equals(asset.ParentGroupId, group.Id, StringComparison.Ordinal)));
+        var groupOptions = configuration.AssetGroups
+            .Where(candidate =>
+                !string.Equals(candidate.Id, group.Id, StringComparison.Ordinal) &&
+                (string.Equals(candidate.ParentGroupId, group.Id, StringComparison.Ordinal) ||
+                 (string.Equals(candidate.ParentGroupId, parentId, StringComparison.Ordinal) &&
+                  CanMoveUnder(configuration, candidate.Id, group.Id))))
+            .Select(candidate => new AssetGroupStructureOption(
+                candidate.Id,
+                candidate.Name,
+                AssetListEntryKind.Group,
+                candidate.IsFavorite,
+                candidate.SortOrder,
+                selectedGroupIds?.Contains(candidate.Id) ??
+                string.Equals(candidate.ParentGroupId, group.Id, StringComparison.Ordinal)));
+
+        return assetOptions
+            .Concat(groupOptions)
+            .OrderBy(option => option.IsFavorite ? 0 : 1)
+            .ThenBy(option => option.SortOrder < 0 ? int.MaxValue : option.SortOrder)
+            .ThenBy(option => option.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(option => option.Kind)
+            .ThenBy(option => option.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool CanMoveUnder(
+        Configuration configuration,
+        string candidateGroupId,
+        string destinationGroupId)
+    {
+        var destinationDepth = GetDepth(configuration, destinationGroupId);
+        var subtreeHeight = GetSubtreeHeight(configuration, candidateGroupId);
+        return destinationDepth >= 0 &&
+               destinationDepth + 1 + subtreeHeight <= configuration.MaxNestedGroupDepth;
+    }
+
+    private static int GetDepth(Configuration configuration, string groupId)
+    {
+        var groups = configuration.AssetGroups.ToDictionary(candidate => candidate.Id, StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = groupId;
+        var depth = 0;
+        while (groups.TryGetValue(currentId, out var current))
+        {
+            if (!visited.Add(currentId))
+            {
+                return -1;
+            }
+            if (string.IsNullOrWhiteSpace(current.ParentGroupId))
+            {
+                return depth;
+            }
+            depth++;
+            currentId = current.ParentGroupId;
+        }
+        return -1;
+    }
+
+    private static int GetSubtreeHeight(Configuration configuration, string rootId)
+    {
+        var children = configuration.AssetGroups
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate.ParentGroupId))
+            .GroupBy(candidate => candidate.ParentGroupId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        return GetSubtreeHeight(children, rootId, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    private static int GetSubtreeHeight(
+        IReadOnlyDictionary<string, List<AssetGroup>> children,
+        string rootId,
+        HashSet<string> path)
+    {
+        if (!path.Add(rootId) || !children.TryGetValue(rootId, out var directChildren))
+        {
+            return 0;
+        }
+
+        var height = 0;
+        foreach (var child in directChildren)
+        {
+            height = Math.Max(height, 1 + GetSubtreeHeight(children, child.Id, path));
+        }
+        path.Remove(rootId);
+        return height;
+    }
+}
+
+public sealed class AssetGroupStructureOption
+{
+    public AssetGroupStructureOption(
+        string id,
+        string name,
+        AssetListEntryKind kind,
+        bool isFavorite,
+        int sortOrder,
+        bool isSelected)
+    {
+        Id = id;
+        Name = name;
+        Kind = kind;
+        IsFavorite = isFavorite;
+        SortOrder = sortOrder;
+        IsSelected = isSelected;
+    }
+
+    public string Id { get; }
+    public string Name { get; }
+    public AssetListEntryKind Kind { get; }
+    public bool IsGroup => Kind == AssetListEntryKind.Group;
+    public bool IsFavorite { get; }
+    public int SortOrder { get; }
+    public bool IsSelected { get; set; }
+    public string KindText => IsGroup
+        ? L.Get("AssetGroup.Kind.Group")
+        : L.Get("AssetGroup.Kind.Asset");
+    public string KindBackground => IsGroup ? "#304A64" : "#343434";
+    public string KindForeground => IsGroup ? "#B4D8F8" : "#D0D0D0";
 }
 
 public sealed class AssetGroupEditResult

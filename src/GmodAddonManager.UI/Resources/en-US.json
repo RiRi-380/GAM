@@ -173,6 +173,8 @@
   "AssetGroup.EditStructureDescription": "Choose the direct Assets and child Groups contained in this Group.",
   "AssetGroup.EditStructureMoveHint": "Selected items are moved into this Group. Existing nested contents remain in their current child Groups.",
   "AssetGroup.EditStructureTitle": "Edit “{0}” Structure",
+  "AssetGroup.BackToDetails": "Back to Details",
+  "AssetGroup.ApplyStructure": "Apply Structure",
   "AssetGroup.NoDirectAssetsState": "This Group has no direct Assets. Open a child Group or create an Asset here.",
   "AssetGroup.PathLabel": "Location",
   "AssetGroup.RecursiveContentsLabel": "All nested contents",

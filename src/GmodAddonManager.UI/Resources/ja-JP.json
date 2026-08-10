@@ -173,6 +173,8 @@
   "AssetGroup.EditStructureDescription": "このグループへ直接入れるアセットと子グループを選択します。",
   "AssetGroup.EditStructureMoveHint": "選択した項目をこのグループへ移動します。子グループ内の既存項目は現在の場所に残ります。",
   "AssetGroup.EditStructureTitle": "「{0}」の構成を編集",
+  "AssetGroup.BackToDetails": "詳細に戻る",
+  "AssetGroup.ApplyStructure": "構成を適用",
   "AssetGroup.NoDirectAssetsState": "このグループ直下にアセットはありません。子グループを開くか、ここにアセットを作成してください。",
   "AssetGroup.PathLabel": "場所",
   "AssetGroup.RecursiveContentsLabel": "配下の全内容",

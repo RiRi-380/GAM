@@ -12,13 +12,16 @@
         MinWidth="440"
         MinHeight="480"
         WindowStartupLocation="CenterOwner"
+        Closing="OnWindowClosing"
         CanResize="True">
 
-    <Grid Margin="20" RowDefinitions="*,Auto">
-        <ScrollViewer Grid.Row="0"
-                      HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Auto">
-            <StackPanel Spacing="9">
+    <Grid Margin="20">
+        <Grid x:Name="DetailsPage"
+              RowDefinitions="*,Auto">
+            <ScrollViewer Grid.Row="0"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="9">
                 <TextBlock Text="{loc:Localize AssetDetails.MemoLabel}"
                            FontWeight="Bold"/>
                 <TextBox x:Name="MemoTextBox"
@@ -86,20 +89,99 @@
                            Opacity="0.7"
                            TextWrapping="Wrap"/>
 
-            </StackPanel>
-        </ScrollViewer>
+                </StackPanel>
+            </ScrollViewer>
 
-        <StackPanel Grid.Row="1"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Spacing="10"
-                    Margin="0,16,0,0">
-            <Button Click="OnCancel"
-                    Content="{loc:Localize Dialog.Cancel}"/>
-            <Button x:Name="SaveButton"
-                    Click="OnSave"
-                    Classes="accent"
-                    Content="{loc:Localize Dialog.Save}"/>
-        </StackPanel>
+            <StackPanel Grid.Row="1"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10"
+                        Margin="0,16,0,0">
+                <Button Click="OnCancel"
+                        Content="{loc:Localize Dialog.Cancel}"/>
+                <Button x:Name="SaveButton"
+                        Click="OnSave"
+                        Classes="accent"
+                        Content="{loc:Localize Dialog.Save}"/>
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="StructurePage"
+              RowDefinitions="Auto,*,Auto"
+              IsVisible="False">
+            <StackPanel Grid.Row="0"
+                        Spacing="6"
+                        Margin="0,0,0,12">
+                <TextBlock x:Name="StructureTitleText"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           TextWrapping="Wrap"/>
+                <TextBlock Text="{loc:Localize AssetGroup.EditStructureDescription}"
+                           FontSize="12"
+                           Opacity="0.72"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                    CornerRadius="6"
+                    Padding="8">
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="StructureMemberItemsControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="views:AssetGroupStructureOption">
+                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                          Margin="3,4">
+                                    <Grid ColumnDefinitions="*,Auto"
+                                          ColumnSpacing="10">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Name}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                        <Border Grid.Column="1"
+                                                Padding="6,2"
+                                                CornerRadius="4"
+                                                Background="{Binding KindBackground}"
+                                                VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding KindText}"
+                                                       FontSize="9"
+                                                       Foreground="{Binding KindForeground}"/>
+                                        </Border>
+                                    </Grid>
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Row="2"
+                  ColumnDefinitions="*,Auto"
+                  Margin="0,14,0,0">
+                <TextBlock Grid.Column="0"
+                           Text="{loc:Localize AssetGroup.EditStructureMoveHint}"
+                           FontSize="11"
+                           Opacity="0.65"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="0,0,14,0"/>
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            Spacing="10">
+                    <Button x:Name="StructureBackButton"
+                            Content="{loc:Localize AssetGroup.BackToDetails}"
+                            Click="OnStructureBack"
+                            IsCancel="True"/>
+                    <Button x:Name="StructureApplyButton"
+                            Content="{loc:Localize AssetGroup.ApplyStructure}"
+                            Click="OnStructureApply"
+                            Classes="accent"
+                            IsDefault="True"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>

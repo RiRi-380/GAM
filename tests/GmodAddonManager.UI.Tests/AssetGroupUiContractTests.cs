@@ -4,6 +4,8 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
@@ -370,7 +372,15 @@ public sealed class AssetGroupUiContractTests : IDisposable
                 (string?)element.Attribute(XamlNamespace + "Name") == "GroupNameTextBox");
         Assert.Equal("200", (string?)editName.Attribute("MaxLength"));
         Assert.Contains("AssetGroup.DetailsTitle", detailsText, StringComparison.Ordinal);
-        Assert.DoesNotContain("MemberItemsControl", detailsText, StringComparison.Ordinal);
+        var detailsPage = details.Descendants(AvaloniaNamespace + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(XamlNamespace + "Name") == "DetailsPage");
+        var structurePage = details.Descendants(AvaloniaNamespace + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(XamlNamespace + "Name") == "StructurePage");
+        Assert.NotNull(detailsPage);
+        Assert.Equal("False", (string?)structurePage.Attribute("IsVisible"));
+        Assert.Contains("StructureMemberItemsControl", detailsText, StringComparison.Ordinal);
         Assert.Contains("MemoTextBox", detailsText, StringComparison.Ordinal);
         Assert.True(
             detailsText.IndexOf("MemoTextBox", StringComparison.Ordinal) <
@@ -386,6 +396,10 @@ public sealed class AssetGroupUiContractTests : IDisposable
         Assert.DoesNotContain("RemoveImage", detailsCode, StringComparison.Ordinal);
         Assert.DoesNotContain("AssetImageCrop", detailsCode, StringComparison.Ordinal);
         Assert.DoesNotContain("SetAssetGroupMembersAsync", detailsCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("AssetGroupStructureDialog", detailsCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("ShowDialog<AssetGroupStructureEditResult", detailsCode, StringComparison.Ordinal);
+        Assert.Contains("DetailsPage.IsVisible = false;", detailsCode, StringComparison.Ordinal);
+        Assert.Contains("StructurePage.IsVisible = true;", detailsCode, StringComparison.Ordinal);
         Assert.Contains("pendingMemberAssetIds", detailsCode, StringComparison.Ordinal);
 
         var groupViewModel = ReadRepositoryFile(
@@ -393,13 +407,115 @@ public sealed class AssetGroupUiContractTests : IDisposable
         Assert.Contains("result.MemberAssetIds", groupViewModel, StringComparison.Ordinal);
         Assert.Contains("result.MemberGroupIds", groupViewModel, StringComparison.Ordinal);
 
-        var structure = LoadXaml("AssetGroupStructureDialog.axaml");
-        Assert.Contains("MemberItemsControl", structure.ToString(), StringComparison.Ordinal);
-
         var source = ReadRepositoryFile(
             "src", "GmodAddonManager.UI", "Views", "SimpleAssetCreateDialog.axaml.cs");
         Assert.Contains("nameValidator?.Invoke", source, StringComparison.Ordinal);
         Assert.Contains("SelectedGroupMemberAssetIds", source, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public async Task StructureEditorSwitchesPagesInPlaceAndOnlyApplyChangesPendingMembers()
+    {
+        using var manager = await CreateManagerAsync();
+        var configuration = manager.GetConfiguration();
+        var group = new AssetGroup("Target Group") { Id = "target-group" };
+        configuration.AssetGroups.Add(group);
+        configuration.Assets.AddRange(
+        [
+            new Asset("Already inside")
+            {
+                Id = "inside-asset",
+                ParentGroupId = group.Id,
+                SortOrder = 0
+            },
+            new Asset("Sibling")
+            {
+                Id = "sibling-asset",
+                SortOrder = 1
+            }
+        ]);
+
+        var dialog = new Views.AssetGroupEditDialog(
+            group,
+            configuration,
+            manager,
+            _ => null);
+        dialog.Show();
+        try
+        {
+            var detailsPage = Assert.IsType<Grid>(dialog.FindControl<Grid>("DetailsPage"));
+            var structurePage = Assert.IsType<Grid>(dialog.FindControl<Grid>("StructurePage"));
+            var editButton = Assert.IsType<Button>(
+                dialog.FindControl<Button>("EditStructureButton"));
+            var backButton = Assert.IsType<Button>(
+                dialog.FindControl<Button>("StructureBackButton"));
+            var applyButton = Assert.IsType<Button>(
+                dialog.FindControl<Button>("StructureApplyButton"));
+            var memberItems = Assert.IsType<ItemsControl>(
+                dialog.FindControl<ItemsControl>("StructureMemberItemsControl"));
+            var nameBox = Assert.IsType<TextBox>(
+                dialog.FindControl<TextBox>("GroupNameTextBox"));
+            var memoBox = Assert.IsType<TextBox>(
+                dialog.FindControl<TextBox>("MemoTextBox"));
+            CheckBox FindOptionCheckBox(string id) => Assert.Single(
+                memberItems.GetVisualDescendants().OfType<CheckBox>(),
+                checkBox =>
+                    checkBox.DataContext is Views.AssetGroupStructureOption option &&
+                    option.Id == id);
+
+            nameBox.Text = "Pending rename";
+            memoBox.Text = "Pending memo";
+            editButton.Focus();
+            Assert.True(editButton.IsFocused);
+            editButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Dispatcher.UIThread.InvokeAsync(static () => { });
+
+            Assert.False(detailsPage.IsVisible);
+            Assert.True(structurePage.IsVisible);
+            Assert.Empty(dialog.OwnedWindows);
+            Assert.Equal(L.Get("AssetGroup.EditStructure"), dialog.Title);
+            Assert.True(backButton.IsFocused);
+
+            var options = Assert.IsAssignableFrom<IEnumerable<Views.AssetGroupStructureOption>>(
+                    memberItems.ItemsSource)
+                .ToList();
+            Assert.True(options.Single(option => option.Id == "inside-asset").IsSelected);
+            FindOptionCheckBox("sibling-asset").IsChecked = true;
+            Assert.True(options.Single(option => option.Id == "sibling-asset").IsSelected);
+
+            backButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(detailsPage.IsVisible);
+            Assert.False(structurePage.IsVisible);
+            Assert.Equal("Pending rename", nameBox.Text);
+            Assert.Equal("Pending memo", memoBox.Text);
+            Assert.Equal(L.Get("AssetGroup.DetailsTitle"), dialog.Title);
+            Assert.True(editButton.IsFocused);
+
+            editButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Dispatcher.UIThread.InvokeAsync(static () => { });
+            options = Assert.IsAssignableFrom<IEnumerable<Views.AssetGroupStructureOption>>(
+                    memberItems.ItemsSource)
+                .ToList();
+            Assert.False(options.Single(option => option.Id == "sibling-asset").IsSelected);
+            FindOptionCheckBox("sibling-asset").IsChecked = true;
+            Assert.True(options.Single(option => option.Id == "sibling-asset").IsSelected);
+
+            applyButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(detailsPage.IsVisible);
+            Assert.False(structurePage.IsVisible);
+
+            editButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Dispatcher.UIThread.InvokeAsync(static () => { });
+            options = Assert.IsAssignableFrom<IEnumerable<Views.AssetGroupStructureOption>>(
+                    memberItems.ItemsSource)
+                .ToList();
+            Assert.True(options.Single(option => option.Id == "sibling-asset").IsSelected);
+            Assert.Empty(dialog.OwnedWindows);
+        }
+        finally
+        {
+            dialog.Close();
+        }
     }
 
     [Fact]
