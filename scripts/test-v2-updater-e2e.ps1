@@ -424,7 +424,7 @@ function Save-PublicFile {
             [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).
             GetAwaiter().GetResult()
         try {
-            $response.EnsureSuccessStatusCode()
+            [void]$response.EnsureSuccessStatusCode()
             $finalUri = $response.RequestMessage.RequestUri
             if ($null -eq $finalUri -or
                 $finalUri.Scheme -cne [Uri]::UriSchemeHttps) {
@@ -497,8 +497,12 @@ function Get-UpdateArtifactPaths {
 function Update-ObservedArtifacts {
     param(
         [Parameter(Mandatory)][string]$TemporaryDirectory,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts
     )
 
     foreach ($path in @(Get-UpdateArtifactPaths -TemporaryDirectory $TemporaryDirectory)) {
@@ -562,8 +566,12 @@ function Wait-ForUpdateDialogAndInvoke {
         [Parameter(Mandatory)]$SourceVersion,
         [Parameter(Mandatory)]$TargetVersion,
         [Parameter(Mandatory)][string]$TemporaryDirectory,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts
     )
 
     Add-Type -AssemblyName UIAutomationClient
@@ -667,7 +675,7 @@ function Stop-OwnedGamProcesses {
     foreach ($process in @(Get-OwnedGamProcesses -InstallDirectory $InstallDirectory)) {
         try {
             $process.Kill($true)
-            $process.WaitForExit(15000)
+            [void]$process.WaitForExit(15000)
         }
         catch {
             throw "Could not stop owned GAM process $($process.Id): $($_.Exception.Message)"
@@ -679,8 +687,12 @@ function Wait-ForSourceExit {
     param(
         [Parameter(Mandatory)][System.Diagnostics.Process]$SourceProcess,
         [Parameter(Mandatory)][string]$TemporaryDirectory,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts
     )
 
     $deadline = [DateTime]::UtcNow + $script:UpdateTimeout
@@ -705,8 +717,12 @@ function Wait-ForUpdatedRelaunch {
         [Parameter(Mandatory)][int]$OldProcessId,
         [Parameter(Mandatory)]$TargetVersion,
         [Parameter(Mandatory)][string]$TemporaryDirectory,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts
     )
 
     $deadline = [DateTime]::UtcNow + $script:UpdateTimeout
@@ -814,8 +830,12 @@ function Find-AutomationWindow {
 function Wait-ForUpdaterArtifactsRemoved {
     param(
         [Parameter(Mandatory)][string]$TemporaryDirectory,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
-        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$BaselineArtifacts,
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts
     )
 
     $deadline = [DateTime]::UtcNow + [TimeSpan]::FromMinutes(2)
@@ -844,7 +864,10 @@ function Wait-ForUpdaterArtifactsRemoved {
 }
 
 function Stop-ProcessesReferencingArtifacts {
-    param([Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$ObservedArtifacts)
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.HashSet[string]]$ObservedArtifacts)
 
     if ($ObservedArtifacts.Count -eq 0) {
         return
@@ -868,7 +891,7 @@ function Stop-ProcessesReferencingArtifacts {
         try {
             $process = Get-Process -Id ([int]$item.ProcessId) -ErrorAction Stop
             $process.Kill($true)
-            $process.WaitForExit(15000)
+            [void]$process.WaitForExit(15000)
         }
         catch {
             Write-Warning "Could not stop owned updater process $($item.ProcessId): $($_.Exception.Message)"

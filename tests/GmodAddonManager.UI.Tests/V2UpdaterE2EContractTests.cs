@@ -113,6 +113,31 @@ public sealed class V2UpdaterE2EContractTests
         Assert.Contains("Remove-OwnedDirectory", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EmptyUpdaterArtifactSetsAreAcceptedAtEveryFunctionBoundary()
+    {
+        var script = File.ReadAllText(FindRepositoryFile(
+            "scripts",
+            "test-v2-updater-e2e.ps1"));
+        const string artifactParameterPattern =
+            @"\[System\.Collections\.Generic\.HashSet\[string\]\]\$(?:Baseline|Observed)Artifacts\b";
+        const string emptyCollectionParameterPattern =
+            @"\[Parameter\(Mandatory\)\]\s*\[AllowEmptyCollection\(\)\]\s*" +
+            artifactParameterPattern;
+
+        var artifactParameters = Regex.Matches(
+            script,
+            artifactParameterPattern,
+            RegexOptions.CultureInvariant);
+        var emptyCollectionParameters = Regex.Matches(
+            script,
+            emptyCollectionParameterPattern,
+            RegexOptions.CultureInvariant);
+
+        Assert.NotEmpty(artifactParameters);
+        Assert.Equal(artifactParameters.Count, emptyCollectionParameters.Count);
+    }
+
     private static string FindRepositoryFile(
         params string[] segments)
     {
