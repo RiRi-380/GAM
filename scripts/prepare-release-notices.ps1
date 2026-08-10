@@ -20,6 +20,7 @@ if (-not (Test-Path -LiteralPath $resolvedPublishDirectory -PathType Container))
 
 $noticeFileNames = @(
     "LICENSE",
+    "NOTICE",
     "THIRD-PARTY-NOTICES.txt",
     "MICROSOFT-DOTNET-LIBRARY-LICENSE.txt",
     "MICROSOFT-DOTNET-THIRD-PARTY-NOTICES.txt"

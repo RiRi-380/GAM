@@ -31,6 +31,24 @@ public sealed class ReleasePackagingContractTests
     }
 
     [Fact]
+    public void ReleaseNoticesIncludeProjectAttributionAndRequireCanonicalGplv3()
+    {
+        var prepareNotices = ReadRepositoryFile2("scripts", "prepare-release-notices.ps1");
+        var verifyNotices = ReadRepositoryFile2("scripts", "verify-release-notices.ps1");
+
+        Assert.Contains("\"NOTICE\"", prepareNotices, StringComparison.Ordinal);
+        Assert.Contains("\"NOTICE\"", verifyNotices, StringComparison.Ordinal);
+        Assert.Contains(
+            "8B1BA204BB69A0ADE2BFCF65EF294A920F6BB361B317DBA43C7EF29D96332B9B",
+            verifyNotices,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Published notice differs from repository source",
+            verifyNotices,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InstalledAndPortableEntryPointRemainsGmodAddonManagerUiExe()
     {
         var localBuild = ReadRepositoryFile("build-release.ps1");

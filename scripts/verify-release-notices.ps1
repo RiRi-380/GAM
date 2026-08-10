@@ -29,6 +29,7 @@ function Assert-File([string]$Path, [string]$Description) {
 
 $noticeFileNames = @(
     "LICENSE",
+    "NOTICE",
     "THIRD-PARTY-NOTICES.txt",
     "MICROSOFT-DOTNET-LIBRARY-LICENSE.txt",
     "MICROSOFT-DOTNET-THIRD-PARTY-NOTICES.txt"
@@ -36,6 +37,26 @@ $noticeFileNames = @(
 
 foreach ($fileName in $noticeFileNames) {
     Assert-File (Join-Path $repositoryRoot $fileName) "Repository notice file"
+}
+
+$licensePath = Join-Path $repositoryRoot "LICENSE"
+$licenseText = Get-Content -LiteralPath $licensePath -Raw -Encoding UTF8
+$normalizedLicenseText = $licenseText.Replace("`r`n", "`n").TrimEnd([char[]]"`r`n")
+$licenseBytes = [System.Text.Encoding]::UTF8.GetBytes($normalizedLicenseText)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $normalizedLicenseHash = (
+        [BitConverter]::ToString($sha256.ComputeHash($licenseBytes))).Replace("-", "")
+} finally {
+    $sha256.Dispose()
+}
+$expectedNormalizedGplV3Hash =
+    "8B1BA204BB69A0ADE2BFCF65EF294A920F6BB361B317DBA43C7EF29D96332B9B"
+if ($normalizedLicenseHash -ne $expectedNormalizedGplV3Hash) {
+    throw (
+        "LICENSE must contain only the unmodified GNU GPL v3 text " +
+        "(normalized SHA-256 mismatch: $normalizedLicenseHash)."
+    )
 }
 
 $thirdPartyNoticesPath = Join-Path $repositoryRoot "THIRD-PARTY-NOTICES.txt"

@@ -7,7 +7,7 @@
 - [ ] リポジトリ内に成果物が残っていない（例: publish/, publish-portable/, dist/, GAM-Portable-*.zip, *.log）。
 - [ ] Steamworks 関連ファイルが含まれていない（steam_api64.dll / steam_appid.txt）。
 - [ ] README.md が UTF-8 として正しく表示される。
-- [ ] LICENSE がルートに存在する。
+- [ ] LICENSE と NOTICE がルートに存在する。
 - [ ] THIRD-PARTY-NOTICES.txt と Microsoft .NET のlicense/noticeがルートに存在する。
 - [ ] docs/dependencies.md が最新（NuGet 依存が全て記載）。
 - [ ] 更新チェックの既定リポジトリが正しい（UpdateService の DefaultGithubRepo）。
@@ -39,8 +39,8 @@
 
 ## 配布物の内容確認
 
-- [ ] ZIP に LICENSE が含まれている。
-- [ ] ZIP に THIRD-PARTY-NOTICES.txt、MICROSOFT-DOTNET-LIBRARY-LICENSE.txt、MICROSOFT-DOTNET-THIRD-PARTY-NOTICES.txt、DISTRIBUTION-LICENSES.txt が含まれている。
+- [ ] Portable ZIP とインストーラに LICENSE と NOTICE が含まれている。
+- [ ] Portable ZIP とインストーラに THIRD-PARTY-NOTICES.txt、MICROSOFT-DOTNET-LIBRARY-LICENSE.txt、MICROSOFT-DOTNET-THIRD-PARTY-NOTICES.txt、DISTRIBUTION-LICENSES.txt が含まれている。
 - [ ] `scripts/verify-release-notices.ps1` がproduction UIのexact package inventoryとpublish内容を検証して成功する。
 - [ ] publish/ZIP/インストーラはself-containedの複数ファイル構成で、`GmodAddonManager.UI.exe` と同階層のDLLを欠落させていない。
 - [ ] Release publishで `PublishSingleFile=false` を指定し、`IncludeNativeLibrariesForSelfExtract` を使用していない（起動前の `%TEMP%\.net` 展開を避ける）。

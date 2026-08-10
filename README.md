@@ -129,7 +129,7 @@ GAM/
 ```
 
 ## ライセンス
-GNU General Public License v3.0 - see `LICENSE`
+GNU General Public License v3.0 - see [LICENSE](LICENSE). 製品名と著作権表示は [NOTICE](NOTICE) を参照してください。
 
 ## コントリビュート
 Issue / Pull Request を歓迎します。
