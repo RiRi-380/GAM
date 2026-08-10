@@ -76,4 +76,3 @@
 ## トラブルが出た場合
 
 - [ ] `build-release.ps1` と `installer/setup.iss` の設定を確認。
-- [ ] `docs/STEAMWORKS_INTEGRATION.md` に反する配布物がないか再確認。
