@@ -87,7 +87,9 @@ public sealed class V2UpdaterE2EContractTests
             "scripts",
             "test-v2-updater-e2e.ps1"));
 
-        Assert.Contains("[Parameter(Mandatory)]\n    [string]$ToVersion", script, StringComparison.Ordinal);
+        Assert.Matches(
+            @"\[Parameter\(Mandatory\)\]\r?\n\s*\[string\]\$ToVersion",
+            script);
         Assert.DoesNotContain("ExpectedSourceSetupLength", script, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpectedSourceSetupSha256", script, StringComparison.Ordinal);
         Assert.Contains("releases/tags/$($SourceVersion.Tag)", script, StringComparison.Ordinal);
