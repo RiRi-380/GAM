@@ -22,15 +22,13 @@ public partial class AssetListView : UserControl
     private const double InertiaFriction = 0.88;
     private const double InertiaStopThreshold = 0.2;
     private const double MaxInertiaVelocity = 1800;
-    private const double HoldMoveTolerance = 7;
-    private static readonly TimeSpan ReorderHoldDuration = TimeSpan.FromMilliseconds(360);
+    private const double ReorderDragThreshold = 7;
 
     private ScrollViewer? assetScrollViewer;
     private ScrollViewer? breadcrumbScrollViewer;
     private AssetListViewModel? breadcrumbViewModel;
     private Border? insertionMarker;
     private DispatcherTimer? inertiaTimer;
-    private DispatcherTimer? reorderHoldTimer;
     private double scrollVelocity;
     private Border? pressedCard;
     private AssetListEntryViewModel? pressedEntry;
@@ -69,7 +67,6 @@ public partial class AssetListView : UserControl
         AttachBreadcrumbViewModel(DataContext as AssetListViewModel);
         ScheduleBreadcrumbScrollToEnd();
         EnsureInertiaTimer();
-        EnsureReorderHoldTimer();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -87,12 +84,6 @@ public partial class AssetListView : UserControl
             inertiaTimer.Tick -= OnInertiaTick;
             inertiaTimer = null;
         }
-        if (reorderHoldTimer != null)
-        {
-            reorderHoldTimer.Tick -= OnReorderHoldElapsed;
-            reorderHoldTimer = null;
-        }
-
         insertionMarker = null;
         breadcrumbScrollViewer = null;
         assetScrollViewer = null;
@@ -224,12 +215,6 @@ public partial class AssetListView : UserControl
         {
             listViewModel.SelectedAsset = entry.Asset;
         }
-
-        if (entry.CanReorder)
-        {
-            EnsureReorderHoldTimer();
-            reorderHoldTimer?.Start();
-        }
     }
 
     private void OnEntryPointerMoved(object? sender, PointerEventArgs e)
@@ -243,12 +228,13 @@ public partial class AssetListView : UserControl
         if (!isDragging)
         {
             var distance = current - pressPoint;
-            if (Math.Abs(distance.X) > HoldMoveTolerance ||
-                Math.Abs(distance.Y) > HoldMoveTolerance)
+            if (!pressedEntry.CanReorder ||
+                !HasExceededReorderDragThreshold(distance.X, distance.Y))
             {
-                reorderHoldTimer?.Stop();
+                return;
             }
-            return;
+
+            BeginReorderDrag();
         }
 
         UpdateDragTarget(e);
@@ -387,23 +373,14 @@ public partial class AssetListView : UserControl
         e.Handled = true;
     }
 
-    private void EnsureReorderHoldTimer()
+    internal static bool HasExceededReorderDragThreshold(double deltaX, double deltaY)
     {
-        if (reorderHoldTimer != null)
-        {
-            return;
-        }
-
-        reorderHoldTimer = new DispatcherTimer(DispatcherPriority.Input)
-        {
-            Interval = ReorderHoldDuration
-        };
-        reorderHoldTimer.Tick += OnReorderHoldElapsed;
+        return Math.Abs(deltaX) > ReorderDragThreshold ||
+               Math.Abs(deltaY) > ReorderDragThreshold;
     }
 
-    private void OnReorderHoldElapsed(object? sender, EventArgs e)
+    private void BeginReorderDrag()
     {
-        reorderHoldTimer?.Stop();
         if (pressedCard == null || pressedEntry?.CanReorder != true)
         {
             return;
@@ -577,7 +554,6 @@ public partial class AssetListView : UserControl
 
     private void ResetReorderGesture(bool releaseCapture)
     {
-        reorderHoldTimer?.Stop();
         if (pressedCard != null)
         {
             pressedCard.Classes.Remove("dragging");

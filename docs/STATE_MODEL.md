@@ -49,7 +49,7 @@ ON = 適用されるExcluded Assetが一つもない
 - Group内で新しく作成するAssetは、既存の子孫Assetが一様ならその現在状態を引き継ぎます。空またはMixedの場合は、Groupで最後に一括指定した`DefaultChildState`を引き継ぎます。既存AssetやGroupを別のGroupへ移すだけでは、その子孫Assetの状態を暗黙に書き換えません。
 - Group削除時は、直下のAsset / 子Groupを状態不変のまま親containerへ戻す安全な既定動作と、Groupのサブツリーをまとめて削除する動作を明示選択します。後者も一回の保存・runtime reconcile・Undoとしてatomicに扱い、Steam購読やAddon本体は削除しません。
 - rootと各Group内の表示順はfavorite / normalの帯を保ち、通常AssetとAsset Groupを分断せず同じ手動順序へ並べます。rootだけは固定System Asset帯がその前にあります。
-- 長押しdragによる並び替えは同じcontainer・同じ帯の中だけで行い、固定System Assetや帯境界は越えません。favoriteの切替は対象を対応する帯へ移します。
+- カードを直接dragする並び替えは同じcontainer・同じ帯の中だけで行い、固定System Assetや帯境界は越えません。favoriteの切替は対象を対応する帯へ移します。
 
 ## GMod Disabled Addons
 

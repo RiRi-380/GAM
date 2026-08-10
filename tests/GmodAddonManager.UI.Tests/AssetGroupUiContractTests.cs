@@ -1,4 +1,10 @@
 using System.Xml.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Headless.XUnit;
+using Avalonia.Input;
+using Avalonia.VisualTree;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
 using GmodAddonManager.UI.Models;
@@ -529,7 +535,7 @@ public sealed class AssetGroupUiContractTests : IDisposable
     }
 
     [Fact]
-    public void ListWiresBreadcrumbNavigationCollapseAndLongPressReorderFeedback()
+    public void ListWiresBreadcrumbNavigationCollapseAndDirectDragReorderFeedback()
     {
         var document = LoadXaml("AssetListView.axaml");
         var xaml = document.ToString();
@@ -556,7 +562,11 @@ public sealed class AssetGroupUiContractTests : IDisposable
         Assert.Contains("ReturnToParent", viewModel, StringComparison.Ordinal);
         Assert.Contains("OnToggleGmodDisabledCollapse", xaml, StringComparison.Ordinal);
         Assert.Contains("InsertionMarker", xaml, StringComparison.Ordinal);
-        Assert.Contains("ReorderHoldDuration", code, StringComparison.Ordinal);
+        Assert.Contains("HasExceededReorderDragThreshold", code, StringComparison.Ordinal);
+        Assert.Contains("BeginReorderDrag", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReorderHoldDuration", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("reorderHoldTimer", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("OnReorderHoldElapsed", code, StringComparison.Ordinal);
         Assert.Contains("GetClampedReorderTargetIndex", viewModel, StringComparison.Ordinal);
         Assert.Contains("CollapseGmodDisabledAddons", viewModel, StringComparison.Ordinal);
         Assert.Equal("Auto,Auto", (string?)headerLayout.Attribute("RowDefinitions"));
@@ -576,6 +586,132 @@ public sealed class AssetGroupUiContractTests : IDisposable
             "src", "GmodAddonManager.UI", "Views", "MainWindow.axaml");
         Assert.Contains("AssetListViewModel.IsCurrentGroupEmptyVisible", mainWindow, StringComparison.Ordinal);
         Assert.Contains("AssetListViewModel.CurrentGroupEmptyText", mainWindow, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, 0, false)]
+    [InlineData(7, 0, false)]
+    [InlineData(0, -7, false)]
+    [InlineData(7.01, 0, true)]
+    [InlineData(0, -7.01, true)]
+    public void DirectDragStartsOnlyAfterPointerMovementExceedsThreshold(
+        double deltaX,
+        double deltaY,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            Views.AssetListView.HasExceededReorderDragThreshold(deltaX, deltaY));
+    }
+
+    [AvaloniaFact]
+    public async Task PointerDragReordersCustomCardsWithoutAHoldDelay()
+    {
+        using var manager = await CreateManagerAsync();
+        var configuration = manager.GetConfiguration();
+        configuration.Assets.AddRange(
+        [
+            new Asset("First") { Id = "drag-first", SortOrder = 0 },
+            new Asset("Second") { Id = "drag-second", SortOrder = 1 }
+        ]);
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings());
+        viewModel.LoadAssets();
+
+        var view = new Views.AssetListView { DataContext = viewModel };
+        var window = new Window
+        {
+            Content = view,
+            Width = 420,
+            Height = 720
+        };
+        window.Show();
+        try
+        {
+            var cards = view.GetVisualDescendants()
+                .OfType<Border>()
+                .Where(border => border.Classes.Contains("assetEntryCard"))
+                .Where(border => border.DataContext is AssetListEntryViewModel)
+                .ToDictionary(
+                    border => ((AssetListEntryViewModel)border.DataContext!).Id,
+                    StringComparer.Ordinal);
+            var first = cards["drag-first"];
+            var second = cards["drag-second"];
+            var start = first.TranslatePoint(
+                new Point(Math.Min(120, first.Bounds.Width / 2), 18),
+                window)!.Value;
+            var end = second.TranslatePoint(
+                new Point(Math.Min(120, second.Bounds.Width / 2), second.Bounds.Height - 3),
+                window)!.Value;
+
+            window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+            window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
+
+            await WaitUntilAsync(() =>
+                viewModel.GetReorderableEntries().Select(entry => entry.Id)
+                    .SequenceEqual(["drag-second", "drag-first"]));
+            Assert.Equal(
+                ["drag-second", "drag-first"],
+                viewModel.GetReorderableEntries().Select(entry => entry.Id));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SmallPointerMovementRemainsAClickAndOpensTheGroup()
+    {
+        using var manager = await CreateManagerAsync();
+        manager.GetConfiguration().AssetGroups.Add(new AssetGroup("Open me")
+        {
+            Id = "click-group",
+            SortOrder = 0
+        });
+        using var viewModel = new AssetListViewModel(
+            manager,
+            null!,
+            null!,
+            new AppSettings());
+        viewModel.LoadAssets();
+
+        var view = new Views.AssetListView { DataContext = viewModel };
+        var window = new Window
+        {
+            Content = view,
+            Width = 420,
+            Height = 720
+        };
+        window.Show();
+        try
+        {
+            var card = view.GetVisualDescendants()
+                .OfType<Border>()
+                .Single(border =>
+                    border.Classes.Contains("assetEntryCard") &&
+                    border.DataContext is AssetListEntryViewModel entry &&
+                    entry.Id == "click-group");
+            var start = card.TranslatePoint(
+                new Point(Math.Min(120, card.Bounds.Width / 2), 18),
+                window)!.Value;
+            var end = start + new Vector(5, 0);
+
+            window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+            window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
+
+            Assert.True(viewModel.IsInsideGroup);
+            Assert.Equal("Open me", viewModel.CurrentHeader);
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [Fact]
@@ -666,6 +802,15 @@ public sealed class AssetGroupUiContractTests : IDisposable
         });
         await manager.InitializeAsync();
         return manager;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!predicate() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
     }
 
     private static XDocument LoadXaml(string fileName)
