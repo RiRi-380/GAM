@@ -341,7 +341,7 @@ public sealed partial class ReleaseHardeningContractTests
     }
 
     [Fact]
-    public void ReleaseBaselineIsReplacementVersionTwoPointZeroPointZeroAndDocumented()
+    public void ReleaseVersionTwoPointOnePointZeroHasConsistentMetadataAndNotes()
     {
         var props = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));
         var version = props.Descendants("Version").Single().Value;
@@ -350,13 +350,13 @@ public sealed partial class ReleaseHardeningContractTests
         var informationalVersion = props.Descendants("InformationalVersion").Single().Value;
         var localBuild = ReadRepositoryFile("build-release.ps1");
 
-        Assert.Equal("2.0.0", version);
-        Assert.Equal("2.0.0.0", fileVersion);
-        Assert.Equal("2.0.0.0", assemblyVersion);
-        Assert.Equal("v2.0.0", informationalVersion);
-        Assert.Contains("[string]$Version = \"v2.0.0\"", localBuild, StringComparison.Ordinal);
+        Assert.Equal("2.1.0", version);
+        Assert.Equal("2.1.0.0", fileVersion);
+        Assert.Equal("2.1.0.0", assemblyVersion);
+        Assert.Equal("v2.1.0", informationalVersion);
+        Assert.Contains("[string]$Version = \"v2.1.0\"", localBuild, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(RepositoryRoot, "SECURITY.md")));
-        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.0.0.md")));
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.1.0.md")));
     }
 
     private static string NormalizeNewlines(string value) =>

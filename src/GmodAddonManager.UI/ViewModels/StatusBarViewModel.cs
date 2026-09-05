@@ -12,6 +12,7 @@ internal interface IStatusBarRuntimeSource
     bool IsGmodRunning { get; }
 
     int PendingChangesCount { get; }
+    bool IsApplyingChanges { get; }
 
     event EventHandler? GmodStarted;
 
@@ -20,6 +21,7 @@ internal interface IStatusBarRuntimeSource
     event EventHandler? ChangeApplied;
 
     event EventHandler? ChangeFailed;
+    event EventHandler? ApplyStateChanged;
 }
 
 internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposable
@@ -41,11 +43,13 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
         processWatcher.GmodStopped += OnGmodStopped;
         pendingChangeManager.ChangeApplied += OnChangeApplied;
         pendingChangeManager.ChangeFailed += OnChangeFailed;
+        pendingChangeManager.ApplyStateChanged += OnApplyStateChanged;
     }
 
     public bool IsGmodRunning => processWatcher.IsGmodRunning;
 
     public int PendingChangesCount => pendingChangeManager.GetPendingChangeCount();
+    public bool IsApplyingChanges => pendingChangeManager.IsApplyingChanges;
 
     public event EventHandler? GmodStarted;
 
@@ -54,6 +58,7 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
     public event EventHandler? ChangeApplied;
 
     public event EventHandler? ChangeFailed;
+    public event EventHandler? ApplyStateChanged;
 
     private void OnGmodStarted(object? sender, ProcessEventArgs e) =>
         GmodStarted?.Invoke(this, EventArgs.Empty);
@@ -67,6 +72,9 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
     private void OnChangeFailed(object? sender, ChangeFailedEventArgs e) =>
         ChangeFailed?.Invoke(this, EventArgs.Empty);
 
+    private void OnApplyStateChanged(object? sender, EventArgs e) =>
+        ApplyStateChanged?.Invoke(this, EventArgs.Empty);
+
     public void Dispose()
     {
         if (disposed)
@@ -79,6 +87,7 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
         processWatcher.GmodStopped -= OnGmodStopped;
         pendingChangeManager.ChangeApplied -= OnChangeApplied;
         pendingChangeManager.ChangeFailed -= OnChangeFailed;
+        pendingChangeManager.ApplyStateChanged -= OnApplyStateChanged;
     }
 }
 
@@ -92,6 +101,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
     private int pendingChangesCount;
     private string statusMessage = "";
     private bool isApplyingChanges;
+    private bool lastApplyFailed;
     private string temporaryMessage = "";
     private StatusMessageType temporaryMessageType = StatusMessageType.Info;
     private DispatcherTimer? temporaryMessageTimer;
@@ -126,6 +136,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         runtimeSource.GmodStopped += OnGmodStopped;
         runtimeSource.ChangeApplied += OnChangeApplied;
         runtimeSource.ChangeFailed += OnChangeFailed;
+        runtimeSource.ApplyStateChanged += OnApplyStateChanged;
 
         statusMessage = L.Get("Status.Ready");
         RequestStatusUpdate();
@@ -207,19 +218,27 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
 
     private void OnGmodStarted(object? sender, EventArgs e) => RequestStatusUpdate();
 
-    private void OnGmodStopped(object? sender, EventArgs e)
+    private void OnGmodStopped(object? sender, EventArgs e) => RequestStatusUpdate();
+
+    private void OnApplyStateChanged(object? sender, EventArgs e) => RunOnUiThread(() =>
     {
-        RunOnUiThread(() =>
-        {
-            IsApplyingChanges = true;
-            StatusMessage = L.Get("Status.ApplyingChanges");
-            UpdateStatusCore();
-        });
-    }
+        if (runtimeSource.IsApplyingChanges) lastApplyFailed = false;
+        UpdateStatusCore();
+    });
 
-    private void OnChangeApplied(object? sender, EventArgs e) => RequestStatusUpdate();
+    private void OnChangeApplied(object? sender, EventArgs e) => RunOnUiThread(() =>
+    {
+        lastApplyFailed = false;
+        IsApplyingChanges = false;
+        UpdateStatusCore();
+    });
 
-    private void OnChangeFailed(object? sender, EventArgs e) => RequestStatusUpdate();
+    private void OnChangeFailed(object? sender, EventArgs e) => RunOnUiThread(() =>
+    {
+        lastApplyFailed = true;
+        IsApplyingChanges = false;
+        UpdateStatusCore();
+    });
 
     private void RequestStatusUpdate() => RunOnUiThread(UpdateStatusCore);
 
@@ -251,6 +270,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         {
             IsGmodRunning = runtimeSource.IsGmodRunning;
             PendingChangesCount = runtimeSource.PendingChangesCount;
+            IsApplyingChanges = runtimeSource.IsApplyingChanges && !IsGmodRunning && !lastApplyFailed;
 
             if (IsApplyingChanges && !IsGmodRunning && PendingChangesCount > 0)
             {
@@ -258,17 +278,20 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
             }
             else if (IsGmodRunning)
             {
+                IsApplyingChanges = false;
                 StatusMessage = PendingChangesCount > 0
                     ? L.Format("Status.GmodRunningWithChanges", PendingChangesCount)
                     : L.Get("Status.GmodRunning");
             }
             else if (PendingChangesCount > 0)
             {
-                StatusMessage = L.Format("Status.PendingChanges", PendingChangesCount);
+                StatusMessage = L.Format(
+                    lastApplyFailed ? "Status.ApplyFailedWithPending" : "Status.PendingChanges",
+                    PendingChangesCount);
             }
             else
             {
-                StatusMessage = L.Get("Status.Ready");
+                StatusMessage = L.Get(lastApplyFailed ? "Status.ApplyFailed" : "Status.Ready");
                 IsApplyingChanges = false;
             }
         }
@@ -337,6 +360,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
         runtimeSource.GmodStopped -= OnGmodStopped;
         runtimeSource.ChangeApplied -= OnChangeApplied;
         runtimeSource.ChangeFailed -= OnChangeFailed;
+        runtimeSource.ApplyStateChanged -= OnApplyStateChanged;
         ownedRuntimeSource?.Dispose();
 
         void StopTimers()

@@ -22,6 +22,7 @@ public partial class SettingsDialog : Window
     private readonly IDialogService dialogService;
     private readonly AddonManager? addonManager;
     private AppSettings? currentSettings;
+    private bool collectingDiagnostics;
     
     public event EventHandler? ResetManagerRequested;
     public event EventHandler? PathHealthRequested;
@@ -306,6 +307,29 @@ public partial class SettingsDialog : Window
         return languageChanged
             ? L.Get("Settings.LanguageRestartMessage")
             : L.Get("Settings.LocalAddonDiscoveryRestartMessage");
+    }
+
+    private async void OnDiagnosticReport(object? sender, RoutedEventArgs e)
+    {
+        if (collectingDiagnostics) return;
+        collectingDiagnostics = true;
+        DiagnosticReportButton.IsEnabled = false;
+        try
+        {
+            var report = await DiagnosticReportService.CreateReportAsync(addonManager);
+            if (IsVisible)
+                await new DiagnosticReportDialog(report).ShowDialog(this);
+        }
+        catch (Exception)
+        {
+            if (IsVisible)
+                await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Diagnostics.CollectionFailed"));
+        }
+        finally
+        {
+            collectingDiagnostics = false;
+            DiagnosticReportButton.IsEnabled = true;
+        }
     }
 
     private async void OnOpenLogFolder(object? sender, RoutedEventArgs e)

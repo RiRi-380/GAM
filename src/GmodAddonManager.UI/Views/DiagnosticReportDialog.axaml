@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        x:Class="GmodAddonManager.UI.Views.DiagnosticReportDialog"
+        Title="{loc:Localize Diagnostics.Title}"
+        Width="760" Height="640" MinWidth="480" MinHeight="400"
+        CanResize="True" ShowInTaskbar="False" WindowStartupLocation="CenterOwner">
+    <Grid Margin="24" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
+        <TextBlock Text="{loc:Localize Diagnostics.Privacy}" TextWrapping="Wrap"/>
+        <TextBox Grid.Row="1" x:Name="ReportTextBox" IsReadOnly="True"
+                 AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Consolas, monospace"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+        <TextBlock Grid.Row="2" x:Name="ResultText" TextWrapping="Wrap" IsVisible="False"/>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12">
+            <Button x:Name="CloseButton" Content="{loc:Localize Diagnostics.Close}" Click="OnClose"/>
+            <Button x:Name="SaveButton" Content="{loc:Localize Diagnostics.Save}" Click="OnSave"/>
+        </StackPanel>
+    </Grid>
+</Window>

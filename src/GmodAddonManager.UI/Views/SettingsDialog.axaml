@@ -204,6 +204,10 @@
                                 <TextBlock Text="{loc:Localize Settings.OpenLogFolder}"/>
                             </StackPanel>
                         </Button>
+                        <Button Name="DiagnosticReportButton" Click="OnDiagnosticReport" HorizontalAlignment="Left"
+                                Content="{loc:Localize Diagnostics.Open}"/>
+                        <TextBlock Text="{loc:Localize Diagnostics.Description}" FontSize="12"
+                                   Opacity="0.7" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
                 

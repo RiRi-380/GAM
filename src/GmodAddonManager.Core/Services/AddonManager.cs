@@ -23,7 +23,7 @@ namespace GmodAddonManager.Core.Services
         Hard
     }
 
-    public class AddonManager : IDisposable
+    public partial class AddonManager : IDisposable
     {
         private readonly string workshopPath;
         private readonly string managerPath;
@@ -122,6 +122,7 @@ namespace GmodAddonManager.Core.Services
         public bool IsExperimentContextActive => eventLogger.IsExperimentContextActive;
         public Func<bool?>? GmodRunningProvider { get; set; }
         public Func<int?>? PendingChangeCountProvider { get; set; }
+        public Func<bool?>? PendingApplyInProgressProvider { get; set; }
         public Action? QueueRuntimeApplyProvider
         {
             get => queueRuntimeApplyProvider;

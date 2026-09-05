@@ -38,6 +38,10 @@ namespace GmodAddonManager.Core.Services
 
         public event EventHandler<ChangeAppliedEventArgs>? ChangeApplied;
         public event EventHandler<ChangeFailedEventArgs>? ChangeFailed;
+        public event EventHandler? ApplyStateChanged;
+
+        private int applyInProgress;
+        public bool IsApplyingChanges => Volatile.Read(ref applyInProgress) != 0;
 
         public PendingChangeManager(
             AddonManager addonManager,
@@ -51,6 +55,7 @@ namespace GmodAddonManager.Core.Services
             LoadPendingChanges();
 
             addonManager.PendingChangeCountProvider = () => GetPendingChangeCount();
+            addonManager.PendingApplyInProgressProvider = () => IsApplyingChanges;
             addonManager.QueueRuntimeApplyTrackedProvider = QueueApplyStatesTracked;
             addonManager.ClearRuntimeApplyIfGenerationProvider =
                 TryClearApplyMarkerIfGeneration;
@@ -194,6 +199,8 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
+                Volatile.Write(ref applyInProgress, 1);
+                ApplyStateChanged?.Invoke(this, EventArgs.Empty);
                 if (BeforeRuntimeApplyAsync != null)
                 {
                     await BeforeRuntimeApplyAsync();
@@ -305,6 +312,11 @@ namespace GmodAddonManager.Core.Services
                     ex,
                     "PendingChangeManager.ApplyPendingChangesAsync",
                     ErrorSeverity.Warning);
+            }
+            finally
+            {
+                Volatile.Write(ref applyInProgress, 0);
+                ApplyStateChanged?.Invoke(this, EventArgs.Empty);
             }
         }
 
