@@ -55,12 +55,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         this.pendingChangeManager = pendingChangeManager;
         this.undoDialogs = undoDialogs ?? new DialogService();
 
-        var settings = initialSettings ?? AppSettings.Load();
-        AssetItemViewModel.ApplyGlobalSettings(settings);
+        if (initialSettings == null)
+        {
+            AssetItemViewModel.ApplyGlobalSettings(AppSettings.Load());
+        }
+        else
+        {
+            AssetItemViewModel.ApplyGlobalSettings(initialSettings);
+        }
 
         // ViewModel縺ｮ蛻晄悄蛹・
         assetListViewModel = new AssetListViewModel(
-            addonManager, pendingChangeManager, processWatcher, settings);
+            addonManager, pendingChangeManager, processWatcher, initialSettings);
         addonGridViewModel = new AddonGridViewModel(addonManager, pendingChangeManager, processWatcher);
         statusBarViewModel = new StatusBarViewModel(
             processWatcher, pendingChangeManager);
