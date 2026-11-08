@@ -385,6 +385,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         !IsSystem || IsSubscribeAsset || IsGmodDisabledAsset;
     public bool CanFavorite => !IsSystem;
     public bool IsSmart => asset.IsSmart;
+    public bool NeedsMigrationReview => asset.NeedsMigrationReview;
     public bool IsSmartAutomationFrozen =>
         asset.SmartAutomationState?.Status ==
         SmartAssetAutomationStatus.FrozenInvalidRule;
@@ -420,8 +421,8 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
     public string SmartAutomationDescription => IsSmartAutomationFrozen
         ? L.Get("SmartAsset.Status.FrozenDescription")
         : L.Get("SmartAsset.Status.ActiveDescription");
-    public string EnabledStateLabel => IsSubscribeAsset ? "ON" : L.Get("AssetList.Enabled");
-    public string DisabledStateLabel => IsSubscribeAsset ? "OFF" : L.Get("AssetList.Disabled");
+    public string EnabledStateLabel => L.Get("AssetList.Enabled");
+    public string DisabledStateLabel => L.Get("AssetList.Disabled");
     public string ExcludedStateLabel => IsSubscribeAsset
         ? L.Get("AssetList.ExcludeAll")
         : L.Get("AssetList.Excluded");
@@ -962,6 +963,7 @@ public class AssetItemViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(AssetActiveTooltip));
         this.RaisePropertyChanged(nameof(VersionDisplay));
         this.RaisePropertyChanged(nameof(IsSmart));
+        this.RaisePropertyChanged(nameof(NeedsMigrationReview));
         this.RaisePropertyChanged(nameof(CanManageVersions));
         this.RaisePropertyChanged(nameof(IncludesUnavailableMembership));
         this.RaisePropertyChanged(nameof(IsSmartAutomationFrozen));

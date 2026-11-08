@@ -118,4 +118,4 @@ v1互換用Release資産:
 - 更新元の上書きとトークンはファイルには保存されません（環境変数のみ）。
 - ダウンロードはHTTPSに限定し、GitHub Releases APIのSHA-256 digestと照合します。一致しないSetupは実行せず、一致しないPortable ZIPも表示・適用しません。
 - 同じversion番号のReleaseを差し替えても自動更新では検出されません。既に同versionを導入した検証環境では、Releaseから手動で再取得してください。
-- 今回削除する旧private `v2.0.0`～`v2.2.0` の導入済み環境は、再構成版 `v2.0.0` が同一versionまたはdowngradeになるため、この条件に該当します。Setup版は再作成した `v2.0.0` のSetupを手動取得し、旧版をアンインストールせずそのまま上書き実行してください。Portable版はGAMを終了し、新しいZIPを展開して旧Portableフォルダーを手動で置き換えてください。どちらも `%APPDATA%\GmodAddonManager` の構成は保持されます。
+- 旧privateテスター版の公開版への移行経緯は、[v2.0.0のリリースノート](releases/v2.0.0.md)を参照してください。

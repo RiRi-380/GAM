@@ -54,6 +54,11 @@ public partial class MainWindow : Window, IDisposable
             : SplitViewDisplayMode.Inline;
         AssetSplitView.OpenPaneLength = layout.AssetPaneWidth;
         AssetPaneToggleButton.IsVisible = layout.UseOverlayPanes;
+        var stackStatus = layout.UseOverlayPanes;
+        Grid.SetRow(AddonStatisticsText, stackStatus ? 1 : 0);
+        Grid.SetColumn(AddonStatisticsText, stackStatus ? 0 : 2);
+        Grid.SetColumnSpan(AddonStatisticsText, stackStatus ? 3 : 1);
+        AddonStatisticsText.MaxWidth = stackStatus ? double.PositiveInfinity : 400;
         AddonGridControl.ApplyResponsiveLayout(layout);
         AddonDetailsPanel.ApplyResponsiveLayout(layout);
 
@@ -67,11 +72,33 @@ public partial class MainWindow : Window, IDisposable
         }
 
         _responsiveLayoutKind = layout.Kind;
+        AssetPaneScrim.IsVisible = layout.UseOverlayPanes && AssetSplitView.IsPaneOpen;
     }
 
     private void OnAssetPaneToggleClick(object? sender, RoutedEventArgs e)
     {
         AssetSplitView.IsPaneOpen = !AssetSplitView.IsPaneOpen;
+        if (AssetSplitView.IsPaneOpen)
+        {
+            AssetPaneContent.Focus();
+        }
+    }
+
+    private void OnAssetPaneScrimPressed(object? sender, PointerPressedEventArgs e)
+    {
+        AssetSplitView.IsPaneOpen = false;
+        e.Handled = true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (!e.Handled && e.Key == Key.Escape && AssetPaneScrim.IsVisible)
+        {
+            AssetSplitView.IsPaneOpen = false;
+            AssetPaneToggleButton.Focus();
+            e.Handled = true;
+        }
     }
 
     private void OnAssetPaneOpening(object? sender, CancelRoutedEventArgs e)
@@ -82,6 +109,7 @@ public partial class MainWindow : Window, IDisposable
         }
 
         RestoreAssetPaneContent();
+        AssetPaneScrim.IsVisible = IsOverlayMode(AssetSplitView.DisplayMode);
     }
 
     private void OnAssetPaneClosed(object? sender, RoutedEventArgs e)
@@ -91,6 +119,7 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
+        AssetPaneScrim.IsVisible = false;
         if (!IsOverlayMode(AssetSplitView.DisplayMode))
         {
             RestoreAssetPaneContent();
@@ -147,6 +176,55 @@ public partial class MainWindow : Window, IDisposable
     private static bool IsOverlayMode(SplitViewDisplayMode displayMode) =>
         displayMode is SplitViewDisplayMode.Overlay or
             SplitViewDisplayMode.CompactOverlay;
+
+    private async void OnRetryPendingChanges(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (DataContext is MainWindowViewModel model)
+            {
+                await model.RetryPendingChangesAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindow.OnRetryPendingChanges", ex);
+            if (DataContext is MainWindowViewModel model)
+            {
+                model.StatusBarViewModel.ShowMessage(L.Get("Status.ApplyFailed"), StatusMessageType.Error);
+            }
+        }
+    }
+
+    private async void OnApplyDiagnostics(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || DataContext is not MainWindowViewModel model)
+        {
+            return;
+        }
+
+        button.IsEnabled = false;
+        try
+        {
+            var report = await model.CreateDiagnosticReportAsync();
+            if (!_isClosed)
+            {
+                await new DiagnosticReportDialog(report).ShowDialog(this);
+            }
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindow.OnApplyDiagnostics", ex);
+            if (!_isClosed)
+            {
+                await new DialogService().ShowErrorAsync(L.Get("Error.Title"), L.Get("Diagnostics.CollectionFailed"));
+            }
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
+    }
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {

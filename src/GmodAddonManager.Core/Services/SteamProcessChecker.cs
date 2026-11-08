@@ -40,11 +40,13 @@ namespace GmodAddonManager.Core.Services
         /// <summary>
         /// Check if Garry's Mod is running
         /// </summary>
-        public static bool IsGmodRunning()
+        public static bool IsGmodRunning() => IsGmodRunning(gmodInstallPath: null);
+
+        public static bool IsGmodRunning(string? gmodInstallPath)
         {
             try
             {
-                return IsAnyProcessRunning(GmodProcessWatcher.IsRecognizedProcessName);
+                return GmodProcessWatcher.GetRunningGmodProcessIds(gmodInstallPath).Count > 0;
             }
             catch
             {

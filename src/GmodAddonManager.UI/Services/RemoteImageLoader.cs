@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
+using GmodAddonManager.Core.Services;
+using SkiaSharp;
 
 namespace GmodAddonManager.UI.Services
 {
@@ -13,7 +15,7 @@ namespace GmodAddonManager.UI.Services
     /// </summary>
     public static class RemoteImageLoader
     {
-        internal const int MaximumDecodedWidth = 256;
+        internal const int MaximumDecodedDimension = 256;
         internal const int MaximumDownloadBytes = 8 * 1024 * 1024;
         private static readonly HttpClient _httpClient = new();
         private static readonly SemaphoreSlim _decodeSemaphore = new(4, 4);
@@ -159,14 +161,45 @@ namespace GmodAddonManager.UI.Services
             }
         }
 
-        private static Bitmap DecodeForAddonCard(Stream stream)
+        private static Bitmap? DecodeForAddonCard(Stream stream) =>
+            DecodeBoundedPreview(stream, MaximumDecodedDimension, MaximumDownloadBytes);
+
+        internal static Bitmap? DecodeBoundedPreview(Stream stream, int previewDimension, long maximumBytes)
         {
-            // Cards render at 150 px. A bounded decode retains enough detail for
-            // high-DPI displays without keeping every 512 px Workshop image in RAM.
-            return Bitmap.DecodeToWidth(
-                stream,
-                MaximumDecodedWidth,
-                BitmapInterpolationMode.MediumQuality);
+            if (stream.Length > maximumBytes)
+            {
+                return null;
+            }
+
+            SKImageInfo dimensions;
+            var start = stream.Position;
+            using (var codec = SKCodec.Create(new SKManagedStream(stream, disposeManagedStream: false)))
+            {
+                if (codec == null)
+                {
+                    return null;
+                }
+                dimensions = codec.Info;
+            }
+
+            var width = dimensions.Width;
+            var height = dimensions.Height;
+            if (width <= 0 || height <= 0 ||
+                Math.Max(width, height) > GamAssetDocumentImageNormalizer.MaximumDimension ||
+                (long)width * height > GamAssetDocumentImageNormalizer.MaximumPixelCount)
+            {
+                return null;
+            }
+
+            stream.Position = start;
+            if (Math.Max(width, height) <= previewDimension)
+            {
+                return new Bitmap(stream);
+            }
+
+            return width >= height
+                ? Bitmap.DecodeToWidth(stream, previewDimension, BitmapInterpolationMode.MediumQuality)
+                : Bitmap.DecodeToHeight(stream, previewDimension, BitmapInterpolationMode.MediumQuality);
         }
     }
 }

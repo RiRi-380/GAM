@@ -1242,7 +1242,8 @@ namespace GmodAddonManager.Core.Services
 
                 if (ApplyAddonStateStoreBulk(
                         targetStates,
-                        allowConflictSupersede: false))
+                        allowConflictSupersede: false,
+                        out _))
                 {
                     foreach (var targetState in targetStates)
                     {
@@ -2352,7 +2353,7 @@ namespace GmodAddonManager.Core.Services
                         if (!string.IsNullOrEmpty(gmodCachePath))
                         {
                             gmaPath = Path.Combine(gmodCachePath, $"{kvp.Key}.gma");
-                            if (HasNonEmptyFile(gmaPath))
+                            if (AddonPayloadValidator.HasGmaHeader(gmaPath))
                             {
                                 addonExists = true;
                             }
@@ -2366,7 +2367,7 @@ namespace GmodAddonManager.Core.Services
                         {
                         var workshopDirPath = Path.Combine(workshopPath, kvp.Key);
                         var workshopGmaPath = Path.Combine(workshopDirPath, $"{kvp.Key}.gma");
-                        if (HasNonEmptyFile(workshopGmaPath))
+                        if (AddonPayloadValidator.HasGmaHeader(workshopGmaPath))
                             {
                                 gmaPath = workshopGmaPath;
                                 addonExists = true;
@@ -2411,7 +2412,7 @@ namespace GmodAddonManager.Core.Services
                         continue;
                     }
 
-                    if (!HasNonEmptyFile(gmaFile))
+                    if (!AddonPayloadValidator.HasGmaHeader(gmaFile))
                     {
                         emptyCachePlaceholderCount++;
                         continue;
@@ -4160,7 +4161,7 @@ namespace GmodAddonManager.Core.Services
             if (!string.IsNullOrWhiteSpace(gmodCachePath))
             {
                 var cacheGma = Path.Combine(gmodCachePath, $"{addonId}.gma");
-                if (HasNonEmptyFile(cacheGma))
+                if (AddonPayloadValidator.HasGmaHeader(cacheGma))
                 {
                     return cacheGma;
                 }
@@ -4734,20 +4735,6 @@ namespace GmodAddonManager.Core.Services
                 ex is System.Security.SecurityException)
             {
                 attributes = default;
-                return false;
-            }
-        }
-
-        private static bool HasNonEmptyFile(string path)
-        {
-            try
-            {
-                return !string.IsNullOrWhiteSpace(path) &&
-                       File.Exists(path) &&
-                       new FileInfo(path).Length > 0;
-            }
-            catch
-            {
                 return false;
             }
         }
@@ -6059,10 +6046,7 @@ namespace GmodAddonManager.Core.Services
         public IReadOnlyDictionary<string, ResolvedAddonState> GetResolvedAddonStates()
         {
             var runtimeTargets = GetRuntimeTargetAddonIds("GetResolvedAddonStates");
-            return runtimeTargets.ToDictionary(
-                addonId => addonId,
-                addonId => assetStateResolver.Resolve(addonId, configuration.Assets, runtimeTargets),
-                StringComparer.Ordinal);
+            return assetStateResolver.ResolveAll(configuration.Assets, runtimeTargets);
         }
 
         public bool? GetActualAddonEnabledState(string addonId)
@@ -6143,21 +6127,10 @@ namespace GmodAddonManager.Core.Services
             IReadOnlyList<Asset> enabledAssets,
             ISet<string> subscribedAddonIds)
         {
-            var states = new Dictionary<string, bool>(StringComparer.Ordinal);
-
-            foreach (var addonId in subscribedAddonIds.OrderBy(id => id, StringComparer.Ordinal))
-            {
-                if (!ShouldIncludeAddonInState(addonId))
-                {
-                    continue;
-                }
-
-                states[addonId] = assetStateResolver
-                    .Resolve(addonId, enabledAssets, subscribedAddonIds)
-                    .DesiredEnabled;
-            }
-
-            return states;
+            return assetStateResolver.ResolveAll(enabledAssets, subscribedAddonIds)
+                .Where(pair => ShouldIncludeAddonInState(pair.Key))
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .ToDictionary(pair => pair.Key, pair => pair.Value.DesiredEnabled, StringComparer.Ordinal);
         }
 
         private HashSet<string> GetRuntimeTargetAddonIds(string operationName)
@@ -6250,7 +6223,7 @@ namespace GmodAddonManager.Core.Services
 
         internal bool IsGmodCurrentlyRunning()
         {
-            return GetGmodRunning() ?? SteamProcessChecker.IsGmodRunning();
+            return GetGmodRunning() ?? SteamProcessChecker.IsGmodRunning(gmodRootPath);
         }
 
         private bool DeferRuntimeApplyIfGmodRunning(
@@ -9665,6 +9638,7 @@ namespace GmodAddonManager.Core.Services
             ThrowIfSmartAssetMembershipOwned(asset);
 
             var previousCurrentVersion = asset.CurrentVersion;
+            var previousHighestVersion = asset.HighestIssuedVersion;
             var snapshot = assetVersionService.CreateSnapshot(asset, note);
             try
             {
@@ -9674,6 +9648,10 @@ namespace GmodAddonManager.Core.Services
             {
                 asset.VersionHistory.Remove(snapshot);
                 asset.CurrentVersion = previousCurrentVersion;
+                if (asset.HighestIssuedVersion == snapshot.Version)
+                {
+                    asset.HighestIssuedVersion = previousHighestVersion;
+                }
                 throw;
             }
             return snapshot;
@@ -11392,8 +11370,10 @@ namespace GmodAddonManager.Core.Services
 
         private bool ApplyAddonStateStoreBulk(
             Dictionary<string, bool> expectedStates,
-            bool allowConflictSupersede)
+            bool allowConflictSupersede,
+            out string? failureCode)
         {
+            failureCode = null;
             if (expectedStates == null || expectedStates.Count == 0)
             {
                 return true;
@@ -11424,7 +11404,8 @@ namespace GmodAddonManager.Core.Services
             return ExecuteJournaledRuntimeWrite(
                 filteredStates,
                 () => gmodAddonStateStore.SetEnabledBulk(filteredStates),
-                "UpdateAddonStates");
+                "UpdateAddonStates",
+                out failureCode);
         }
 
         private bool TryPersistSingleAddonRuntimeState(string addonId, bool enabled, string operationName)
@@ -11448,14 +11429,17 @@ namespace GmodAddonManager.Core.Services
             return ExecuteJournaledRuntimeWrite(
                 target,
                 () => gmodAddonStateStore.SetEnabled(addonId, enabled),
-                operationName);
+                operationName,
+                out _);
         }
 
         private bool ExecuteJournaledRuntimeWrite(
             IReadOnlyDictionary<string, bool> targetStates,
             Func<bool> writeRuntimeState,
-            string operationName)
+            string operationName,
+            out string? failureCode)
         {
+            failureCode = null;
             if (gmodAddonStateStore == null)
             {
                 return false;
@@ -11476,6 +11460,7 @@ namespace GmodAddonManager.Core.Services
 
             if (!beforeSnapshot.IsValidFormat)
             {
+                failureCode = "runtime_state_invalid";
                 errorHandler.HandleWarning(
                     "Refusing to write malformed addonnomount.txt; attribution baseline was not advanced.",
                     operationName);
@@ -11714,6 +11699,7 @@ namespace GmodAddonManager.Core.Services
 
             Exception? updateError = null;
             var runtimeWriteSucceeded = false;
+            string? runtimeWriteFailureCode = null;
             try
             {
                 var progressCurrent = 0;
@@ -11801,7 +11787,8 @@ namespace GmodAddonManager.Core.Services
                 {
                     runtimeWriteSucceeded = ApplyAddonStateStoreBulk(
                         statesToApply,
-                        allowConflictSupersede);
+                        allowConflictSupersede,
+                        out runtimeWriteFailureCode);
                     bulkStateUpdateDepth.Value--;
                     InvalidateWorkshopScanCache();
                 }
@@ -11815,7 +11802,7 @@ namespace GmodAddonManager.Core.Services
                     ? "update_failed"
                     : runtimeWriteSucceeded
                         ? null
-                        : "runtime_write_failed";
+                        : runtimeWriteFailureCode ?? "runtime_write_failed";
                 matchResult.SupersededConflictOperationId =
                     supersededConflictOperationId;
                 stopwatch.Stop();

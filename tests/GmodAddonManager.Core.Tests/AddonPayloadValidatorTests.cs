@@ -5,6 +5,26 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class AddonPayloadValidatorTests
 {
     [Fact]
+    public void WorkshopFolderRequiresAGmaHeaderRatherThanJustAFile()
+    {
+        using var env = new TestDirectory();
+        var path = Path.Combine(env.Path, "123.gma");
+        File.WriteAllBytes(path, [(byte)'G']);
+        Assert.False(AddonPayloadValidator.HasValidAddonPayload(env.Path));
+
+        var header = new byte[32];
+        File.WriteAllBytes(path, header);
+        Assert.False(AddonPayloadValidator.HasValidAddonPayload(env.Path));
+
+        System.Text.Encoding.ASCII.GetBytes("GMAD").CopyTo(header, 0);
+        File.WriteAllBytes(path, header[..22]);
+        Assert.False(AddonPayloadValidator.HasValidAddonPayload(env.Path));
+
+        File.WriteAllBytes(path, header);
+        Assert.Equal(AddonPayloadKind.GmaArchive, AddonPayloadValidator.Validate(env.Path).Kind);
+    }
+
+    [Fact]
     public void Validate_EmptyDirectory_IsInvalid()
     {
         using var env = new TestDirectory();

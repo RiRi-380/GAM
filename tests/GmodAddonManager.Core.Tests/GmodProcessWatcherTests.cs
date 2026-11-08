@@ -5,6 +5,18 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class GmodProcessWatcherTests
 {
     [Theory]
+    [InlineData(@"C:\Games\GarrysMod\hl2.exe", true)]
+    [InlineData(@"C:\Games\GarrysMod\bin\win64\hl2.exe", true)]
+    [InlineData(@"C:\Games\Half-Life 2\hl2.exe", false)]
+    [InlineData(@"C:\Games\GarrysModBackup\hl2.exe", false)]
+    [InlineData(null, true)]
+    public void LegacyProcessMustBelongToTheGmodInstallation(string? executable, bool expected)
+    {
+        Assert.Equal(expected, GmodProcessWatcher.IsLegacyGmodExecutable(
+            executable, @"C:\Games\GarrysMod"));
+    }
+
+    [Theory]
     [InlineData("gmod", true)]
     [InlineData("gmod.exe", true)]
     [InlineData("GMOD.EXE", true)]

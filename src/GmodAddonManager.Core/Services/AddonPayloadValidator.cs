@@ -87,12 +87,14 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
+                var hasInvalidGma = false;
                 foreach (var archive in Directory.EnumerateFiles(directoryPath, "*.gma", SearchOption.TopDirectoryOnly))
                 {
-                    if (IsNonZeroFile(archive))
+                    if (HasGmaHeader(archive))
                     {
                         return AddonPayloadValidationResult.Valid(AddonPayloadKind.GmaArchive, archive);
                     }
+                    hasInvalidGma = true;
                 }
 
                 foreach (var cache in Directory.EnumerateFiles(directoryPath, "*.cache", SearchOption.TopDirectoryOnly))
@@ -121,7 +123,9 @@ namespace GmodAddonManager.Core.Services
                 }
 
                 return AddonPayloadValidationResult.Invalid(
-                    "Directory has no .gma/.cache archive and no recognized addon content directory with files.");
+                    hasInvalidGma
+                        ? "A .gma archive is unreadable or has an invalid header. No other addon payload was found."
+                        : "Directory has no .gma/.cache archive and no recognized addon content directory with files.");
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
@@ -144,6 +148,31 @@ namespace GmodAddonManager.Core.Services
             catch
             {
                 return null;
+            }
+        }
+
+        // Fixed prefix, three empty metadata strings, addon version, and file-table terminator.
+        private const int MinimumGmaHeaderLength = 32;
+
+        internal static bool HasGmaHeader(string filePath)
+        {
+            try
+            {
+                using var stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length < MinimumGmaHeaderLength)
+                {
+                    return false;
+                }
+
+                using var reader = new BinaryReader(stream);
+                return reader.ReadByte() == 'G' &&
+                       reader.ReadByte() == 'M' &&
+                       reader.ReadByte() == 'A' &&
+                       reader.ReadByte() == 'D';
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return false;
             }
         }
 

@@ -10,6 +10,7 @@ using Avalonia.VisualTree;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.Services;
 using System;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace GmodAddonManager.UI.Views;
@@ -34,6 +35,8 @@ public partial class AssetImageEditDialog : Window
     private bool isClosed;
 
     private const double WheelZoomStep = 0.12;
+    private const int PreviewDimension = 1024;
+    private const long MaximumSourceBytes = 64L * 1024 * 1024;
 
     public AssetImageEditDialog()
     {
@@ -87,7 +90,12 @@ public partial class AssetImageEditDialog : Window
     {
         try
         {
-            var bitmap = await Task.Run(() => new Bitmap(path));
+            var bitmap = await Task.Run(() =>
+            {
+                using var source = File.OpenRead(path);
+                return RemoteImageLoader.DecodeBoundedPreview(source, PreviewDimension, MaximumSourceBytes)
+                    ?? throw new InvalidDataException("Invalid image or image exceeds the preview limits.");
+            });
             if (isClosed)
             {
                 bitmap.Dispose();

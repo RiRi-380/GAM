@@ -94,13 +94,10 @@ namespace GmodAddonManager.Core.Services
             IEnumerable<WorkshopAddon> addons,
             AddonSortDirection direction)
         {
+            var withKnownFirst = addons.OrderBy(addon => !addon.WorkshopUpdatedAtUtc.HasValue);
             var ordered = direction == AddonSortDirection.Ascending
-                ? addons.OrderBy(addon => GetSortTimestampUtc(
-                    addon,
-                    AddonSortMode.WorkshopUpdated))
-                : addons.OrderByDescending(addon => GetSortTimestampUtc(
-                    addon,
-                    AddonSortMode.WorkshopUpdated));
+                ? withKnownFirst.ThenBy(addon => GetSortTimestampUtc(addon, AddonSortMode.WorkshopUpdated))
+                : withKnownFirst.ThenByDescending(addon => GetSortTimestampUtc(addon, AddonSortMode.WorkshopUpdated));
 
             return ThenByName(ordered);
         }
@@ -133,7 +130,7 @@ namespace GmodAddonManager.Core.Services
                 AddonSortMode.RecentlySubscribed =>
                     NormalizeNullableUtc(addon.FirstSeenSubscribedAtUtc),
                 AddonSortMode.WorkshopUpdated =>
-                    NormalizeUtc(addon.WorkshopUpdatedAtUtc ?? addon.LastUpdated),
+                    NormalizeNullableUtc(addon.WorkshopUpdatedAtUtc),
                 AddonSortMode.Name or AddonSortMode.Size => null,
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(mode),

@@ -8,6 +8,44 @@ public sealed class AssetStateResolverTests
     private const string AddonId = "104479467";
     private readonly AssetStateResolver resolver = new();
 
+    [Theory]
+    [InlineData(AddonState.Enabled)]
+    [InlineData(AddonState.Disabled)]
+    [InlineData(AddonState.Excluded)]
+    public void ResolveAllMatchesIndividualResultsAndSourceOrder(AddonState subscribeState)
+    {
+        var gmodDisabled = new Asset(SystemAssetDefinitions.GmodDisabledName, isSystem: true)
+        {
+            Id = SystemAssetDefinitions.GmodDisabledId,
+            Addons = [AddonId, "200", AddonId]
+        };
+        gmodDisabled.SetWholeState(AddonState.Excluded);
+        var legacySystem = new Asset("Legacy", isSystem: true) { Addons = [AddonId, "300"] };
+        var assets = new[]
+        {
+            gmodDisabled,
+            CreateSubscribe(subscribeState),
+            CreateCustom("enabled", "Enabled", AddonState.Enabled, AddonId, AddonId, "300"),
+            legacySystem,
+            CreateCustom("neutral", "Neutral", AddonState.Disabled, "400")
+        };
+        var subscribed = new HashSet<string>([AddonId, "200", "300", "400"], StringComparer.Ordinal);
+
+        var all = resolver.ResolveAll(assets, subscribed);
+
+        foreach (var id in subscribed)
+        {
+            var expected = resolver.Resolve(id, assets, subscribed);
+            Assert.Equal(expected.DesiredEnabled, all[id].DesiredEnabled);
+            Assert.Equal(expected.EnabledBySubscribe, all[id].EnabledBySubscribe);
+            Assert.Equal(expected.Reason, all[id].Reason);
+            Assert.Equal(expected.EnabledByAssets.Select(source => source.AssetId),
+                all[id].EnabledByAssets.Select(source => source.AssetId));
+            Assert.Equal(expected.ExcludedByAssets.Select(source => source.AssetId),
+                all[id].ExcludedByAssets.Select(source => source.AssetId));
+        }
+    }
+
     [Fact]
     public void Resolve_EnabledSubscribe_EnablesSubscribedAddon()
     {

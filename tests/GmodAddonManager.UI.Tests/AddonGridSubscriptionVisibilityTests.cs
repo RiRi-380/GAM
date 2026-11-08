@@ -340,9 +340,10 @@ public sealed class AddonGridSubscriptionVisibilityTests
             ]);
     }
 
-    private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        var directory = new FileInfo(sourceFilePath).Directory;
         while (directory != null)
         {
             if (File.Exists(Path.Combine(directory.FullName, "GmodAddonManager.sln")))

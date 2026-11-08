@@ -25,12 +25,7 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentNullException(nameof(asset));
             }
 
-            var history = asset.VersionHistory ?? new List<AssetVersion>();
-            var maximum = history.Count == 0
-                ? 0
-                : Math.Max(0, history.Max(version => version?.Version ?? 0));
-
-            return checked(maximum + 1);
+            return checked(GetHighestVersion(asset) + 1);
         }
 
         public AssetVersion CreateSnapshot(Asset asset, string? note = null)
@@ -59,6 +54,7 @@ namespace GmodAddonManager.Core.Services
             };
 
             asset.VersionHistory.Add(snapshot);
+            asset.HighestIssuedVersion = snapshot.Version;
             asset.CurrentVersion = snapshot.Version;
             return snapshot;
         }
@@ -99,6 +95,7 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
+            asset.HighestIssuedVersion = GetHighestVersion(asset);
             asset.VersionHistory!.Remove(snapshot);
             if (asset.CurrentVersion == version)
             {
@@ -119,10 +116,15 @@ namespace GmodAddonManager.Core.Services
             ThrowIfSmart(asset);
 
             var removedCount = asset.VersionHistory?.Count ?? 0;
+            asset.HighestIssuedVersion = GetHighestVersion(asset);
             asset.VersionHistory?.Clear();
             asset.CurrentVersion = 0;
             return removedCount;
         }
+
+        private static int GetHighestVersion(Asset asset) =>
+            Math.Max(Math.Max(0, asset.HighestIssuedVersion),
+                asset.VersionHistory?.Select(version => version?.Version ?? 0).DefaultIfEmpty(0).Max() ?? 0);
 
         public AssetVersionMembershipDiffResult CompareCurrentMembership(
             Asset asset,

@@ -1,20 +1,24 @@
 # Quick debug build script for GAM
-Write-Host "Building GAM (Debug)..." -ForegroundColor Green
+$ErrorActionPreference = "Stop"
+Push-Location -LiteralPath $PSScriptRoot
+try {
+    dotnet restore
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet restore failed (exit $LASTEXITCODE)."
+    }
 
-# Restore dependencies
-Write-Host "Restoring dependencies..." -ForegroundColor Yellow
-dotnet restore
+    dotnet build src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Debug --no-restore
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet build failed (exit $LASTEXITCODE)."
+    }
 
-# Build debug version
-Write-Host "Building debug version..." -ForegroundColor Yellow
-dotnet build src/GmodAddonManager.UI/GmodAddonManager.UI.csproj -c Debug
+    $exePath = Join-Path $PSScriptRoot "src\GmodAddonManager.UI\bin\Debug\net10.0\GmodAddonManager.UI.exe"
+    if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+        throw "The debug executable was not found at $exePath."
+    }
 
-$exePath = "src\GmodAddonManager.UI\bin\Debug\net10.0\GmodAddonManager.UI.exe"
-
-if (Test-Path $exePath) {
-    Write-Host "`nBuild completed!" -ForegroundColor Green
-    Write-Host "Starting application..." -ForegroundColor Cyan
-    Start-Process $exePath
-} else {
-    Write-Host "Build failed or exe not found at: $exePath" -ForegroundColor Red
+    Start-Process -FilePath $exePath
+}
+finally {
+    Pop-Location
 }

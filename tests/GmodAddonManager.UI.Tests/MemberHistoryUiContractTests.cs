@@ -96,15 +96,6 @@ public sealed class MemberHistoryUiContractTests
         Assert.Contains("asset.NotifySettingsChanged()", mainViewModel, StringComparison.Ordinal);
     }
 
-    private static string RepoFile(params string[] segments)
-    {
-        return Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            Path.Combine(segments));
-    }
+    private static string RepoFile(params string[] segments) =>
+        Path.Combine(TestRepository.FindRoot(), Path.Combine(segments));
 }

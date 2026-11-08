@@ -124,6 +124,7 @@ public sealed class VersionManagementViewModel : ViewModelBase
             else
             {
                 selectedVersionAddons.Clear();
+                DiffSummary = string.Empty;
             }
 
             this.RaisePropertyChanged(nameof(SelectedVersionTitle));
@@ -204,12 +205,7 @@ public sealed class VersionManagementViewModel : ViewModelBase
         try
         {
             var currentAsset = ResolveCurrentAsset();
-            var maximumVersion = currentAsset.VersionHistory.Count == 0
-                ? 0
-                : Math.Max(
-                    0,
-                    currentAsset.VersionHistory.Max(version => version.Version));
-            var nextVersion = checked(maximumVersion + 1);
+            var nextVersion = new AssetVersionService().GetNextVersionNumber(currentAsset);
             var confirmed = await dialogService.ShowConfirmAsync(
                 L.Get("VersionManagement.CreateConfirmTitle"),
                 L.Format("VersionManagement.CreateConfirmMessage", nextVersion));
@@ -377,6 +373,13 @@ public sealed class VersionManagementViewModel : ViewModelBase
         }
     }
 
+    private string diffSummary = string.Empty;
+    public string DiffSummary
+    {
+        get => diffSummary;
+        private set => this.RaiseAndSetIfChanged(ref diffSummary, value);
+    }
+
     private Task LoadSelectedVersionAddonsAsync(VersionItemViewModel version)
     {
         if (disposed)
@@ -391,6 +394,7 @@ public sealed class VersionManagementViewModel : ViewModelBase
         if (snapshot == null)
         {
             selectedVersionAddons.Clear();
+            DiffSummary = string.Empty;
             return Task.CompletedTask;
         }
 
@@ -404,14 +408,10 @@ public sealed class VersionManagementViewModel : ViewModelBase
             ? new List<string>()
             : NormalizeAddonIds(previousSnapshot.AddonIds);
         var previousSet = new HashSet<string>(previousIds, StringComparer.Ordinal);
+        var added = selectedIds.Where(id => !previousSet.Contains(id)).ToArray();
+        var removed = previousIds.Where(id => !selectedSet.Contains(id)).ToArray();
 
-        IEnumerable<string> displayIds = selectedIds;
-        if (ShowDiff)
-        {
-            displayIds = selectedIds
-                .Concat(previousIds)
-                .Distinct(StringComparer.Ordinal);
-        }
+        IEnumerable<string> displayIds = ShowDiff ? added.Concat(removed) : selectedIds;
 
         var metadata = addonManager.GetAllAddons();
         var items = displayIds
@@ -443,6 +443,7 @@ public sealed class VersionManagementViewModel : ViewModelBase
         }
 
         selectedVersionAddons.Clear();
+        DiffSummary = L.Format("VersionManagement.DiffSummary", added.Length, removed.Length, selectedIds.Count - added.Length);
         foreach (var item in items)
         {
             selectedVersionAddons.Add(item);
@@ -463,7 +464,7 @@ public sealed class VersionManagementViewModel : ViewModelBase
             {
                 Id = addonId,
                 Title = L.Format(
-                    "VersionManagement.WorkshopIdDeletedFormat",
+                    "VersionManagement.WorkshopIdUnavailableFormat",
                     addonId),
                 IsAvailable = false
             };
@@ -693,6 +694,9 @@ public sealed class VersionAddonItemViewModel : ViewModelBase
     public string AddonId => AddonItemViewModel.AddonId;
 
     public string Title => AddonItemViewModel.Title;
+    public string FileSizeText => AddonItemViewModel.FileSize > 0
+        ? AddonItemViewModel.FileSizeText
+        : L.Get("Common.Unknown");
 
     public AddonDiffStatus Status { get; }
 

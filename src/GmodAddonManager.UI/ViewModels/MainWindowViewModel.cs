@@ -488,9 +488,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             // 繝輔ぃ繧､繝ｫ繧ｵ繧､繧ｺ繧定ｨ育ｮ・
             long totalSize = 0;
-            foreach (var addon in config.AddonMetadata.Values)
+            foreach (var addonId in finalStates.Keys)
             {
-                totalSize += addon.Size;
+                if (config.AddonMetadata.TryGetValue(addonId, out var addon))
+                {
+                    totalSize += addon.Size;
+                }
             }
             
             // 繧ｵ繧､繧ｺ繧剃ｺｺ髢薙′隱ｭ縺ｿ繧・☆縺・ｽ｢蠑上↓螟画鋤
@@ -498,8 +501,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             var statistics =
                 $"{L.Get("Status.TotalAddons")}: {totalAddons} | " +
-                $"{L.Get("Status.Enabled")}: {enabledAddons} | " +
-                $"{L.Get("Status.Disabled")}: {disabledAddons} | " +
+                $"{L.Get("Status.DesiredEnabled")}: {enabledAddons} | " +
+                $"{L.Get("Status.DesiredDisabled")}: {disabledAddons} | " +
                 $"{L.Get("Status.TotalSize")}: {sizeText}";
             AddonStatistics = addonManager.PendingDownloadCount > 0
                 ? $"{L.Format("Status.SteamDownloadPending", addonManager.PendingDownloadCount)} | {statistics}"
@@ -913,6 +916,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 L.Format("Error.ResetFailed", ex.Message));
         }
     }
+
+    internal Task RetryPendingChangesAsync() => StatusBarViewModel.CanRetryPendingChanges
+        ? pendingChangeManager.ApplyPendingChangesAsync()
+        : Task.CompletedTask;
+
+    internal Task<string> CreateDiagnosticReportAsync() => DiagnosticReportService.CreateReportAsync(addonManager);
 
     private async Task OpenSettingsAsync()
     {

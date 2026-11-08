@@ -145,6 +145,9 @@ namespace GmodAddonManager.Core.Models
         /// </summary>
         [JsonProperty("currentVersion")]
         public int CurrentVersion { get; set; }
+
+        [JsonProperty("highestIssuedVersion", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int HighestIssuedVersion { get; set; }
         
         /// <summary>
         /// バージョン履歴

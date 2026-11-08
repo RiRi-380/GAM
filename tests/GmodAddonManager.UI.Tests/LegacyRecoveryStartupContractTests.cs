@@ -15,7 +15,7 @@ public sealed class LegacyRecoveryStartupContractTests
 
         Assert.True(recovery >= 0, "Legacy Hard-layout recovery is not wired into startup.");
         Assert.True(manager > recovery, "AddonManager starts before legacy payload recovery.");
-        Assert.Contains("SteamProcessChecker.IsGmodRunning()", app, StringComparison.Ordinal);
+        Assert.Contains("SteamProcessChecker.IsGmodRunning(resolvedGmodInstallPath)", app, StringComparison.Ordinal);
         Assert.Contains(
             "LegacyHardLayoutRecoveryStatus.DeferredWhileGmodIsRunning",
             app,

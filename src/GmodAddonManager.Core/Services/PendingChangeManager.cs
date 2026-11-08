@@ -224,7 +224,8 @@ namespace GmodAddonManager.Core.Services
                     ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
                     {
                         Change = marker,
-                        Error = conflictError
+                        Error = conflictError,
+                        FailureKind = PendingApplyFailureKind.ConflictingGameChanges
                     });
                     errorHandler?.HandleWarning(
                         conflictError.Message,
@@ -253,7 +254,8 @@ namespace GmodAddonManager.Core.Services
                         ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
                         {
                             Change = marker,
-                            Error = conflictError
+                            Error = conflictError,
+                            FailureKind = PendingApplyFailureKind.ConflictingGameChanges
                         });
                         errorHandler?.HandleWarning(
                             conflictError.Message,
@@ -266,7 +268,14 @@ namespace GmodAddonManager.Core.Services
                     ChangeFailed?.Invoke(this, new ChangeFailedEventArgs
                     {
                         Change = marker,
-                        Error = applyError
+                        Error = applyError,
+                        FailureKind = applyResult.FailureCode switch
+                        {
+                            "subscription_state_unavailable" => PendingApplyFailureKind.SubscriptionUnavailable,
+                            "runtime_state_invalid" => PendingApplyFailureKind.InvalidRuntimeState,
+                            "runtime_write_failed" => PendingApplyFailureKind.RuntimeWriteFailed,
+                            _ => PendingApplyFailureKind.Other
+                        }
                     });
                     errorHandler?.HandleWarning(
                         applyError.Message,
@@ -515,9 +524,19 @@ namespace GmodAddonManager.Core.Services
         public AddonChange Change { get; set; } = null!;
     }
 
+    public enum PendingApplyFailureKind
+    {
+        Other,
+        ConflictingGameChanges,
+        SubscriptionUnavailable,
+        InvalidRuntimeState,
+        RuntimeWriteFailed
+    }
+
     public sealed class ChangeFailedEventArgs : EventArgs
     {
         public AddonChange Change { get; set; } = null!;
         public Exception Error { get; set; } = null!;
+        public PendingApplyFailureKind FailureKind { get; set; }
     }
 }

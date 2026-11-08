@@ -112,6 +112,10 @@
                         <TextBlock Text="{loc:Localize GamAssetFile.NoSteamChanges}"
                                    TextWrapping="Wrap"/>
                     </Border>
+                    <ProgressBar IsVisible="{Binding IsShareExporting}" IsIndeterminate="True"/>
+                    <TextBlock Text="{loc:Localize GamShare.ExportInProgress}"
+                               IsVisible="{Binding IsShareExporting}"
+                               TextWrapping="Wrap"/>
                     <TextBlock Text="{Binding ShareErrorText}"
                                IsVisible="{Binding HasShareError}"
                                Foreground="#F08A8A"

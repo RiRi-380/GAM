@@ -21,7 +21,22 @@
                        Opacity="0.7"
                        Margin="0,5,0,0"
                        TextWrapping="Wrap"/>
-            <TextBlock Name="VersionText" Opacity="0.65" FontSize="12" Margin="0,8,0,0"/>
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                <TextBlock Name="VersionText" FontSize="12" VerticalAlignment="Center"/>
+                <Button Content="{loc:Localize Settings.BuildDetails}" Padding="6,3">
+                    <Button.Flyout>
+                        <Flyout>
+                            <SelectableTextBlock Name="BuildVersionDetails" TextWrapping="Wrap" MaxWidth="380"/>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+            </StackPanel>
+            <WrapPanel Margin="0,8,0,0">
+                <Button Content="{loc:Localize Settings.LanguageHeader}" Click="OnJumpToSettingsSection" Tag="LanguageSection" Margin="0,0,6,4"/>
+                <Button Content="{loc:Localize Settings.AdvancedHeader}" Click="OnJumpToSettingsSection" Tag="AdvancedSection" Margin="0,0,6,4"/>
+                <Button Content="{loc:Localize Settings.Troubleshooting}" Click="OnJumpToSettingsSection" Tag="TroubleshootingSection" Margin="0,0,6,4"/>
+                <Button Content="{loc:Localize Settings.UpdateHeader}" Click="OnJumpToSettingsSection" Tag="UpdateSection" Margin="0,0,6,4"/>
+            </WrapPanel>
         </StackPanel>
         
         <!-- ボタン -->
@@ -41,7 +56,7 @@
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Name="LanguageSection" Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.LanguageDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -65,7 +80,7 @@
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Name="AdvancedSection" Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.AdvancedDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -180,7 +195,7 @@
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Text="{loc:Localize Settings.LogHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Name="TroubleshootingSection" Text="{loc:Localize Settings.Troubleshooting}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.LogDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -217,7 +232,7 @@
                 <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Name="UpdateSection" Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.UpdateDescription}"
                                        Opacity="0.7"
                                        FontSize="12"

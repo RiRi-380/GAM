@@ -64,6 +64,7 @@ public sealed class AssetListEntryViewModel : ViewModelBase, IDisposable
     public bool CanFavorite => !isShareMode && (asset?.CanFavorite ?? true);
     public bool IsFavorite => asset?.IsFavorite ?? group!.IsFavorite;
     public bool IsSmart => asset?.IsSmart ?? false;
+    public bool NeedsMigrationReview => asset?.NeedsMigrationReview ?? false;
     public bool IsSubscribeAsset => asset?.IsSubscribeAsset ?? false;
     public bool IsGmodDisabledAsset => asset?.IsGmodDisabledAsset ?? false;
     public bool IsShareSelected

@@ -372,7 +372,9 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
     }
 
     public string FileSizeText => FormatFileSize(FileSize);
-    public string LastModifiedText => LastModified.ToString("yyyy/MM/dd HH:mm");
+    public string LastModifiedText => LastModified == default
+        ? L.Get("Common.Unknown")
+        : LastModified.ToString("yyyy/MM/dd HH:mm");
 
     public string SortValueText
     {
@@ -395,7 +397,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
                     AddonSortMode.WorkshopUpdated);
                 return updatedUtc.HasValue
                     ? FormatSortTimestamp(updatedUtc.Value)
-                    : string.Empty;
+                    : L.Get("AddonGrid.WorkshopUpdateTimeUnknown");
             }
 
             // The title and size are already visible elsewhere on the card.
@@ -1456,12 +1458,6 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         if (!titleMatches && addon.Title != null && addon.Title != Title)
         {
             titleMatches = addon.Title.ToLower().Contains(lowerFilter);
-        }
-        
-        // GMAファイルの場合、詳細が読み込まれていなければIDとタイトルのみでフィルタ
-        if (IsGmaFile && !IsDetailsLoaded)
-        {
-            return titleMatches || AddonId.Contains(lowerFilter);
         }
         
         return titleMatches ||

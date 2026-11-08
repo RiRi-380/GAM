@@ -180,8 +180,10 @@ public sealed class AddonSortServiceTests
             result.Select(addon => addon.Title));
     }
 
-    [Fact]
-    public void Sort_WorkshopUpdated_FallsBackToLastUpdatedWhenWorkshopTimeMissing()
+    [Theory]
+    [InlineData(AddonSortDirection.Ascending)]
+    [InlineData(AddonSortDirection.Descending)]
+    public void Sort_WorkshopUpdated_PlacesMissingTimesLast(AddonSortDirection direction)
     {
         var fallbackNew = Addon(
             "1",
@@ -196,10 +198,10 @@ public sealed class AddonSortServiceTests
         var result = Sort(
             new[] { workshopOld, fallbackNew },
             AddonSortMode.WorkshopUpdated,
-            AddonSortDirection.Descending);
+            direction);
 
         Assert.Equal(
-            new[] { "Fallback new", "Workshop old" },
+            new[] { "Workshop old", "Fallback new" },
             result.Select(addon => addon.Title));
     }
 
@@ -280,7 +282,7 @@ public sealed class AddonSortServiceTests
     }
 
     [Fact]
-    public void GetSortTimestampUtc_NormalizesObservedAndFallbackValues()
+    public void GetSortTimestampUtc_NormalizesObservedAndWorkshopValues()
     {
         var local = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Local);
         var unspecified = new DateTime(2025, 12, 31, 23, 59, 58, DateTimeKind.Unspecified);
@@ -288,19 +290,21 @@ public sealed class AddonSortServiceTests
             "1",
             "Timestamp",
             firstSeen: local,
-            lastUpdated: unspecified);
+            workshopUpdated: unspecified);
 
         var observed = AddonSortService.GetSortTimestampUtc(
             addon,
             AddonSortMode.RecentlySubscribed);
-        var fallback = AddonSortService.GetSortTimestampUtc(
+        var updated = AddonSortService.GetSortTimestampUtc(
             addon,
             AddonSortMode.WorkshopUpdated);
 
         Assert.Equal(local.ToUniversalTime(), observed);
         Assert.Equal(DateTimeKind.Utc, observed?.Kind);
-        Assert.Equal(DateTime.SpecifyKind(unspecified, DateTimeKind.Utc), fallback);
-        Assert.Equal(DateTimeKind.Utc, fallback?.Kind);
+        Assert.Equal(DateTime.SpecifyKind(unspecified, DateTimeKind.Utc), updated);
+        Assert.Equal(DateTimeKind.Utc, updated?.Kind);
+        Assert.Null(AddonSortService.GetSortTimestampUtc(
+            Addon("2", "Missing", lastUpdated: local), AddonSortMode.WorkshopUpdated));
         Assert.Null(AddonSortService.GetSortTimestampUtc(addon, AddonSortMode.Name));
         Assert.Null(AddonSortService.GetSortTimestampUtc(addon, AddonSortMode.Size));
     }

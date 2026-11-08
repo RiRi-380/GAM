@@ -112,7 +112,9 @@ public sealed class AssetItemViewModelTests : IDisposable
             LocalizationManager.Instance.ChangeLanguage("ja-JP");
             Assert.Equal("すべて除外", viewModel.ExcludedStateLabel);
             Assert.Contains("強制的に無効", viewModel.ExcludedStateTooltip);
-            Assert.Contains("有効なCustom Asset", viewModel.DisabledStateTooltip);
+            Assert.Contains("有効なカスタムアセット", viewModel.DisabledStateTooltip);
+            Assert.Equal("有効", viewModel.EnabledStateLabel);
+            Assert.Equal("無効", viewModel.DisabledStateLabel);
 
             LocalizationManager.Instance.ChangeLanguage("en-US");
             Assert.Equal("Exclude All", viewModel.ExcludedStateLabel);

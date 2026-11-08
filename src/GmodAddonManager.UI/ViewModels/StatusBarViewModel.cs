@@ -13,6 +13,7 @@ internal interface IStatusBarRuntimeSource
 
     int PendingChangesCount { get; }
     bool IsApplyingChanges { get; }
+    PendingApplyFailureKind LastFailureKind => PendingApplyFailureKind.Other;
 
     event EventHandler? GmodStarted;
 
@@ -50,6 +51,7 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
 
     public int PendingChangesCount => pendingChangeManager.GetPendingChangeCount();
     public bool IsApplyingChanges => pendingChangeManager.IsApplyingChanges;
+    public PendingApplyFailureKind LastFailureKind { get; private set; }
 
     public event EventHandler? GmodStarted;
 
@@ -69,8 +71,11 @@ internal sealed class StatusBarRuntimeSource : IStatusBarRuntimeSource, IDisposa
     private void OnChangeApplied(object? sender, ChangeAppliedEventArgs e) =>
         ChangeApplied?.Invoke(this, EventArgs.Empty);
 
-    private void OnChangeFailed(object? sender, ChangeFailedEventArgs e) =>
+    private void OnChangeFailed(object? sender, ChangeFailedEventArgs e)
+    {
+        LastFailureKind = e.FailureKind;
         ChangeFailed?.Invoke(this, EventArgs.Empty);
+    }
 
     private void OnApplyStateChanged(object? sender, EventArgs e) =>
         ApplyStateChanged?.Invoke(this, EventArgs.Empty);
@@ -197,7 +202,7 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
                 };
             }
 
-            return "#666666";
+            return "#AAAAAA";
         }
     }
 
@@ -213,6 +218,19 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
     public string GmodStatusColor => IsGmodRunning ? "#FFA500" : "#4CAF50";
 
     public bool HasPendingChanges => PendingChangesCount > 0;
+    public bool HasApplyDetails => HasPendingChanges || lastApplyFailed;
+    public bool CanRetryPendingChanges => HasPendingChanges && !IsGmodRunning && !runtimeSource.IsApplyingChanges &&
+        !(lastApplyFailed && runtimeSource.LastFailureKind == PendingApplyFailureKind.ConflictingGameChanges);
+    public string ApplyDetails => lastApplyFailed
+        ? L.Get(runtimeSource.LastFailureKind switch
+        {
+            PendingApplyFailureKind.ConflictingGameChanges => "Status.ApplyConflictReason",
+            PendingApplyFailureKind.SubscriptionUnavailable => "Status.ApplySubscriptionReason",
+            PendingApplyFailureKind.InvalidRuntimeState => "Status.ApplyInvalidStateReason",
+            PendingApplyFailureKind.RuntimeWriteFailed => "Status.ApplyWriteReason",
+            _ => "Status.ApplyUnknownReason"
+        })
+        : statusMessage;
 
     private void OnTimerTick(object? sender, EventArgs e) => RequestStatusUpdate();
 
@@ -294,6 +312,10 @@ public sealed class StatusBarViewModel : ViewModelBase, IDisposable
                 StatusMessage = L.Get(lastApplyFailed ? "Status.ApplyFailed" : "Status.Ready");
                 IsApplyingChanges = false;
             }
+
+            this.RaisePropertyChanged(nameof(HasApplyDetails));
+            this.RaisePropertyChanged(nameof(CanRetryPendingChanges));
+            this.RaisePropertyChanged(nameof(ApplyDetails));
         }
         catch (Exception ex)
         {

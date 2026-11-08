@@ -646,20 +646,6 @@ public sealed class AssetTargetPickerViewModelTests : IDisposable
         Assert.Fail("Timed out waiting for the headless UI state to update.");
     }
 
-    private static string ReadRepositoryFile(params string[] parts)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "GmodAddonManager.sln")))
-            {
-                return File.ReadAllText(Path.Combine(
-                    new[] { directory.FullName }.Concat(parts).ToArray()));
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate repository root.");
-    }
+    private static string ReadRepositoryFile(params string[] parts) =>
+        File.ReadAllText(Path.Combine(TestRepository.FindRoot(), Path.Combine(parts)));
 }

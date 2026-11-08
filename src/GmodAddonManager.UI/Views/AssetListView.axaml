@@ -379,6 +379,15 @@
                                                        Margin="7,0,0,0">
                                                 <Border Padding="5,1"
                                                         CornerRadius="4"
+                                                        Background="#554E3600"
+                                                        IsVisible="{Binding NeedsMigrationReview}"
+                                                        ToolTip.Tip="{loc:Localize AssetList.MigrationReviewHint}">
+                                                    <TextBlock Text="{loc:Localize AssetList.MigrationReview}"
+                                                               FontSize="11"
+                                                               Foreground="#FFD58A"/>
+                                                </Border>
+                                                <Border Padding="5,1"
+                                                        CornerRadius="4"
                                                         Background="#335C86B5"
                                                         VerticalAlignment="Center"
                                                         IsVisible="{Binding IsSmart}"
@@ -429,7 +438,13 @@
                                           Grid.ColumnSpan="{Binding StateColumnSpan}"
                                           VerticalAlignment="Center">
                                         <WrapPanel Orientation="Horizontal"
+                                                   Classes.subscribe="{Binding IsSubscribeAsset}"
                                                    IsVisible="{Binding CanEditAddonDefaultState}">
+                                            <WrapPanel.Styles>
+                                                <Style Selector="WrapPanel.subscribe">
+                                                    <Setter Property="Margin" Value="0,0,28,0"/>
+                                                </Style>
+                                            </WrapPanel.Styles>
                                             <RadioButton GroupName="{Binding Id, StringFormat=AssetState_{0}}"
                                                          Content="{Binding EnabledStateLabel}"
                                                          IsChecked="{Binding IsEnabledState, Mode=OneWay}"

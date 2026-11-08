@@ -1,9 +1,29 @@
 using System.Xml.Linq;
+using GmodAddonManager.Core.Models;
+using GmodAddonManager.UI.Services;
+using GmodAddonManager.UI.Views;
 
 namespace GmodAddonManager.UI.Tests;
 
 public sealed class GamShareBundleUiTests
 {
+    [Fact]
+    public void BundleContentsPreserveMixedOrderAndShowTheNestedAssetState()
+    {
+        var asset = new GamAssetBundleAsset("a", "Second", GamAssetDocumentState.Excluded,
+            GamAssetDocumentMembership.Fixed(["101"]));
+        var child = new GamAssetBundleGroup("nested", "First", GamAssetDocumentState.Disabled,
+            Array.Empty<GamAssetBundleEntryReference>());
+        var root = new GamAssetBundleGroup("root", "Root", GamAssetDocumentState.Enabled,
+            [GamAssetBundleEntryReference.Group(child.LocalId), GamAssetBundleEntryReference.Asset(asset.LocalId)]);
+
+        var item = Assert.Single(GamBundleImportPreviewDialog.BuildContents(new GamAssetBundleDocument([asset], [child, root])));
+        Assert.Equal(L.Format("GamBundleImport.GroupEntry", root.Name, L.Get("AddonState.Enabled")), item.Label);
+        Assert.Collection(item.Children,
+            first => Assert.Equal(L.Format("GamBundleImport.GroupEntry", child.Name, L.Get("AddonState.Disabled")), first.Label),
+            second => Assert.Equal(L.Format("GamBundleImport.AssetEntry", asset.Name, L.Get("AddonState.Excluded")), second.Label));
+    }
+
     private static readonly XNamespace AvaloniaNamespace =
         "https://github.com/avaloniaui";
 
@@ -154,18 +174,6 @@ public sealed class GamShareBundleUiTests
             value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
-    private static string ReadRepositoryFile(params string[] parts)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "GmodAddonManager.sln")))
-            {
-                return File.ReadAllText(Path.Combine(
-                    new[] { directory.FullName }.Concat(parts).ToArray()));
-            }
-            directory = directory.Parent;
-        }
-        throw new DirectoryNotFoundException("Could not locate repository root.");
-    }
+    private static string ReadRepositoryFile(params string[] parts) =>
+        File.ReadAllText(Path.Combine(TestRepository.FindRoot(), Path.Combine(parts)));
 }

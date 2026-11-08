@@ -17,6 +17,7 @@ namespace GmodAddonManager.Core.Services
 
         private readonly object lockObject = new object();
         private readonly Func<IReadOnlyCollection<int>> runningProcessIdProvider;
+        private readonly string? gmodInstallPath;
         private readonly HashSet<int> runningProcessIds = new HashSet<int>();
         private ManagementEventWatcher? startWatcher;
         private ManagementEventWatcher? stopWatcher;
@@ -27,8 +28,14 @@ namespace GmodAddonManager.Core.Services
         public event EventHandler<ProcessEventArgs>? GmodStopped;
 
         public GmodProcessWatcher()
-            : this(GetRunningGmodProcessIds)
+            : this(gmodInstallPath: null)
         {
+        }
+
+        public GmodProcessWatcher(string? gmodInstallPath)
+            : this(() => GetRunningGmodProcessIds(gmodInstallPath))
+        {
+            this.gmodInstallPath = gmodInstallPath;
         }
 
         internal GmodProcessWatcher(Func<IReadOnlyCollection<int>> runningProcessIdProvider)
@@ -77,6 +84,11 @@ namespace GmodAddonManager.Core.Services
                     {
                         foreach (var process in processes)
                         {
+                            if (!MatchesGmodProcess(process, processName, gmodInstallPath))
+                            {
+                                continue;
+                            }
+
                             var commandLine = GetProcessCommandLine(process.Id);
                             if (!string.IsNullOrWhiteSpace(commandLine) &&
                                 commandLine.IndexOf("-noaddons", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -147,14 +159,7 @@ namespace GmodAddonManager.Core.Services
 
         private void OnProcessStarted(object sender, EventArrivedEventArgs e)
         {
-            if (TryGetEventProcessId(e, out var processId))
-            {
-                ObserveProcessStarted(processId);
-            }
-            else
-            {
-                RefreshProcessState();
-            }
+            RefreshProcessState();
         }
 
         private void OnProcessStopped(object sender, EventArrivedEventArgs e)
@@ -297,7 +302,7 @@ namespace GmodAddonManager.Core.Services
             }
         }
 
-        private static IReadOnlyCollection<int> GetRunningGmodProcessIds()
+        internal static IReadOnlyCollection<int> GetRunningGmodProcessIds(string? gmodInstallPath)
         {
             var processIds = new HashSet<int>();
             foreach (var processName in GmodProcessNames)
@@ -307,7 +312,10 @@ namespace GmodAddonManager.Core.Services
                 {
                     try
                     {
-                        processIds.Add(process.Id);
+                        if (MatchesGmodProcess(process, processName, gmodInstallPath))
+                        {
+                            processIds.Add(process.Id);
+                        }
                     }
                     finally
                     {
@@ -317,6 +325,40 @@ namespace GmodAddonManager.Core.Services
             }
 
             return processIds.ToArray();
+        }
+
+        private static bool MatchesGmodProcess(Process process, string processName, string? installPath)
+        {
+            if (!string.Equals(processName, "hl2", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(installPath))
+            {
+                return true;
+            }
+
+            try
+            {
+                return IsLegacyGmodExecutable(process.MainModule?.FileName, installPath);
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception ||
+                                       ex is InvalidOperationException ||
+                                       ex is NotSupportedException)
+            {
+                // Keep deferring writes when the process identity cannot be read.
+                return true;
+            }
+        }
+
+        internal static bool IsLegacyGmodExecutable(string? executablePath, string installPath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                return true;
+            }
+
+            var root = Path.GetFullPath(installPath).TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(executablePath).StartsWith(
+                root, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string? GetProcessCommandLine(int processId)

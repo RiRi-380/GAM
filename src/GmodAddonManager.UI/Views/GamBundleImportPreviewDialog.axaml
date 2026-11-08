@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
+        xmlns:views="using:GmodAddonManager.UI.Views"
         mc:Ignorable="d"
         d:DesignWidth="620"
         d:DesignHeight="650"
@@ -61,6 +62,20 @@
                                    TextWrapping="Wrap"/>
                     </Grid>
                 </Border>
+
+                <Expander Header="{loc:Localize GamBundleImport.Contents}" IsExpanded="True" HorizontalAlignment="Stretch">
+                    <TreeView Name="BundleContentsTree" MaxHeight="220">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate x:DataType="views:GamBundlePreviewEntry" ItemsSource="{Binding Children}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap"/>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </Expander>
+                <Expander Name="MissingIdsSection" Header="{loc:Localize GamBundleImport.MissingIds}"
+                          HorizontalAlignment="Stretch">
+                    <SelectableTextBlock Name="MissingIdsTextBlock" TextWrapping="Wrap"/>
+                </Expander>
 
                 <Border x:Name="NestedDepthIncreaseBorder"
                         IsVisible="False"

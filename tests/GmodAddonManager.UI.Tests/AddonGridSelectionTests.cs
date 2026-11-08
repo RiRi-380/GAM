@@ -51,6 +51,16 @@ public sealed class AddonGridSelectionTests
             Assert.Equal(new[] { alpha, bravo }, grid.GetSelectedAddons());
             Assert.Equal(new[] { alpha.AddonId, bravo.AddonId }, grid.GetDraggedAddonIds(alpha));
 
+            using (grid.ClearFiltersCommand.Execute().Subscribe())
+            {
+                Assert.False(grid.HasActiveFilters);
+                Assert.Contains(bravo, grid.FilteredAddons);
+                Assert.Equal(2, grid.SelectedAddonsCount);
+            }
+
+            grid.FilterText = "Alpha";
+            grid.ApplyFilter();
+            Assert.Equal(1, grid.HiddenSelectedAddonsCount);
             grid.ClearSelection();
             Assert.False(bravo.IsSelected);
             grid.FilterText = string.Empty;

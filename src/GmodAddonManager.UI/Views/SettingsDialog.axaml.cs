@@ -67,7 +67,9 @@ public partial class SettingsDialog : Window
             "GmodAddonManager", "logs"
         );
         LogLocationText.Text = logPath;
-        VersionText.Text = L.Format("Settings.CurrentVersion", GetCurrentVersion());
+        var buildVersion = GetCurrentVersion();
+        VersionText.Text = L.Format("Settings.CurrentVersion", buildVersion.Split('+')[0]);
+        BuildVersionDetails.Text = buildVersion;
         
         // 言語設定を反映
         LanguageComboBox.SelectedIndex = currentSettings.Language == "ja-JP" ? 0 : 1;
@@ -310,6 +312,14 @@ public partial class SettingsDialog : Window
         return languageChanged
             ? L.Get("Settings.LanguageRestartMessage")
             : L.Get("Settings.LocalAddonDiscoveryRestartMessage");
+    }
+
+    private void OnJumpToSettingsSection(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string sectionName })
+        {
+            this.FindControl<TextBlock>(sectionName)?.BringIntoView();
+        }
     }
 
     private async void OnDiagnosticReport(object? sender, RoutedEventArgs e)

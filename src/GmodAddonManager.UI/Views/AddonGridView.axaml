@@ -56,10 +56,6 @@
                     <Style Selector="Border.addonCard:focus">
                         <Setter Property="BoxShadow" Value="0 0 0 2 #CC4A90E2"/>
                     </Style>
-                    <Style Selector="Border.selected">
-                        <Setter Property="BorderThickness" Value="2"/>
-                        <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}"/>
-                    </Style>
                     <Style Selector="Border">
                         <Setter Property="Cursor" Value="Hand"/>
                     </Style>
@@ -151,6 +147,16 @@
                                            Foreground="White"/>
                             </Border>
 
+                            <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                    Background="#E61F252F" CornerRadius="4" Padding="4,2"
+                                    IsHitTestVisible="False">
+                                <TextBlock Text="{Binding ActualStateText}" FontSize="10" Foreground="White"/>
+                            </Border>
+                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Background="#1F5D96" CornerRadius="4" Padding="5,2"
+                                    IsVisible="{Binding IsSelected}" IsHitTestVisible="False">
+                                <TextBlock Text="✓" FontWeight="Bold" Foreground="White"/>
+                            </Border>
                         </Grid>
                     </Border>
                     
@@ -165,9 +171,11 @@
                               ToolTip.Tip="{Binding Title}"/>
                     
                     <!-- 更新日時（左） + サイズ（右） -->
-                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
+                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="6">
                         <TextBlock Grid.Column="0"
                                   Text="{Binding SortValueText}"
+                                  TextTrimming="CharacterEllipsis"
+                                  ToolTip.Tip="{Binding SortValueText}"
                                   FontSize="11"
                                   Opacity="0.7"/>
                         <TextBlock Grid.Column="1"
@@ -227,6 +235,12 @@
                            Orientation="Horizontal"
                            HorizontalAlignment="Stretch"
                            VerticalAlignment="Center">
+                    <Button Command="{Binding ClearFiltersCommand}"
+                            Content="{Binding ActiveFilterText}"
+                            ToolTip.Tip="{loc:Localize AddonGrid.ClearFilters}"
+                            AutomationProperties.Name="{loc:Localize AddonGrid.ClearFilters}"
+                            IsVisible="{Binding HasActiveFilters}"
+                            Margin="0,0,8,6"/>
                     <StackPanel Orientation="Horizontal"
                                 Spacing="10"
                                 Margin="0,0,12,6"
@@ -402,11 +416,7 @@
                                         VerticalContentAlignment="Center"/>
                             </StackPanel>
 
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="{loc:Localize AddonGrid.FilterTypeHeader}"
-                                           FontSize="12"
-                                           FontWeight="Bold"
-                                           Opacity="0.8"/>
+                            <Expander Header="{loc:Localize AddonGrid.FilterTypeHeader}" HorizontalAlignment="Stretch">
                                 <ItemsControl ItemsSource="{Binding AddonTypeFilters}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -420,13 +430,9 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </StackPanel>
+                            </Expander>
 
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="{loc:Localize AddonGrid.FilterTagHeader}"
-                                           FontSize="12"
-                                           FontWeight="Bold"
-                                           Opacity="0.8"/>
+                            <Expander Header="{loc:Localize AddonGrid.FilterTagHeader}" HorizontalAlignment="Stretch">
                                 <ItemsControl ItemsSource="{Binding AddonTagFilters}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -440,7 +446,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </StackPanel>
+                            </Expander>
                         </StackPanel>
                         </ScrollViewer>
                     </Grid>

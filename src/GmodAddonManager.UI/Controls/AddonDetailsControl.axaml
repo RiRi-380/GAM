@@ -28,45 +28,6 @@
                          DataContext="{Binding SelectedAddon}">
                 <StackPanel Spacing="15">
                 
-                <!-- サムネイル -->
-                <Border Width="200"
-                       Height="200"
-                       Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
-                       CornerRadius="4"
-                       ClipToBounds="True"
-                       HorizontalAlignment="Center">
-                    <Grid>
-                        <!-- プレースホルダー -->
-                        <PathIcon Data="{StaticResource FolderIcon}" 
-                                 Width="48" 
-                                 Height="48"
-                                 Opacity="0.3"
-                                 IsVisible="{Binding !ThumbnailBitmap}"
-                                 HorizontalAlignment="Center"
-                                 VerticalAlignment="Center"/>
-                        
-                        <!-- ローディングインジケータ -->
-                        <Border Width="40" 
-                               Height="40"
-                               IsVisible="{Binding IsThumbnailLoading}"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center">
-                            <ProgressBar IsIndeterminate="True" />
-                        </Border>
-                        
-                        <!-- サムネイル画像 -->
-                        <Image Source="{Binding ThumbnailBitmap}"
-                               Stretch="UniformToFill"
-                               IsVisible="{Binding ThumbnailBitmap, Converter={x:Static ObjectConverters.IsNotNull}}">
-                            <Image.Transitions>
-                                <Transitions>
-                                    <DoubleTransition Property="Opacity" Duration="0:0:0.3"/>
-                                </Transitions>
-                            </Image.Transitions>
-                        </Image>
-                    </Grid>
-                </Border>
-                
                 <!-- タイトルと作者 -->
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Grid.Column="0" Spacing="4">
@@ -103,6 +64,75 @@
                     </ToggleButton>
                 </Grid>
                 
+                <!-- GAMが管理する状態（実状態と次回適用する希望状態を分離） -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{loc:Localize AddonDetails.StateInfo}"
+                               FontWeight="Bold"
+                               FontSize="14"
+                               Opacity="0.7"/>
+                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                            CornerRadius="4"
+                            Padding="12">
+                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                              ColumnDefinitions="100,*"
+                              RowSpacing="6">
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.ActualState}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1"
+                                       Text="{Binding ActualStateText}"
+                                       FontWeight="SemiBold"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.DesiredState}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1"
+                                       Text="{Binding DesiredStateText}"
+                                       FontWeight="SemiBold"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.StateReason}"
+                                       Opacity="0.7"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1"
+                                       Text="{Binding StateReasonText}"
+                                       TextWrapping="Wrap"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0"
+                                       Text="{loc:Localize AddonDetails.PendingState}"
+                                       Opacity="0.7"
+                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1"
+                                       Text="{Binding PendingStateText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SystemAccentColor}"
+                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0"
+                                      Text="{loc:Localize AddonDetails.AssetMembership}"
+                                      Opacity="0.7"/>
+                            <ItemsControl Grid.Row="4" Grid.Column="1"
+                                         ItemsSource="{Binding AssetMemberships}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource SystemAccentColor}"
+                                               CornerRadius="3"
+                                               Padding="6,2"
+                                               Margin="0,0,4,4">
+                                            <TextBlock Text="{Binding}"
+                                                      FontSize="11"
+                                                      Foreground="White"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
                 <!-- 基本情報 -->
                 <StackPanel Spacing="8">
                     <TextBlock Text="{loc:Localize AddonDetails.BasicInfo}"
@@ -110,7 +140,7 @@
                               FontSize="14"
                               Opacity="0.7"/>
                     
-                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" 
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
                           ColumnDefinitions="100,*">
                         
                         <TextBlock Grid.Row="0" Grid.Column="0" 
@@ -148,77 +178,14 @@
                                   FontFamily="Consolas,Courier New"
                                   FontSize="11"/>
                         
-                        <TextBlock Grid.Row="5" Grid.Column="0" 
-                                  Text="{loc:Localize AddonDetails.AssetMembership}"
-                                  Opacity="0.7"/>
-                        <ItemsControl Grid.Row="5" Grid.Column="1" 
-                                     ItemsSource="{Binding AssetMemberships}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="{DynamicResource SystemAccentColor}"
-                                           CornerRadius="3"
-                                           Padding="6,2"
-                                           Margin="0,0,4,4">
-                                        <TextBlock Text="{Binding}" 
-                                                  FontSize="11"
-                                                  Foreground="White"/>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                     </Grid>
                 </StackPanel>
 
-                <!-- GAMが管理する状態（実状態と次回適用する希望状態を分離） -->
-                <StackPanel Spacing="8">
-                    <TextBlock Text="{loc:Localize AddonDetails.StateInfo}"
-                               FontWeight="Bold"
-                               FontSize="14"
-                               Opacity="0.7"/>
-                    <Border Background="{DynamicResource SystemControlBackgroundListLowBrush}"
-                            CornerRadius="4"
-                            Padding="12">
-                        <Grid RowDefinitions="Auto,Auto,Auto,Auto"
-                              ColumnDefinitions="100,*"
-                              RowSpacing="6">
-                            <TextBlock Grid.Row="0" Grid.Column="0"
-                                       Text="{loc:Localize AddonDetails.ActualState}"
-                                       Opacity="0.7"/>
-                            <TextBlock Grid.Row="0" Grid.Column="1"
-                                       Text="{Binding ActualStateText}"
-                                       FontWeight="SemiBold"/>
-
-                            <TextBlock Grid.Row="1" Grid.Column="0"
-                                       Text="{loc:Localize AddonDetails.DesiredState}"
-                                       Opacity="0.7"/>
-                            <TextBlock Grid.Row="1" Grid.Column="1"
-                                       Text="{Binding DesiredStateText}"
-                                       FontWeight="SemiBold"/>
-
-                            <TextBlock Grid.Row="2" Grid.Column="0"
-                                       Text="{loc:Localize AddonDetails.StateReason}"
-                                       Opacity="0.7"/>
-                            <TextBlock Grid.Row="2" Grid.Column="1"
-                                       Text="{Binding StateReasonText}"
-                                       TextWrapping="Wrap"/>
-
-                            <TextBlock Grid.Row="3" Grid.Column="0"
-                                       Text="{loc:Localize AddonDetails.PendingState}"
-                                       Opacity="0.7"
-                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
-                            <TextBlock Grid.Row="3" Grid.Column="1"
-                                       Text="{Binding PendingStateText}"
-                                       TextWrapping="Wrap"
-                                       Foreground="{DynamicResource SystemAccentColor}"
-                                       IsVisible="{Binding IsRuntimeApplyPending}"/>
-                        </Grid>
-                    </Border>
-                </StackPanel>
+                <Image Source="{Binding ThumbnailBitmap}"
+                       Width="104" Height="104"
+                       Stretch="UniformToFill"
+                       HorizontalAlignment="Center"
+                       IsVisible="{Binding ThumbnailBitmap, Converter={x:Static ObjectConverters.IsNotNull}}"/>
                 
                 <!-- タグ -->
                 <StackPanel Spacing="8"

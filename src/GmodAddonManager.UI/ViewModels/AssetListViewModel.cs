@@ -83,7 +83,9 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         BackToRootCommand = ReactiveCommand.Create(ReturnToRoot);
         ToggleGmodDisabledCollapseCommand = ReactiveCommand.Create(ToggleGmodDisabledCollapse);
         ExportShareSelectionCommand = ReactiveCommand.CreateFromTask(ExportShareSelectionAsync);
-        CancelShareModeCommand = ReactiveCommand.Create(CancelShareMode);
+        CancelShareModeCommand = ReactiveCommand.Create(
+            CancelShareMode,
+            this.WhenAnyValue(model => model.IsShareExporting, exporting => !exporting));
 
         selectedAssetSubscription = this.WhenAnyValue(x => x.SelectedAsset)
             .Subscribe(asset =>
@@ -489,6 +491,10 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        var assetIds = sharedAssetIds.ToArray();
+        var groupIds = sharedGroupIds.ToArray();
+        var includeImages = IncludeImagesInShare;
+        var includeMemos = IncludeMemosInShare;
         IsShareExporting = true;
         ShareErrorText = string.Empty;
         try
@@ -518,14 +524,8 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 path += ".gam";
             }
 
-            var assetIds = sharedAssetIds.ToArray();
-            var groupIds = sharedGroupIds.ToArray();
             await addonManager.ExportGamSelectionAsync(
-                assetIds,
-                groupIds,
-                path,
-                IncludeImagesInShare,
-                IncludeMemosInShare);
+                assetIds, groupIds, path, includeImages, includeMemos);
 
             CancelShareMode();
             await dialogService.ShowInfoAsync(

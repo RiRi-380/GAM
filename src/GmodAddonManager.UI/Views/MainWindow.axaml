@@ -134,7 +134,7 @@
         </Border>
         
         <!-- ステータスバー -->
-        <Border DockPanel.Dock="Bottom" Height="36" 
+        <Border DockPanel.Dock="Bottom" MinHeight="36" Padding="0,5"
                 DataContext="{Binding StatusBarViewModel}">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
@@ -142,13 +142,7 @@
                     <GradientStop Color="#0A0A0A" Offset="1"/>
                 </LinearGradientBrush>
             </Border.Background>
-            <Grid Margin="8,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+            <Grid Margin="8,0" RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
                 
                 <!-- Gmod実行状態 -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
@@ -160,34 +154,41 @@
                     <TextBlock Text="{Binding GmodStatusText}" VerticalAlignment="Center"/>
                 </StackPanel>
                 
-                <!-- ステータスメッセージ -->
-                <TextBlock Grid.Column="1" 
-                          Text="{Binding StatusMessage}" 
-                          VerticalAlignment="Center"
-                          HorizontalAlignment="Center"
-                          TextTrimming="CharacterEllipsis"
-                          Foreground="{Binding StatusMessageColor}"/>
-                
-                <!-- 保留中の変更 -->
-                <StackPanel Grid.Column="2" 
-                           Orientation="Horizontal"
-                           Spacing="8"
-                           IsVisible="{Binding HasPendingChanges}">
-                    <TextBlock VerticalAlignment="Center">
-                        <Run Text="{loc:Localize MainWindow.PendingChanges}"/>
-                        <Run Text="{Binding PendingChangesCount}" FontWeight="Bold"/>
-                    </TextBlock>
-                    
-                    <ProgressBar Width="16" Height="16" 
-                                IsIndeterminate="{Binding IsApplyingChanges}"/>
-                </StackPanel>
-                
-                <!-- アドオン統計情報 -->
-                <TextBlock Grid.Column="3" 
-                          Text="{Binding DataContext.AddonStatistics, RelativeSource={RelativeSource AncestorType=Window}}"
-                          VerticalAlignment="Center"
-                          Margin="16,0,0,0"
-                          Foreground="#888888"/>
+                <Grid Grid.Column="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                    <TextBlock Text="{Binding StatusMessage}"
+                               ToolTip.Tip="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{Binding StatusMessageColor}"/>
+                    <ProgressBar Grid.Column="1" Width="40" MinWidth="0" Height="6"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding IsApplyingChanges}"
+                                 IsIndeterminate="True"/>
+                    <Button Grid.Column="2" Padding="7,3"
+                            IsVisible="{Binding HasApplyDetails}"
+                            Content="{loc:Localize Status.ApplyDetails}">
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Spacing="8" MaxWidth="330">
+                                    <TextBlock Text="{Binding ApplyDetails}" TextWrapping="Wrap"/>
+                                    <Button Content="{loc:Localize Status.RetryApply}" Click="OnRetryPendingChanges"
+                                            IsEnabled="{Binding CanRetryPendingChanges}"/>
+                                    <Button Content="{loc:Localize Diagnostics.Open}" Click="OnApplyDiagnostics"/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </Grid>
+
+                <TextBlock Grid.Column="2"
+                           x:Name="AddonStatisticsText"
+                           Text="{Binding DataContext.AddonStatistics, RelativeSource={RelativeSource AncestorType=Window}}"
+                           ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                           MaxWidth="400"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"
+                           Foreground="#AAAAAA"/>
             </Grid>
         </Border>
         
@@ -207,7 +208,7 @@
                     </Style>
                 </SplitView.Styles>
                 <SplitView.Pane>
-                    <views:AssetListView Name="AssetPaneContent"
+                    <views:AssetListView Name="AssetPaneContent" Focusable="True"
                                          DataContext="{Binding AssetListViewModel}"/>
                 </SplitView.Pane>
 
@@ -235,6 +236,8 @@
                         <views:GamShareWorkspaceView
                             DataContext="{Binding AssetListViewModel}"/>
                     </Grid>
+                    <Border Name="AssetPaneScrim" IsVisible="False" Background="#99000000" ZIndex="3"
+                            PointerPressed="OnAssetPaneScrimPressed"/>
                 </Grid>
             </SplitView>
 

@@ -38,7 +38,51 @@ namespace GmodAddonManager.Core.Services
             }
 
             var normalizedAddonId = addonId.Trim();
-            var isSubscribed = subscribedAddonIds.Contains(normalizedAddonId);
+            return ResolveCore(normalizedAddonId, assets, subscribedAddonIds.Contains(normalizedAddonId),
+                membershipAlreadyMatched: false);
+        }
+
+        internal IReadOnlyDictionary<string, ResolvedAddonState> ResolveAll(
+            IEnumerable<Asset> assets, ISet<string> subscribedAddonIds)
+        {
+            var assetsByAddon = subscribedAddonIds.ToDictionary(
+                id => id, _ => new List<Asset>(), StringComparer.Ordinal);
+            foreach (var asset in assets.Where(asset => asset != null))
+            {
+                if (asset.Id == SubscribeSystemAssetId)
+                {
+                    foreach (var matchingAssets in assetsByAddon.Values)
+                    {
+                        matchingAssets.Add(asset);
+                    }
+                    continue;
+                }
+
+                if (GetWholeAssetState(asset) == AddonState.Disabled ||
+                    (asset.IsSystem && asset.Id != SystemAssetDefinitions.GmodDisabledId) ||
+                    asset.Addons == null)
+                {
+                    continue;
+                }
+
+                foreach (var id in asset.Addons.Distinct(StringComparer.Ordinal))
+                {
+                    if (id != null && assetsByAddon.TryGetValue(id, out var matchingAssets))
+                    {
+                        matchingAssets.Add(asset);
+                    }
+                }
+            }
+
+            return assetsByAddon.ToDictionary(
+                pair => pair.Key,
+                pair => ResolveCore(pair.Key, pair.Value, isSubscribed: true, membershipAlreadyMatched: true),
+                StringComparer.Ordinal);
+        }
+
+        private static ResolvedAddonState ResolveCore(
+            string normalizedAddonId, IEnumerable<Asset> assets, bool isSubscribed, bool membershipAlreadyMatched)
+        {
             var enabledBySubscribe = false;
             var enabledByAssets = new List<ResolvedAddonStateSource>();
             var excludedByAssets = new List<ResolvedAddonStateSource>();
@@ -67,7 +111,7 @@ namespace GmodAddonManager.Core.Services
                         SystemAssetDefinitions.GmodDisabledId,
                         StringComparison.Ordinal))
                 {
-                    if (!ContainsAddon(asset, normalizedAddonId))
+                    if (!membershipAlreadyMatched && !ContainsAddon(asset, normalizedAddonId))
                     {
                         continue;
                     }
@@ -85,7 +129,7 @@ namespace GmodAddonManager.Core.Services
 
                 // Other system assets (notably the legacy Junction asset) are
                 // not Custom Assets and must not participate in resolution.
-                if (asset.IsSystem || !ContainsAddon(asset, normalizedAddonId))
+                if (asset.IsSystem || (!membershipAlreadyMatched && !ContainsAddon(asset, normalizedAddonId)))
                 {
                     continue;
                 }

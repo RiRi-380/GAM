@@ -111,6 +111,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         SelectAllCommand = ReactiveCommand.Create(SelectAll);
         RemoveSelectedAddonsCommand = ReactiveCommand.CreateFromTask(RemoveSelectedAddonsAsync);
         ToggleSortDirectionCommand = ReactiveCommand.Create(ToggleSortDirection);
+        ClearFiltersCommand = ReactiveCommand.Create(ClearFilters);
 
         // Text entry is the only filter source that benefits from debounce.
         // Asset navigation and explicit filter controls must update atomically
@@ -118,7 +119,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         filterSubscription = this.WhenAnyValue(x => x.FilterText)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => ApplyFilter());
+            .Subscribe(_ => ApplyPresentationFilter());
 
         LocalizationManager.Instance.PropertyChanged += OnLocalizationChanged;
         processWatcher.GmodStarted += OnGmodRuntimeStateChanged;
@@ -165,9 +166,9 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     private void OnFilterOptionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(FilterOptionViewModel.IsSelected))
+        if (e.PropertyName == nameof(FilterOptionViewModel.IsSelected) && !clearingFilters)
         {
-            ApplyFilter();
+            ApplyPresentationFilter();
         }
     }
 
@@ -223,7 +224,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 Interlocked.Exchange(ref sortRefreshQueued, 0);
                 if (!disposed)
                 {
-                    ApplyFilter();
+                    ApplyPresentationFilter();
                 }
             },
             DispatcherPriority.Background);
@@ -259,7 +260,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             : AddonSortDirection.Ascending;
         this.RaisePropertyChanged(nameof(SortDirectionLabel));
         SaveSortSettings();
-        ApplyFilter();
+        ApplyPresentationFilter();
     }
 
     private void LoadSortSettings()
@@ -921,6 +922,38 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public ObservableCollection<FilterOptionViewModel> AddonTagFilters => addonTagFilters;
     public ObservableCollection<string> SortModeOptions => sortModeOptions;
 
+    private bool clearingFilters;
+    public bool HasActiveFilters => ActiveFilterCount > 0;
+    private int ActiveFilterCount =>
+        (string.IsNullOrWhiteSpace(FilterText) ? 0 : 1) + (AddonFilterIndex == 0 ? 0 : 1) +
+        CountActiveFilterOptions(addonTypeFilters) + CountActiveFilterOptions(addonTagFilters);
+    public string ActiveFilterText => L.Format("AddonGrid.ActiveFilterCount", ActiveFilterCount);
+
+    private static int CountActiveFilterOptions(ObservableCollection<FilterOptionViewModel> options)
+    {
+        var selected = options.Count(option => option.IsSelected);
+        return selected == options.Count ? 0 : selected;
+    }
+
+    private void ClearFilters()
+    {
+        clearingFilters = true;
+        try
+        {
+            FilterText = string.Empty;
+            AddonFilterIndex = 0;
+            foreach (var option in addonTypeFilters.Concat(addonTagFilters))
+            {
+                option.IsSelected = false;
+            }
+        }
+        finally
+        {
+            clearingFilters = false;
+        }
+        ApplyPresentationFilter();
+    }
+
     public int SelectedSortModeIndex
     {
         get => selectedSortModeIndex;
@@ -936,7 +969,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             selectedSortModeIndex = value;
             this.RaisePropertyChanged(nameof(SelectedSortModeIndex));
             SaveSortSettings();
-            ApplyFilter();
+            ApplyPresentationFilter();
         }
     }
 
@@ -1157,7 +1190,10 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 addonFilterIndex = value;
                 this.RaisePropertyChanged(nameof(AddonFilterIndex));
                 this.RaisePropertyChanged(nameof(AddonCountDisplay));
-                ApplyFilter();
+                if (!clearingFilters)
+                {
+                    ApplyPresentationFilter();
+                }
             }
         }
     }
@@ -1168,6 +1204,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> SelectAllCommand { get; }
     public ReactiveCommand<Unit, Unit> RemoveSelectedAddonsCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleSortDirectionCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearFiltersCommand { get; }
 
     public async Task LoadAddonsAsync(CancellationToken cancellationToken = default)
     {
@@ -1343,12 +1380,16 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
     public void ApplyFilter() => ApplyFilter(runtimeSnapshot: null, changedMembershipIds: null);
 
+    private void ApplyPresentationFilter() =>
+        ApplyFilter(runtimeSnapshot: null, changedMembershipIds: null, refreshRuntime: false);
+
     internal void RefreshAfterMembershipChange(RuntimeStatePresentation runtimeSnapshot, IReadOnlyList<string> affectedIds) =>
         ApplyFilter(runtimeSnapshot, affectedIds.ToHashSet(StringComparer.Ordinal));
 
     private void ApplyFilter(
         RuntimeStatePresentation? runtimeSnapshot,
-        IReadOnlySet<string>? changedMembershipIds)
+        IReadOnlySet<string>? changedMembershipIds,
+        bool refreshRuntime = true)
     {
         try
         {
@@ -1358,13 +1399,15 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             }
 
             var query = AllAddons.AsEnumerable();
-            RefreshRuntimeStates(runtimeSnapshot ?? CaptureRuntimeStatePresentation());
-
-            foreach (var addon in AllAddons)
+            if (refreshRuntime)
             {
-                if (changedMembershipIds == null || changedMembershipIds.Contains(addon.AddonId))
+                RefreshRuntimeStates(runtimeSnapshot ?? CaptureRuntimeStatePresentation());
+                foreach (var addon in AllAddons)
                 {
-                    addon.SetCurrentAsset(CurrentAsset);
+                    if (changedMembershipIds == null || changedMembershipIds.Contains(addon.AddonId))
+                    {
+                        addon.SetCurrentAsset(CurrentAsset);
+                    }
                 }
             }
 
@@ -1456,6 +1499,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 // アドオン数表示を更新
                 this.RaisePropertyChanged(nameof(FilteredAddonsCount));
                 this.RaisePropertyChanged(nameof(AddonCountDisplay));
+                this.RaisePropertyChanged(nameof(HasActiveFilters));
+                this.RaisePropertyChanged(nameof(ActiveFilterText));
                 NotifyHiddenSelectionChanged();
             }
 

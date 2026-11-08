@@ -31,10 +31,13 @@ public sealed class StatusBarViewModelThreadingTests
         source.RaiseGmodStopped();
         source.RaiseApplyStarted();
         source.PendingChangesCount = 0;
+        source.LastFailureKind = PendingApplyFailureKind.ConflictingGameChanges;
         source.RaiseChangeFailed();
         Assert.False(viewModel.HasPendingChanges);
         Assert.False(viewModel.IsApplyingChanges);
         Assert.Equal(L.Get("Status.ApplyFailed"), viewModel.StatusMessage);
+        Assert.Equal(L.Get("Status.ApplyConflictReason"), viewModel.ApplyDetails);
+        Assert.False(viewModel.CanRetryPendingChanges);
         source.RaiseChangeApplied();
         Assert.Equal(L.Get("Status.Ready"), viewModel.StatusMessage);
     }
@@ -93,9 +96,10 @@ public sealed class StatusBarViewModelThreadingTests
                 source.IsApplyingChanges = pending.IsApplyingChanges;
                 source.RaiseApplyStateChanged();
             };
-            pending.ChangeFailed += (_, _) =>
+            pending.ChangeFailed += (_, failure) =>
             {
                 failureObserved = true;
+                source.LastFailureKind = failure.FailureKind;
                 source.PendingChangesCount = pending.GetPendingChangeCount();
                 source.RaiseChangeFailed();
             };
@@ -121,6 +125,8 @@ public sealed class StatusBarViewModelThreadingTests
             Assert.Equal(malformed, File.ReadAllText(noMount));
             Assert.False(viewModel.IsApplyingChanges);
             Assert.Equal(L.Format("Status.ApplyFailedWithPending", 1), viewModel.StatusMessage);
+            Assert.Equal(L.Get("Status.ApplyInvalidStateReason"), viewModel.ApplyDetails);
+            Assert.True(viewModel.CanRetryPendingChanges);
             var snapshot = await manager.CaptureDiagnosticSnapshotAsync();
             Assert.Equal(GmodAddonManager.Core.Models.DiagnosticRuntimeStatus.Invalid, snapshot.RuntimeStatus);
             Assert.Equal(1, snapshot.PendingChanges);
@@ -272,6 +278,7 @@ public sealed class StatusBarViewModelThreadingTests
 
         public int PendingChangesCount { get; set; }
         public bool IsApplyingChanges { get; set; }
+        public PendingApplyFailureKind LastFailureKind { get; set; }
         public event EventHandler? ApplyStateChanged;
 
         public event EventHandler? GmodStarted;

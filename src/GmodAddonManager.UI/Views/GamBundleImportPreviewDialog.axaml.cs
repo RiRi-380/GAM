@@ -3,6 +3,8 @@ using Avalonia.Interactivity;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.UI.Services;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace GmodAddonManager.UI.Views;
 
@@ -56,6 +58,9 @@ public partial class GamBundleImportPreviewDialog : Window
         MissingCountTextBlock.Text = preview.SubscriptionStatusKnown
             ? preview.MissingSubscriptionAddonIds.Count.ToString()
             : L.Get("GamAssetFile.SubscriptionStatusUnknown");
+        BundleContentsTree.ItemsSource = BuildContents(preview.Content.Bundle!);
+        MissingIdsSection.IsVisible = preview.SubscriptionStatusKnown && preview.MissingSubscriptionAddonIds.Count > 0;
+        MissingIdsTextBlock.Text = string.Join(", ", preview.MissingSubscriptionAddonIds);
 
         var requiresDepthIncrease =
             preview.RequiredNestedGroupDepth > currentMaxNestedGroupDepth;
@@ -77,6 +82,36 @@ public partial class GamBundleImportPreviewDialog : Window
         Close(true);
     }
 
+    internal static IReadOnlyList<GamBundlePreviewEntry> BuildContents(GamAssetBundleDocument bundle)
+    {
+        var assets = bundle.Assets.ToDictionary(asset => asset.LocalId, StringComparer.OrdinalIgnoreCase);
+        var groups = bundle.Groups.ToDictionary(group => group.LocalId, StringComparer.OrdinalIgnoreCase);
+        return bundle.RootChildren.Select(CreateEntry).ToArray();
+
+        GamBundlePreviewEntry CreateEntry(GamAssetBundleEntryReference entry)
+        {
+            if (entry.Kind == GamAssetBundleEntryKind.Asset)
+            {
+                var asset = assets[entry.LocalId];
+                return new GamBundlePreviewEntry(
+                    L.Format("GamBundleImport.AssetEntry", asset.Name, StateLabel(asset.State)),
+                    Array.Empty<GamBundlePreviewEntry>());
+            }
+
+            var group = groups[entry.LocalId];
+            return new GamBundlePreviewEntry(
+                L.Format("GamBundleImport.GroupEntry", group.Name, StateLabel(group.DefaultChildState)),
+                group.Children.Select(CreateEntry).ToArray());
+        }
+    }
+
+    private static string StateLabel(GamAssetDocumentState state) => L.Get(state switch
+    {
+        GamAssetDocumentState.Enabled => "AddonState.Enabled",
+        GamAssetDocumentState.Disabled => "AddonState.Disabled",
+        _ => "AddonState.Excluded"
+    });
+
     private void OnCancel(object? sender, RoutedEventArgs e)
     {
         Close(false);
@@ -95,3 +130,5 @@ public partial class GamBundleImportPreviewDialog : Window
             Array.Empty<string>());
     }
 }
+
+public sealed record GamBundlePreviewEntry(string Label, IReadOnlyList<GamBundlePreviewEntry> Children);

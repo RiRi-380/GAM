@@ -126,6 +126,22 @@ public sealed class AssetVersionServiceTests
     }
 
     [Fact]
+    public void DeletedVersionsKeepTheirNumbersAcrossProfileReload()
+    {
+        var service = new AssetVersionService();
+        var asset = CreateAsset(AddonState.Enabled, "100");
+        service.CreateSnapshot(asset);
+        var second = service.CreateSnapshot(asset);
+        Assert.True(service.DeleteSnapshot(asset, second.Version));
+
+        var json = Newtonsoft.Json.JsonConvert.SerializeObject(asset);
+        var reloaded = Newtonsoft.Json.JsonConvert.DeserializeObject<Asset>(json)!;
+        Assert.Equal(3, service.CreateSnapshot(reloaded).Version);
+        service.ClearHistory(reloaded);
+        Assert.Equal(4, service.GetNextVersionNumber(reloaded));
+    }
+
+    [Fact]
     public void CompareCurrentMembership_ReturnsBothSidesAndPreservesMissingIds()
     {
         var service = new AssetVersionService();
