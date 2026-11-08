@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.UI.Models;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.ViewModels;
 using GmodAddonManager.UI.Views;
@@ -40,26 +41,28 @@ public sealed class AddonDragToAssetTests : IDisposable
             var start = AddonPoint(window, FirstAddonId);
             window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Assert.Equal(2, grid.SelectedAddonsCount);
+            var groupPoint = await GroupHoverPointAsync(window, "outer");
             var groupHover = Stopwatch.StartNew();
-            Move(window, EntryPoint(window, "outer"));
+            Move(window, groupPoint);
             Assert.Null(list.CurrentGroupId);
-            Assert.Contains("2", window.FindControl<TextBlock>("AddonDragText")!.Text);
-            await WaitUntilAsync(() => list.CurrentGroupId == "outer");
+            Assert.Equal(L.Format("AddonDrop.Navigate", "Outer", 2),
+                window.FindControl<TextBlock>("AddonDragText")!.Text);
+            await WaitUntilAsync(() => list.CurrentGroupId == "outer", () => DescribeAssetHover(window, groupPoint));
             Assert.True(groupHover.Elapsed >= TimeSpan.FromSeconds(1));
             Assert.Same(source, list.SelectedAsset);
             Assert.True(list.IsAddonGridVisible);
             Assert.Equal(2, grid.SelectedAddonsCount);
 
-            Move(window, EntryPoint(window, "inner"));
+            Move(window, await GroupHoverPointAsync(window, "inner"));
             await WaitUntilAsync(() => list.CurrentGroupId == "inner");
             var rootBreadcrumb = window.GetVisualDescendants().OfType<Button>().Single(button =>
                 button.IsEffectivelyVisible &&
                 button.DataContext is AssetBreadcrumbItemViewModel { TargetGroupId: null, IsCurrent: false });
             Move(window, Center(window, rootBreadcrumb));
             await WaitUntilAsync(() => list.IsAtRoot);
-            Move(window, EntryPoint(window, "outer"));
+            Move(window, await GroupHoverPointAsync(window, "outer"));
             await WaitUntilAsync(() => list.CurrentGroupId == "outer");
-            Move(window, EntryPoint(window, "inner"));
+            Move(window, await GroupHoverPointAsync(window, "inner"));
             await WaitUntilAsync(() => list.CurrentGroupId == "inner");
 
             var dropPoint = EntryPoint(window, "destination") + new Vector(10, 0);
@@ -162,13 +165,16 @@ public sealed class AddonDragToAssetTests : IDisposable
 
             var pane = window.FindControl<AssetListView>("AssetPaneContent")!;
             var scroller = pane.FindControl<ScrollViewer>("AssetScrollViewer")!;
-            var edge = scroller.TranslatePoint(new Point(100, scroller.Bounds.Height - 9), window)!.Value;
+            var edge = scroller.TranslatePoint(new Point(2, scroller.Bounds.Height - 9), window)!.Value;
             window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            Move(window, edge);
+            await WaitUntilAsync(() => scroller.Offset.Y > 20, () => DescribeAssetHover(window, edge));
+            edge = scroller.TranslatePoint(new Point(100, scroller.Bounds.Height - 9), window)!.Value;
             Move(window, edge);
             await WaitUntilAsync(() => scroller.Offset.Y > 20 &&
                 scroller.Offset.Y >= scroller.Extent.Height - scroller.Viewport.Height - 12,
                 () => $"Offset={scroller.Offset.Y}, extent={scroller.Extent.Height}, viewport={scroller.Viewport.Height}, " +
-                      $"hit={window.InputHitTest(edge)?.GetType().Name}, " +
+                      $"{DescribeAssetHover(window, edge)}, " +
                       $"dragging={window.FindControl<Border>("AddonDragBadge")!.IsVisible}",
                 timeout: TimeSpan.FromSeconds(10));
             var lowerTarget = EntryPoint(window, "extra-14");
@@ -370,7 +376,8 @@ public sealed class AddonDragToAssetTests : IDisposable
         var pending = new PendingChangeManager(manager, appData);
         var previousList = ViewModelLocator.AssetListViewModel;
         var previousGrid = ViewModelLocator.AddonGridViewModel;
-        using var main = new MainWindowViewModel(manager, watcher, pending, new ConfirmUndoDialogs());
+        using var main = new MainWindowViewModel(
+            manager, watcher, pending, new ConfirmUndoDialogs(), new AppSettings());
         main.AssetListViewModel.LoadAssets();
         main.AssetListViewModel.SelectedAsset = main.AssetListViewModel.GetAssetById("source");
         var thumbnailFolder = string.Empty;
@@ -419,6 +426,62 @@ public sealed class AddonDragToAssetTests : IDisposable
     {
         var card = FindCard(window, "assetEntryCard", item => item is AssetListEntryViewModel entry && entry.Id == id);
         return card.TranslatePoint(new Point(115, 17), window)!.Value;
+    }
+
+    private static async Task<Point> GroupHoverPointAsync(MainWindow window, string id)
+    {
+        var pane = window.FindControl<AssetListView>("AssetPaneContent")!;
+        var scroller = pane.FindControl<ScrollViewer>("AssetScrollViewer")!;
+        Point point = default;
+        await WaitUntilAsync(() =>
+        {
+            window.UpdateLayout();
+            var card = pane.GetVisualDescendants().OfType<Border>().FirstOrDefault(border =>
+                border.IsEffectivelyVisible && border.Classes.Contains("assetEntryCard") &&
+                border.DataContext is AssetListEntryViewModel entry && entry.Id == id);
+            if (card == null)
+            {
+                return false;
+            }
+
+            var center = new Point(card.Bounds.Width / 2, card.Bounds.Height / 2);
+            if (card.TranslatePoint(center, scroller) is not { } position)
+            {
+                return false;
+            }
+
+            var viewportHeight = scroller.Viewport.Height;
+            if (position.Y < 36 || position.Y > viewportHeight - 36)
+            {
+                var offset = Math.Clamp(scroller.Offset.Y + position.Y - viewportHeight / 2,
+                    0, Math.Max(0, scroller.Extent.Height - viewportHeight));
+                if (offset != scroller.Offset.Y)
+                {
+                    scroller.Offset = new Vector(scroller.Offset.X, offset);
+                    return false;
+                }
+            }
+
+            if (card.TranslatePoint(center, window) is not { } windowPoint)
+            {
+                return false;
+            }
+
+            point = windowPoint;
+            return window.InputHitTest(point) is Control hit &&
+                   hit.GetSelfAndVisualAncestors().Contains(card);
+        }, () => DescribeAssetHover(window, point));
+        return point;
+    }
+
+    private static string DescribeAssetHover(MainWindow window, Point point)
+    {
+        var hit = window.InputHitTest(point) as Control;
+        var inPane = hit?.GetSelfAndVisualAncestors().OfType<AssetListView>().Any();
+        var hitEntry = hit?.GetSelfAndVisualAncestors().OfType<Border>()
+            .FirstOrDefault(card => card.Classes.Contains("assetEntryCard"))?.DataContext as AssetListEntryViewModel;
+        return $"Pointer={point}, hit={hit?.GetType().Name}/{hitEntry?.Id}, inPane={inPane}, " +
+               $"badge={window.FindControl<TextBlock>("AddonDragText")?.Text}";
     }
 
     private static Border FindCard(MainWindow window, string className, Func<object?, bool> matches)

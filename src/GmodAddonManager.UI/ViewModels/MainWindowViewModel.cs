@@ -47,18 +47,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         AddonManager addonManager, 
         GmodProcessWatcher processWatcher,
         PendingChangeManager pendingChangeManager,
-        IDialogService? undoDialogs = null)
+        IDialogService? undoDialogs = null,
+        AppSettings? initialSettings = null)
     {
         this.addonManager = addonManager;
         this.processWatcher = processWatcher;
         this.pendingChangeManager = pendingChangeManager;
         this.undoDialogs = undoDialogs ?? new DialogService();
 
-        AssetItemViewModel.ApplyGlobalSettings(AppSettings.Load());
+        var settings = initialSettings ?? AppSettings.Load();
+        AssetItemViewModel.ApplyGlobalSettings(settings);
 
         // ViewModel縺ｮ蛻晄悄蛹・
         assetListViewModel = new AssetListViewModel(
-            addonManager, pendingChangeManager, processWatcher);
+            addonManager, pendingChangeManager, processWatcher, settings);
         addonGridViewModel = new AddonGridViewModel(addonManager, pendingChangeManager, processWatcher);
         statusBarViewModel = new StatusBarViewModel(
             processWatcher, pendingChangeManager);

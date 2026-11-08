@@ -84,13 +84,14 @@ public partial class MainWindow
         }
 
         Control? target = null;
-        if (IsAddonDragRearmed(_addonDragPosition) &&
-            FindAddonDragPaneHit(_addonDragPosition) is { } hit)
+        if (IsAddonDragRearmed(_addonDragPosition))
         {
-            var scrolled = scrollAtEdge &&
+            // Edge scrolling belongs to the pane viewport, including the gaps between cards.
+            var scrolled = scrollAtEdge && AssetSplitView.IsPaneOpen &&
+                AssetPaneContent.IsEffectivelyVisible &&
                 this.TranslatePoint(_addonDragPosition, AssetPaneContent) is { } panePosition &&
                 AssetPaneContent.ScrollForAddonDrop(panePosition);
-            if (!scrolled)
+            if (!scrolled && FindAddonDragPaneHit(_addonDragPosition) is { } hit)
             {
                 target = FindAddonDragTarget(hit);
             }
