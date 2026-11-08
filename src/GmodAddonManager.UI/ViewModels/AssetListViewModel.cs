@@ -787,7 +787,20 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 }
             }
 
-            var imported = await addonManager.ImportGamFileAsync(preview, requestedName);
+            var impact = addonManager.PreviewGamImportRuntimeImpact(preview);
+            if (!impact.IsKnown || impact.Changes.Count > 0)
+            {
+                var message = impact.IsKnown
+                    ? BuildGamImportRuntimeConfirmation(impact)
+                    : L.Get("GamAssetFile.ImportRuntimeUnknown");
+                if (!await dialogService.ShowConfirmAsync(
+                        L.Get("GamAssetFile.ImportRuntimeTitle"), message))
+                {
+                    return;
+                }
+            }
+
+            var imported = await addonManager.ImportGamFileAsync(preview, requestedName, impact);
             currentGroupId = null;
             LoadAssets();
             var firstLooseAsset = imported.Assets.FirstOrDefault(asset =>
@@ -797,16 +810,31 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 SelectedAsset = Assets.FirstOrDefault(asset => asset.Id == firstLooseAsset.Id);
             }
 
-            await dialogService.ShowInfoAsync(
-                L.Get("Success.Title"),
-                imported.IsBundle
-                    ? L.Format(
-                        "GamBundleImport.ImportCompleted",
-                        imported.Assets.Count,
-                        imported.Groups.Count)
-                    : L.Format(
-                        "GamAssetFile.ImportCompleted",
-                        imported.Assets[0].Name));
+            if (imported.RuntimeApplySkipped)
+            {
+                await dialogService.ShowWarningAsync(
+                    L.Get("GamAssetFile.ImportRuntimeTitle"),
+                    L.Get("GamAssetFile.ImportRuntimeSkipped"));
+            }
+            else
+            {
+                await dialogService.ShowInfoAsync(
+                    L.Get("Success.Title"),
+                    imported.IsBundle
+                        ? L.Format(
+                            "GamBundleImport.ImportCompleted",
+                            imported.Assets.Count,
+                            imported.Groups.Count)
+                        : L.Format(
+                            "GamAssetFile.ImportCompleted",
+                            imported.Assets[0].Name));
+            }
+        }
+        catch (GamImportRuntimeImpactChangedException)
+        {
+            await dialogService.ShowWarningAsync(
+                L.Get("GamAssetFile.ImportRuntimeTitle"),
+                L.Get("GamAssetFile.ImportRuntimeChanged"));
         }
         catch (GamAssetDocumentException ex)
         {
@@ -836,6 +864,31 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
                 L.Get("Error.Title"),
                 L.Get("GamAssetFile.ImportFailed"));
         }
+    }
+
+    private string BuildGamImportRuntimeConfirmation(GamImportRuntimeImpact impact)
+    {
+        var addons = addonManager.GetAllAddons();
+        var lines = impact.Changes
+            .OrderBy(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair =>
+            {
+                var title = addons.TryGetValue(pair.Key, out var addon)
+                    ? addon.Title
+                    : null;
+                var label = string.IsNullOrWhiteSpace(title)
+                    ? pair.Key
+                    : $"{title} ({pair.Key})";
+                return L.Format(pair.Value
+                    ? "GamAssetFile.ImportRuntimeEnable"
+                    : "GamAssetFile.ImportRuntimeDisable", label);
+            });
+        var summary = L.Format(
+            "GamAssetFile.ImportRuntimeChanges",
+            impact.Changes.Count(pair => pair.Value),
+            impact.Changes.Count(pair => !pair.Value));
+        return summary + "\n\n" + string.Join("\n", lines);
     }
 
     private void ToggleGmodDisabledCollapse()

@@ -291,6 +291,12 @@
                         </StackPanel>
                     </Button>
 
+                    <TextBlock Text="{Binding HiddenSelectionText}"
+                               IsVisible="{Binding HasHiddenSelectedAddons}"
+                               Margin="0,0,8,6"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"/>
+
                     <!-- 選択したアドオンを転送 -->
                     <Button Command="{Binding AddSelectedAddonsCommand}"
                             IsEnabled="{Binding HasSelectedAddons}"

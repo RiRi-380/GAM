@@ -3961,8 +3961,11 @@ namespace GmodAddonManager.Core.Services
         /// are parsed only when their classification source timestamp changed or
         /// the previous result is unknown.
         /// </summary>
-        private bool RefreshClassificationMetadataForIds(IEnumerable<string> addonIds)
+        private bool RefreshClassificationMetadataForIds(
+            IEnumerable<string> addonIds,
+            Configuration? targetConfiguration = null)
         {
+            targetConfiguration ??= configuration;
             if (addonIds == null)
             {
                 return false;
@@ -3985,7 +3988,7 @@ namespace GmodAddonManager.Core.Services
                          .Select(id => id.Trim())
                          .Distinct(StringComparer.Ordinal))
             {
-                configuration.AddonMetadata.TryGetValue(addonId, out var addon);
+                targetConfiguration.AddonMetadata.TryGetValue(addonId, out var addon);
                 var sourcePath = ResolveClassificationSourcePath(addonId, addon);
                 cachedDetails.TryGetValue(addonId, out var cachedInfo);
                 if (addon == null && sourcePath == null && cachedInfo == null)
@@ -4002,7 +4005,7 @@ namespace GmodAddonManager.Core.Services
                         IsAvailable = sourcePath != null,
                         IsDownloadPending = sourcePath == null
                     };
-                    configuration.AddonMetadata[addonId] = addon;
+                    targetConfiguration.AddonMetadata[addonId] = addon;
                     changed = true;
                 }
 
@@ -8875,6 +8878,15 @@ namespace GmodAddonManager.Core.Services
             GamAssetImportPreview preview,
             string assetName)
         {
+            var result = await ImportGamAssetAsync(preview, assetName, confirmedImpact: null);
+            return result.Asset;
+        }
+
+        private async Task<(Asset Asset, bool RuntimeApplySkipped)> ImportGamAssetAsync(
+            GamAssetImportPreview preview,
+            string assetName,
+            GamImportRuntimeImpact? confirmedImpact)
+        {
             if (preview == null)
             {
                 throw new ArgumentNullException(nameof(preview));
@@ -8887,69 +8899,26 @@ namespace GmodAddonManager.Core.Services
                     $"Asset name already exists: {normalizedName}");
             }
 
-            // Re-validate programmatically constructed previews at the mutation
-            // boundary and normalize the embedded image/rule exactly as file input.
+            // Re-validate programmatically constructed previews at the mutation boundary.
             var document = GamAssetDocumentCodec.Deserialize(
                 GamAssetDocumentCodec.Serialize(preview.Document));
             var rollbackConfiguration = CloneConfiguration(configuration);
-            var asset = new Asset(normalizedName)
-            {
-                State = FromGamAssetDocumentState(document.State),
-                Memo = document.Memo ?? string.Empty,
-                IsFavorite = false,
-                ParentGroupId = null,
-                SortOrder = GetNextRootNormalSortOrder(),
-                RetainMissingReferences =
-                    document.Membership.Kind == GamAssetDocumentMembershipKind.Fixed
-            };
-            asset.AddonStates.Clear();
-
-            if (document.Membership.Kind == GamAssetDocumentMembershipKind.Fixed)
-            {
-                asset.Addons = document.Membership.AddonIds
-                    .Where(IsWorkshopNumericId)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToList();
-            }
-            else
-            {
-                var rule = document.Membership.Rule
-                    ?? throw new GamAssetDocumentException(
-                        "The Smart Asset rule is missing.");
-                asset.MembershipRule = new AssetMembershipRule(
-                    rule.Kind == GamAssetDocumentRuleKind.Type
-                        ? AssetMembershipRuleKind.Type
-                        : AssetMembershipRuleKind.Tag,
-                    rule.Value);
-                asset.SmartAutomationState = new SmartAssetAutomationState
-                {
-                    SchemaVersion = SmartAssetAutomationState.CurrentSchemaVersion,
-                    Status = SmartAssetAutomationStatus.Active
-                };
-                // SnapshotAddonIds are intentionally informational. Current local
-                // metadata and the imported rule alone determine membership.
-                asset.Addons.Clear();
-            }
+            var asset = CreateImportedAsset(normalizedName, document.State, document.Membership, document.Memo);
+            asset.SortOrder = GetNextRootNormalSortOrder();
+            var snapshot = GetWorkshopSnapshotFromCache();
 
             string? importedImagePath = null;
             UndoAction? undoAction = null;
+            GamImportRuntimeImpact impact;
             try
             {
                 configuration.Assets.Add(asset);
                 AddMissingGamImportMetadata(asset);
 
-                if (asset.IsSmart)
-                {
-                    var snapshot = GetWorkshopSnapshotFromCache();
-                    if (snapshot.IsAuthoritative)
-                    {
-                        RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
-                        smartAssetReconciliationService.Reconcile(
-                            configuration,
-                            snapshot.SubscribedIds);
-                    }
-                }
+                ReconcileImportedSmartAssets(configuration, new[] { asset }, snapshot);
+                impact = CompareGamImportRuntimeImpact(
+                    rollbackConfiguration.Assets, configuration.Assets, snapshot);
+                VerifyGamImportApproval(confirmedImpact, impact);
 
                 var documentImage = document.ImageBytes;
                 if (documentImage != null)
@@ -8978,25 +8947,21 @@ namespace GmodAddonManager.Core.Services
                 throw;
             }
 
-            try
-            {
-                await UpdateAddonStatesAsync();
-            }
-            catch (Exception ex)
-            {
-                QueueRuntimeApplyOrRemember("ImportAssetFromGamFileAsync");
-                errorHandler.HandleError(
-                    ex,
-                    ".gam import was saved; runtime reconciliation was queued",
-                    ErrorSeverity.Warning);
-            }
+            var runtimeApplySkipped = !await ApplyGamImportRuntimeImpactAsync(impact);
+            return (asset, runtimeApplySkipped);
+        }
 
-            return asset;
+        public Task<GamAssetImportResult> ImportGamFileAsync(
+            GamAssetFileImportPreview preview,
+            string? singleAssetName = null)
+        {
+            return ImportGamFileAsync(preview, singleAssetName, confirmedImpact: null);
         }
 
         public async Task<GamAssetImportResult> ImportGamFileAsync(
             GamAssetFileImportPreview preview,
-            string? singleAssetName = null)
+            string? singleAssetName,
+            GamImportRuntimeImpact? confirmedImpact)
         {
             if (preview == null)
             {
@@ -9010,18 +8975,21 @@ namespace GmodAddonManager.Core.Services
                     singlePreview,
                     string.IsNullOrWhiteSpace(singleAssetName)
                         ? singlePreview.SuggestedAssetName
-                        : singleAssetName);
+                        : singleAssetName,
+                    confirmedImpact);
                 return new GamAssetImportResult(
-                    new[] { imported },
+                    new[] { imported.Asset },
                     Array.Empty<AssetGroup>(),
-                    isBundle: false);
+                    isBundle: false,
+                    runtimeApplySkipped: imported.RuntimeApplySkipped);
             }
 
-            return await ImportGamBundleAsync(preview.Content.Bundle!);
+            return await ImportGamBundleAsync(preview.Content.Bundle!, confirmedImpact);
         }
 
         private async Task<GamAssetImportResult> ImportGamBundleAsync(
-            GamAssetBundleDocument sourceBundle)
+            GamAssetBundleDocument sourceBundle,
+            GamImportRuntimeImpact? confirmedImpact)
         {
             var bundle = await Task.Run(() =>
                 GamAssetBundleCodec.ValidateAndNormalize(sourceBundle));
@@ -9039,9 +9007,11 @@ namespace GmodAddonManager.Core.Services
             var importedAssets = new List<Asset>(bundle.Assets.Count);
             foreach (var portableAsset in bundle.Assets)
             {
-                var asset = CreateImportedBundleAsset(
-                    portableAsset,
-                    BuildUniqueGamImportName(portableAsset.Name, usedNames));
+                var asset = CreateImportedAsset(
+                    BuildUniqueGamImportName(portableAsset.Name, usedNames),
+                    portableAsset.State,
+                    portableAsset.Membership,
+                    portableAsset.Memo);
                 while (!usedIds.Add(asset.Id))
                 {
                     asset.Id = Guid.NewGuid().ToString();
@@ -9103,6 +9073,8 @@ namespace GmodAddonManager.Core.Services
 
             var importedImagePaths = new List<string>();
             UndoAction? undoAction = null;
+            GamImportRuntimeImpact impact;
+            var snapshot = GetWorkshopSnapshotFromCache();
             try
             {
                 if (requiredNestedDepth > configuration.MaxNestedGroupDepth)
@@ -9116,14 +9088,10 @@ namespace GmodAddonManager.Core.Services
                     AddMissingGamImportMetadata(asset);
                 }
 
-                var snapshot = GetWorkshopSnapshotFromCache();
-                if (snapshot.IsAuthoritative && importedAssets.Any(asset => asset.IsSmart))
-                {
-                    RefreshClassificationMetadataForIds(snapshot.SubscribedIds);
-                    smartAssetReconciliationService.Reconcile(
-                        configuration,
-                        snapshot.SubscribedIds);
-                }
+                ReconcileImportedSmartAssets(configuration, importedAssets, snapshot);
+                impact = CompareGamImportRuntimeImpact(
+                    rollbackConfiguration.Assets, configuration.Assets, snapshot);
+                VerifyGamImportApproval(confirmedImpact, impact);
 
                 foreach (var portableAsset in bundle.Assets)
                 {
@@ -9176,23 +9144,13 @@ namespace GmodAddonManager.Core.Services
                 throw;
             }
 
-            try
-            {
-                await UpdateAddonStatesAsync();
-            }
-            catch (Exception ex)
-            {
-                QueueRuntimeApplyOrRemember("ImportAssetBundleFromGamFileAsync");
-                errorHandler.HandleError(
-                    ex,
-                    ".gam bundle import was saved; runtime reconciliation was queued",
-                    ErrorSeverity.Warning);
-            }
+            var runtimeApplySkipped = !await ApplyGamImportRuntimeImpactAsync(impact);
 
             return new GamAssetImportResult(
                 importedAssets,
                 importedGroups,
-                isBundle: true);
+                isBundle: true,
+                runtimeApplySkipped: runtimeApplySkipped);
         }
 
         private static void AssignImportedBundleEntry(
@@ -9256,22 +9214,24 @@ namespace GmodAddonManager.Core.Services
             return maximum;
         }
 
-        private Asset CreateImportedBundleAsset(
-            GamAssetBundleAsset portable,
-            string name)
+        private static Asset CreateImportedAsset(
+            string name,
+            GamAssetDocumentState state,
+            GamAssetDocumentMembership membership,
+            string? memo)
         {
             var asset = new Asset(name)
             {
-                State = FromGamAssetDocumentState(portable.State),
-                Memo = portable.Memo ?? string.Empty,
+                State = FromGamAssetDocumentState(state),
+                Memo = memo ?? string.Empty,
                 IsFavorite = false,
                 RetainMissingReferences =
-                    portable.Membership.Kind == GamAssetDocumentMembershipKind.Fixed
+                    membership.Kind == GamAssetDocumentMembershipKind.Fixed
             };
             asset.AddonStates.Clear();
-            if (portable.Membership.Kind == GamAssetDocumentMembershipKind.Fixed)
+            if (membership.Kind == GamAssetDocumentMembershipKind.Fixed)
             {
-                asset.Addons = portable.Membership.AddonIds
+                asset.Addons = membership.AddonIds
                     .Where(IsWorkshopNumericId)
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(id => id, StringComparer.Ordinal)
@@ -9279,7 +9239,7 @@ namespace GmodAddonManager.Core.Services
                 return asset;
             }
 
-            var rule = portable.Membership.Rule
+            var rule = membership.Rule
                 ?? throw new GamAssetDocumentException(
                     "The Smart Asset rule is missing.");
             asset.MembershipRule = new AssetMembershipRule(
@@ -10738,12 +10698,19 @@ namespace GmodAddonManager.Core.Services
 
         internal async Task<RuntimeApplyAttemptResult> UpdateAddonStatesWithResultAsync(
             IProgress<(int current, int total)>? progress = null,
-            bool allowConflictSupersede = false)
+            bool allowConflictSupersede = false,
+            GamImportRuntimeImpact? approvedImportImpact = null)
         {
             await _runtimeReconcileGate.WaitAsync();
             try
             {
                 await SaveConfigurationImmediatelyAsync();
+
+                if (approvedImportImpact != null &&
+                    !IsApprovedGamImportImpactCurrent(approvedImportImpact))
+                {
+                    return new RuntimeApplyAttemptResult(false, GamImportImpactChangedFailureCode);
+                }
 
                 if (DeferRuntimeApplyIfGmodRunning(allowConflictSupersede))
                 {
@@ -10757,16 +10724,15 @@ namespace GmodAddonManager.Core.Services
                     parentOperationId: null,
                     progress: progress,
                     observeExternalChanges: true,
-                    allowConflictSupersede: allowConflictSupersede);
+                    allowConflictSupersede: allowConflictSupersede,
+                    approvedImportImpact: approvedImportImpact);
                 if (!result.Succeeded)
                 {
                     // A conflict is an intentional fail-closed stop. Re-queueing
                     // it would replace the generation PendingChangeManager must
                     // clear and could overwrite GMod on the next pass.
-                    if (!string.Equals(
-                            result.FailureCode,
-                            RuntimeAttributionConflictFailureCode,
-                            StringComparison.Ordinal))
+                    if (approvedImportImpact == null &&
+                        result.FailureCode != RuntimeAttributionConflictFailureCode)
                     {
                         var queued = QueueRuntimeApplyOrRemember(
                             "UpdateAddonStatesWithResultAsync",
@@ -11625,7 +11591,8 @@ namespace GmodAddonManager.Core.Services
             string? parentOperationId,
             IProgress<(int current, int total)>? progress,
             bool observeExternalChanges,
-            bool allowConflictSupersede = true)
+            bool allowConflictSupersede = true,
+            GamImportRuntimeImpact? approvedImportImpact = null)
         {
             if (!TryGetSubscribedAddonIdSet(
                     "UpdateAddonStates",
@@ -11695,7 +11662,26 @@ namespace GmodAddonManager.Core.Services
             var expectedStates = BuildExpectedStatesForAssets(
                 configuration.Assets,
                 subscribedAddonIds);
-            var allAddonIds = expectedStates.Keys.ToList();
+            if (approvedImportImpact != null &&
+                !approvedImportImpact.Matches(ReadGamImportRuntimeImpact(expectedStates)))
+            {
+                return new StateMatchResult(
+                    CaptureState(),
+                    BuildSnapshot(expectedStates, GetExpectedScopeLabel(assetSpecific: false)),
+                    matched: false,
+                    durationMs: 0,
+                    metrics: null)
+                {
+                    RuntimeWriteSucceeded = false,
+                    FailureCode = GamImportImpactChangedFailureCode
+                };
+            }
+
+            var statesToApply = approvedImportImpact == null
+                ? expectedStates
+                : approvedImportImpact.Changes.ToDictionary(
+                    pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            var allAddonIds = statesToApply.Keys.ToList();
 
             var totalAddons = allAddonIds.Count;
             progress?.Report((0, totalAddons));
@@ -11814,14 +11800,14 @@ namespace GmodAddonManager.Core.Services
                 finally
                 {
                     runtimeWriteSucceeded = ApplyAddonStateStoreBulk(
-                        expectedStates,
+                        statesToApply,
                         allowConflictSupersede);
                     bulkStateUpdateDepth.Value--;
                     InvalidateWorkshopScanCache();
                 }
 
                 var metrics = linkMetrics?.ToEventMetrics();
-                var matchResult = await WaitForExpectedStateAsync(expectedStates, metrics);
+                var matchResult = await WaitForExpectedStateAsync(statesToApply, metrics);
                 matchResult.RuntimeWriteSucceeded =
                     runtimeWriteSucceeded &&
                     updateError == null;

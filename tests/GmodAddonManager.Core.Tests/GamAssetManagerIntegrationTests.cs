@@ -399,6 +399,183 @@ public sealed class GamAssetManagerIntegrationTests : IDisposable
         Assert.False(File.Exists(path));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NeutralImportPreservesExistingGmodState(bool bundle)
+    {
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([SubscribedAddonId]);
+        using var manager = CreateManager();
+        manager.GmodRunningProvider = () => false;
+        await manager.InitializeAsync();
+
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Disabled, [SubscribedAddonId], bundle);
+        var before = File.ReadAllBytes(store.NoMountFilePath);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+
+        Assert.True(impact.IsKnown);
+        Assert.Empty(impact.Changes);
+        var result = await manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact);
+
+        Assert.Equal(AddonState.Disabled, Assert.Single(result.Assets).State);
+        Assert.Equal(before, File.ReadAllBytes(store.NoMountFilePath));
+        Assert.False(manager.GetConfiguration().PendingRuntimeApplyRequired);
+    }
+
+    [Fact]
+    public async Task ImportPreviewsBothIncomingAndExistingGmodChanges()
+    {
+        const string otherId = "101";
+        const string unchangedId = "102";
+        WorkshopManifestTestData.Write(rootPath, SubscribedAddonId, otherId, unchangedId);
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([otherId]);
+        using var manager = CreateManager();
+        manager.GmodRunningProvider = () => false;
+        await manager.InitializeAsync();
+
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Excluded, [SubscribedAddonId], bundle: false);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+
+        Assert.True(impact.IsKnown);
+        Assert.Equal(2, impact.Changes.Count);
+        Assert.False(impact.Changes[SubscribedAddonId]);
+        Assert.True(impact.Changes[otherId]);
+        Assert.Equal(new[] { otherId }, store.GetDisabledIds());
+        IReadOnlyDictionary<string, bool>? applied = null;
+        manager.RuntimeWriteObserver = changes => applied = changes;
+
+        await manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact);
+
+        Assert.Equal(new[] { SubscribedAddonId }, store.GetDisabledIds());
+        Assert.NotNull(applied);
+        Assert.Equal(2, applied.Count);
+        Assert.DoesNotContain(unchangedId, applied.Keys);
+    }
+
+    [Fact]
+    public async Task ImportRejectsStaleConfirmationBeforeSavingTheAsset()
+    {
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([]);
+        using var manager = CreateManager();
+        manager.GmodRunningProvider = () => false;
+        await manager.InitializeAsync();
+
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Excluded, [SubscribedAddonId], bundle: false);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+        Assert.Single(impact.Changes);
+
+        store.WriteDisabledIds([SubscribedAddonId]);
+        await Assert.ThrowsAsync<GamImportRuntimeImpactChangedException>(() =>
+            manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact));
+
+        Assert.False(manager.AssetNameExists("Incoming"));
+        Assert.Equal(new[] { SubscribedAddonId }, store.GetDisabledIds());
+    }
+
+    [Fact]
+    public async Task ImportWithUnreadableGmodStateSavesWithoutQueuingAnApply()
+    {
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([]);
+        using var manager = CreateManager();
+        manager.GmodRunningProvider = () => false;
+        await manager.InitializeAsync();
+
+        const string malformed = "malformed addonnomount";
+        File.WriteAllText(store.NoMountFilePath, malformed);
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Excluded, [SubscribedAddonId], bundle: false);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+
+        Assert.False(impact.IsKnown);
+        await manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact);
+
+        Assert.True(manager.AssetNameExists("Incoming"));
+        Assert.Equal(malformed, File.ReadAllText(store.NoMountFilePath));
+        Assert.False(manager.GetConfiguration().PendingRuntimeApplyRequired);
+    }
+
+    [Fact]
+    public async Task ConfirmedImportWhileGmodIsRunningDefersUntilExit()
+    {
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([]);
+        using var manager = CreateManager();
+        var gameRunning = true;
+        manager.GmodRunningProvider = () => gameRunning;
+        await manager.InitializeAsync();
+        var pending = new PendingChangeManager(manager, manager.GetManagerPath());
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Excluded, [SubscribedAddonId], bundle: false);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+
+        await manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact);
+
+        Assert.True(pending.HasPendingChanges());
+        Assert.Empty(store.GetDisabledIds());
+
+        gameRunning = false;
+        await pending.ApplyPendingChangesAsync();
+        Assert.False(pending.HasPendingChanges());
+        Assert.Equal(new[] { SubscribedAddonId }, store.GetDisabledIds());
+    }
+
+    [Fact]
+    public async Task ImportReportsWhenRuntimeChangesBecomeStaleAfterSaving()
+    {
+        const string otherId = "101";
+        WorkshopManifestTestData.Write(rootPath, SubscribedAddonId, otherId);
+        var store = new GmodAddonStateStore(gmodRootPath);
+        store.WriteDisabledIds([]);
+        using var manager = CreateManager();
+        manager.GmodRunningProvider = () => false;
+        await manager.InitializeAsync();
+
+        var preview = await WriteImportAsync(manager, GamAssetDocumentState.Excluded, [SubscribedAddonId], bundle: false);
+        var impact = manager.PreviewGamImportRuntimeImpact(preview);
+        Assert.Single(impact.Changes);
+
+        var wroteExternalChange = false;
+        manager.GmodRunningProvider = () =>
+        {
+            if (!wroteExternalChange)
+            {
+                store.WriteDisabledIds([otherId]);
+                wroteExternalChange = true;
+            }
+            return false;
+        };
+
+        var result = await manager.ImportGamFileAsync(preview, singleAssetName: null, confirmedImpact: impact);
+
+        Assert.True(wroteExternalChange);
+        Assert.True(result.RuntimeApplySkipped);
+        Assert.True(manager.AssetNameExists("Incoming"));
+        Assert.Equal(new[] { otherId }, store.GetDisabledIds());
+        Assert.False(manager.GetConfiguration().PendingRuntimeApplyRequired);
+    }
+
+    private async Task<GamAssetFileImportPreview> WriteImportAsync(
+        AddonManager manager, GamAssetDocumentState state, string[] ids, bool bundle)
+    {
+        var path = Path.Combine(rootPath, "runtime-impact.gam");
+        var service = new GamAssetFileService();
+        var membership = GamAssetDocumentMembership.Fixed(ids);
+        if (bundle)
+        {
+            await service.WriteBundleAsync(path, new GamAssetBundleDocument(
+                [new GamAssetBundleAsset("incoming", "Incoming", state, membership)],
+                []));
+        }
+        else
+        {
+            await service.WriteAsync(path, new GamAssetDocument("Incoming", state, membership));
+        }
+
+        return await manager.PreviewGamFileImportAsync(path);
+    }
+
     private AddonManager CreateManager()
     {
         return new AddonManager(new AddonManagerOptions

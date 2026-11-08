@@ -217,7 +217,7 @@ public sealed class GmodDisabledSystemAssetUiTests : IDisposable
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "if (currentAsset == null || currentAsset.IsSystem) return;",
+            "currentAsset is { IsSystem: false, IsSmart: false }",
             source,
             StringComparison.Ordinal);
     }

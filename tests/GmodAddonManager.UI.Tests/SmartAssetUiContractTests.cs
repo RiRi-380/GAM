@@ -67,7 +67,7 @@ public sealed class SmartAssetUiContractTests
         Assert.DoesNotContain("TypeTagMappings", source, StringComparison.Ordinal);
         Assert.DoesNotContain("TagAliases", source, StringComparison.Ordinal);
         Assert.Contains(".Where(asset => !asset.IsSmart)", source, StringComparison.Ordinal);
-        Assert.Contains("if (currentAsset.IsSmart) return;", source, StringComparison.Ordinal);
+        Assert.Contains("currentAsset is { IsSystem: false, IsSmart: false }", source, StringComparison.Ordinal);
         Assert.Contains("await addonManager.ReconcileSmartAssetsAsync();", source, StringComparison.Ordinal);
     }
 

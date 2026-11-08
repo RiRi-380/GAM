@@ -11,7 +11,17 @@ namespace GmodAddonManager.Core.Models
             IEnumerable<Asset> assets,
             IEnumerable<AssetGroup> groups,
             bool isBundle)
+            : this(assets, groups, isBundle, runtimeApplySkipped: false)
         {
+        }
+
+        internal GamAssetImportResult(
+            IEnumerable<Asset> assets,
+            IEnumerable<AssetGroup> groups,
+            bool isBundle,
+            bool runtimeApplySkipped)
+        {
+            RuntimeApplySkipped = runtimeApplySkipped;
             Assets = Copy(assets, nameof(assets));
             Groups = Copy(groups, nameof(groups));
             IsBundle = isBundle;
@@ -22,6 +32,7 @@ namespace GmodAddonManager.Core.Models
         public IReadOnlyList<AssetGroup> Groups { get; }
 
         public bool IsBundle { get; }
+        public bool RuntimeApplySkipped { get; }
 
         private static IReadOnlyList<T> Copy<T>(IEnumerable<T> values, string parameterName)
         {

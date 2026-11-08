@@ -47,7 +47,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     
     private bool showOnlyAssetAddons;
     private bool isMultiSelectEnabled;
-    private HashSet<string> selectedAddonIds;
+    private readonly HashSet<string> selectedAddonIds;
     private AddonItemViewModel? selectedAddon;
     private bool isSelectionMode;
     private bool hasSelectedAddons;
@@ -98,7 +98,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         allAddons = new ObservableCollection<AddonItemViewModel>();
         filteredAddons = new ObservableCollection<AddonItemViewModel>();
-        selectedAddonIds = new HashSet<string>();
+        selectedAddonIds = new HashSet<string>(StringComparer.Ordinal);
         RefreshSortModeOptions();
         LoadSortSettings();
         InitializeFilterOptions();
@@ -987,6 +987,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(CurrentAssetDisplayName));
             this.RaisePropertyChanged(nameof(SelectionButtonText));
             this.RaisePropertyChanged(nameof(CanRemoveFromAsset));
+            this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
             this.RaisePropertyChanged(nameof(AddonCountDisplay));
         }
     }
@@ -1122,17 +1123,29 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     }
     
     public int SelectedAddonsCount => selectedAddonIds.Count;
-    
+
+    public int HiddenSelectedAddonsCount => SelectedAddonsCount -
+        FilteredAddons.Count(addon => selectedAddonIds.Contains(addon.AddonId));
+
+    public bool HasHiddenSelectedAddons => HiddenSelectedAddonsCount > 0;
+
+    public string HiddenSelectionText =>
+        L.Format("AddonGrid.HiddenSelectionCount", HiddenSelectedAddonsCount);
+
     public string SelectionButtonText => L.Get("Action.Transfer");
 
     public string SelectionActionLabel => L.Format("AddonGrid.ActionFormat", SelectedAddonsCount, SelectionButtonText);
 
-    public string SelectionDeleteLabel => L.Format("AddonGrid.DeleteFormat", SelectedAddonsCount);
-    
-    public bool CanRemoveFromAsset => HasSelectedAddons && 
-                                      currentAsset != null && 
-                                      !currentAsset.IsSystem &&
-                                      !currentAsset.IsSmart;
+    public string SelectionDeleteLabel => L.Format("AddonGrid.DeleteFormat", GetSelectedAssetMemberIds().Count);
+
+    public bool CanRemoveFromAsset => GetSelectedAssetMemberIds().Count > 0;
+
+    private List<string> GetSelectedAssetMemberIds()
+    {
+        return currentAsset is { IsSystem: false, IsSmart: false } asset && HasSelectedAddons
+            ? asset.GetAddonIds().Where(selectedAddonIds.Contains).ToList()
+            : new List<string>();
+    }
     
     public int AddonFilterIndex
     {
@@ -1295,6 +1308,12 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         AllAddons = newAllAddons;
+        selectedAddonIds.IntersectWith(AllAddons.Where(addon => !addon.IsLocal).Select(addon => addon.AddonId));
+        foreach (var addon in AllAddons)
+        {
+            addon.IsSelected = selectedAddonIds.Contains(addon.AddonId);
+        }
+        NotifySelectionChanged();
         ApplyFilter();
         this.RaisePropertyChanged(nameof(FilteredAddonsCount));
         this.RaisePropertyChanged(nameof(TotalAddonsCount));
@@ -1437,6 +1456,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 // アドオン数表示を更新
                 this.RaisePropertyChanged(nameof(FilteredAddonsCount));
                 this.RaisePropertyChanged(nameof(AddonCountDisplay));
+                NotifyHiddenSelectionChanged();
             }
 
             if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
@@ -1641,14 +1661,14 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             if (IsSelectionMode || (IsMultiSelectEnabled && isControlPressed))
             {
                 // 選択モードまたは複数選択モードでCtrlキー押下時はトグル
-                addon.IsSelected = !addon.IsSelected;
-                if (addon.IsSelected)
+                if (selectedAddonIds.Remove(addonId))
                 {
-                    selectedAddonIds.Add(addonId);
+                    addon.IsSelected = false;
                 }
                 else
                 {
-                    selectedAddonIds.Remove(addonId);
+                    selectedAddonIds.Add(addonId);
+                    addon.IsSelected = true;
                 }
                 NotifySelectionChanged();
                 
@@ -1686,17 +1706,25 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(SelectedAddonsCount));
         this.RaisePropertyChanged(nameof(SelectionActionLabel));
         this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
+        NotifyHiddenSelectionChanged();
+    }
+
+    private void NotifyHiddenSelectionChanged()
+    {
+        this.RaisePropertyChanged(nameof(HiddenSelectedAddonsCount));
+        this.RaisePropertyChanged(nameof(HasHiddenSelectedAddons));
+        this.RaisePropertyChanged(nameof(HiddenSelectionText));
     }
 
     public ObservableCollection<AddonItemViewModel> GetSelectedAddons()
     {
         return new ObservableCollection<AddonItemViewModel>(
-            FilteredAddons.Where(a => a.IsSelected && !a.IsLocal)
+            AllAddons.Where(addon => !addon.IsLocal && selectedAddonIds.Contains(addon.AddonId))
         );
     }
 
     internal string[] GetDraggedAddonIds(AddonItemViewModel grabbedAddon) =>
-        grabbedAddon.IsSelected
+        selectedAddonIds.Contains(grabbedAddon.AddonId)
             ? GetSelectedAddons().Select(addon => addon.AddonId).ToArray()
             : [grabbedAddon.AddonId];
 
@@ -2045,8 +2073,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var selectedAddons = new ObservableCollection<AddonItemViewModel>(
-                GetSelectedAddons().Where(addon => !addon.IsLocal));
+            var selectedAddons = GetSelectedAddons();
             if (selectedAddons.Count == 0)
             {
                 return;
@@ -2408,18 +2435,13 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             // 全てのフィルタリングされたアドオンを選択
             foreach (var addon in FilteredAddons)
             {
-                if (!addon.IsLocal && !addon.IsSelected)
+                if (!addon.IsLocal && selectedAddonIds.Add(addon.AddonId))
                 {
                     addon.IsSelected = true;
-                    selectedAddonIds.Add(addon.AddonId);
                 }
             }
-            
-            HasSelectedAddons = selectedAddonIds.Count > 0;
-            this.RaisePropertyChanged(nameof(SelectedAddonsCount));
-            this.RaisePropertyChanged(nameof(SelectionActionLabel));
-            this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
-            // logger?.LogInformation($"Selected all {FilteredAddons.Count} visible addons"); // Removed logging
+
+            NotifySelectionChanged();
         }
         catch (Exception ex)
         {
@@ -2427,49 +2449,40 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
     }
     
-    private void UpdateSelectionState()
-    {
-        HasSelectedAddons = selectedAddonIds.Count > 0;
-        this.RaisePropertyChanged(nameof(SelectedAddonsCount));
-        this.RaisePropertyChanged(nameof(SelectionActionLabel));
-        this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
-    }
-    
     private async Task RemoveSelectedAddonsAsync()
     {
         try
         {
-            if (currentAsset == null || currentAsset.IsSystem) return;
-            if (currentAsset.IsSmart) return;
-            
-            var selectedAddons = GetSelectedAddons();
-            if (selectedAddons.Count == 0) return;
-            
+            var asset = currentAsset;
+            var addonIds = GetSelectedAssetMemberIds();
+            if (asset == null || addonIds.Count == 0)
+            {
+                return;
+            }
+
             var dialogService = new DialogService();
-            var confirmMessage = selectedAddons.Count == 1
+            var confirmMessage = addonIds.Count == 1
                 ? L.Get("Confirm.RemoveFromAssetSingle")
-                : L.Format("Confirm.RemoveFromAssetMultiple", selectedAddons.Count);
+                : L.Format("Confirm.RemoveFromAssetMultiple", addonIds.Count);
                 
             var confirmed = await dialogService.ShowConfirmAsync(L.Get("Confirm.Title"), confirmMessage);
             
             if (confirmed)
             {
-                // アセットから一括削除
-                var addonIds = selectedAddons.Select(a => a.AddonId).ToList();
                 var mainWindow = GetMainWindow();
                 using var progressDialog = ProgressDialogService.Show(
                     mainWindow,
                     L.Get("Busy.UpdatingAddonStates"),
-                    L.Format("Busy.Detail.AddonCount", selectedAddons.Count));
+                    L.Format("Busy.Detail.AddonCount", addonIds.Count));
                 var progress = progressDialog?.CreateProgress();
 
-                addonManager.RemoveAddonsFromAssetBatch(currentAsset.Id, addonIds, progress);
-                
+                addonManager.RemoveAddonsFromAssetBatch(asset.Id, addonIds, progress);
+
                 progressDialog?.Close();
-                await dialogService.ShowInfoAsync(L.Get("Success.Title"), 
-                    selectedAddons.Count == 1 
-                        ? L.Get("Success.RemovedFromAssetSingle") 
-                        : L.Format("Success.RemovedFromAssetMultiple", selectedAddons.Count));
+                await dialogService.ShowInfoAsync(L.Get("Success.Title"),
+                    addonIds.Count == 1
+                        ? L.Get("Success.RemovedFromAssetSingle")
+                        : L.Format("Success.RemovedFromAssetMultiple", addonIds.Count));
                 
                 // 選択モードを解除
                 IsSelectionMode = false;

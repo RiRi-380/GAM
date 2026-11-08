@@ -37,11 +37,11 @@ public sealed class LocalAddonUiContractTests
             gridViewModel,
             StringComparison.Ordinal);
         Assert.Contains(
-            "!addon.IsLocal && !addon.IsSelected",
+            "!addon.IsLocal && selectedAddonIds.Add(addon.AddonId)",
             gridViewModel,
             StringComparison.Ordinal);
         Assert.Contains(
-            "FilteredAddons.Where(a => a.IsSelected && !a.IsLocal)",
+            "AllAddons.Where(addon => !addon.IsLocal && selectedAddonIds.Contains(addon.AddonId))",
             gridViewModel,
             StringComparison.Ordinal);
         Assert.Contains(
