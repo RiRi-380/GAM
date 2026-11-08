@@ -128,7 +128,12 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public AssetItemViewModel? SelectedAsset
     {
         get => selectedAsset;
-        set => SetAndRaise(ref selectedAsset, value);
+        set
+        {
+            SetAndRaise(ref selectedAsset, value);
+            this.RaisePropertyChanged(nameof(IsAddonGridVisible));
+            this.RaisePropertyChanged(nameof(IsCurrentGroupEmptyVisible));
+        }
     }
 
     public string? CurrentGroupId => currentGroupId;
@@ -143,7 +148,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public bool HasDirectAssetInCurrentGroup =>
         IsAtRoot || Entries.Any(entry => entry.IsAsset);
     public bool IsCurrentGroupEmptyVisible =>
-        !IsShareMode && IsInsideGroup && !HasDirectAssetInCurrentGroup;
+        !IsShareMode && IsInsideGroup && !IsAddonGridVisible;
     public string CurrentGroupEmptyText => IsCurrentGroupEmpty
         ? L.Get("AssetGroup.EmptyState")
         : L.Get("AssetGroup.NoDirectAssetsState");
@@ -172,7 +177,8 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(IsAssetMutationEnabled));
         }
     }
-    public bool IsAddonGridVisible => !IsShareMode && HasDirectAssetInCurrentGroup;
+    public bool IsAddonGridVisible =>
+        !IsShareMode && (HasDirectAssetInCurrentGroup || SelectedAsset != null);
     public bool IsAssetMutationEnabled => !IsShareMode;
     public bool IncludeImagesInShare
     {
@@ -306,16 +312,41 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public void NavigateToGroup(string? groupId)
     {
         var configuration = addonManager.GetConfiguration();
-        if (!string.IsNullOrWhiteSpace(groupId) &&
-            configuration.AssetGroups.All(group =>
-                !string.Equals(group.Id, groupId, StringComparison.Ordinal)))
+        if (!TrySetCurrentGroup(configuration, groupId))
         {
             return;
         }
 
-        currentGroupId = string.IsNullOrWhiteSpace(groupId) ? null : groupId;
         SelectedAsset = null;
         LoadAssets();
+    }
+
+    internal void BrowseAddonDropDestinations(string? groupId)
+    {
+        var configuration = addonManager.GetConfiguration();
+        if (IsShareMode || !TrySetCurrentGroup(configuration, groupId))
+        {
+            return;
+        }
+
+        // Keep the source asset and the grid selection while browsing the left pane.
+        ClearEntries();
+        BuildBreadcrumbs(configuration);
+        BuildVisibleEntries(configuration);
+        RaiseNavigationProperties();
+    }
+
+    private bool TrySetCurrentGroup(Configuration configuration, string? groupId)
+    {
+        if (!string.IsNullOrWhiteSpace(groupId) &&
+            configuration.AssetGroups.All(group =>
+                !string.Equals(group.Id, groupId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        currentGroupId = string.IsNullOrWhiteSpace(groupId) ? null : groupId;
+        return true;
     }
 
     public void ReturnToRoot()
@@ -1002,6 +1033,32 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
     public AssetItemViewModel? GetAssetById(string assetId)
     {
         return Assets.FirstOrDefault(asset => asset.Id == assetId);
+    }
+
+    internal void RefreshAddonMembership(Asset asset)
+    {
+        GetAssetById(asset.Id)?.RefreshFromModel(asset);
+
+        var groups = addonManager.GetConfiguration().AssetGroups;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var parentId = asset.ParentGroupId;
+        while (parentId != null && visited.Add(parentId))
+        {
+            var group = groups.FirstOrDefault(candidate => candidate.Id == parentId);
+            if (group == null)
+            {
+                break;
+            }
+
+            var visibleGroup = Entries.FirstOrDefault(entry => entry.IsGroup && entry.Id == group.Id)?.Group;
+            if (visibleGroup != null)
+            {
+                visibleGroup.RefreshFromModel(group);
+                break;
+            }
+
+            parentId = group.ParentGroupId;
+        }
     }
 
     public void RefreshAssetStates()

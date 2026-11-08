@@ -98,6 +98,8 @@
                                   Content="{loc:Localize Settings.RetainMissingAssetReferences}"
                                   ToolTip.Tip="{loc:Localize Settings.RetainMissingAssetReferencesDescription}"
                                   Margin="0,5,0,0"/>
+                        <CheckBox Name="ShowAssetNavigationPromptAfterTransferCheckBox"
+                                  Content="{loc:Localize Settings.ShowAssetNavigationPromptAfterTransfer}"/>
 
                         <StackPanel Spacing="6" Margin="0,8,0,0">
                             <TextBlock Text="{loc:Localize Settings.MaxNestedGroupDepth}"

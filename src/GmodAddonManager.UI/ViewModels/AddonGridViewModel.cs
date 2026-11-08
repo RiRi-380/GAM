@@ -56,6 +56,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private DashboardViewModel? dashboardViewModel;
     private bool enableBackgroundTitleUpdates;
     private bool enableBackgroundAddonPreload;
+    private bool showAssetNavigationPromptAfterTransfer;
     private int selectedSortModeIndex;
     private AddonSortDirection sortDirection = AddonSortDirection.Descending;
     private int baseFilteredCount;
@@ -130,6 +131,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         var resolved = settings ?? AppSettings.Load();
         enableBackgroundTitleUpdates = resolved.EnableBackgroundTitleUpdates;
         enableBackgroundAddonPreload = resolved.EnableBackgroundAddonPreload;
+        showAssetNavigationPromptAfterTransfer = resolved.ShowAssetNavigationPromptAfterTransfer;
     }
 
     private void InitializeFilterOptions()
@@ -1320,18 +1322,31 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         public HashSet<string> SubscribedAddonIds { get; }
     }
 
-    public void ApplyFilter()
+    public void ApplyFilter() => ApplyFilter(runtimeSnapshot: null, changedMembershipIds: null);
+
+    internal void RefreshAfterMembershipChange(RuntimeStatePresentation runtimeSnapshot, IReadOnlyList<string> affectedIds) =>
+        ApplyFilter(runtimeSnapshot, affectedIds.ToHashSet(StringComparer.Ordinal));
+
+    private void ApplyFilter(
+        RuntimeStatePresentation? runtimeSnapshot,
+        IReadOnlySet<string>? changedMembershipIds)
     {
         try
         {
-            CancelBackgroundPreload();
+            if (changedMembershipIds == null)
+            {
+                CancelBackgroundPreload();
+            }
 
             var query = AllAddons.AsEnumerable();
-            RefreshRuntimeStates();
+            RefreshRuntimeStates(runtimeSnapshot ?? CaptureRuntimeStatePresentation());
 
             foreach (var addon in AllAddons)
             {
-                addon.SetCurrentAsset(CurrentAsset);
+                if (changedMembershipIds == null || changedMembershipIds.Contains(addon.AddonId))
+                {
+                    addon.SetCurrentAsset(CurrentAsset);
+                }
             }
 
             // State filter: keep border semantics separate from inactive asset membership badges.
@@ -1402,21 +1417,22 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 .Select(addon => viewModelsById[addon.Id])
                 .ToList();
             
-            // 新しいコレクションを作成してから一度に置き換える
-            var newFilteredAddons = new ObservableCollection<AddonItemViewModel>();
-            foreach (var addon in results)
-            {
-                newFilteredAddons.Add(addon);
-            }
-            
             // UIスレッドで実行されていることを確認
             void UpdateFilteredView()
             {
                 baseFilteredCount = baseResults.Count;
-                FilteredAddons = newFilteredAddons;
-
-                // フィルタ適用後、表示されているアドオンの詳細を読み込む
-                _ = LoadVisibleAddonDetailsAsync();
+                if (changedMembershipIds != null)
+                {
+                    UpdateFilteredAddonsInPlace(results);
+                }
+                else
+                {
+                    if (!FilteredAddons.SequenceEqual(results))
+                    {
+                        FilteredAddons = new ObservableCollection<AddonItemViewModel>(results);
+                    }
+                    _ = LoadVisibleAddonDetailsAsync();
+                }
 
                 // アドオン数表示を更新
                 this.RaisePropertyChanged(nameof(FilteredAddonsCount));
@@ -1435,6 +1451,63 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("AddonGridViewModel.ApplyFilter", ex);
+        }
+    }
+
+    private void UpdateFilteredAddonsInPlace(List<AddonItemViewModel> results)
+    {
+        if (FilteredAddons.SequenceEqual(results))
+        {
+            return;
+        }
+
+        // Keep realized cards and the scroll anchor for members that remain visible.
+        var remaining = results.ToHashSet();
+        var selectionChanged = false;
+        for (var i = FilteredAddons.Count - 1; i >= 0; i--)
+        {
+            var addon = FilteredAddons[i];
+            if (!remaining.Contains(addon))
+            {
+                if (selectedAddonIds.Remove(addon.AddonId))
+                {
+                    addon.IsSelected = false;
+                    selectionChanged = true;
+                }
+
+                FilteredAddons.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            var addon = results[i];
+            if (i < FilteredAddons.Count && ReferenceEquals(FilteredAddons[i], addon))
+            {
+                continue;
+            }
+
+            var existingIndex = FilteredAddons.IndexOf(addon);
+            if (existingIndex >= 0)
+            {
+                FilteredAddons.Move(existingIndex, i);
+            }
+            else
+            {
+                FilteredAddons.Insert(i, addon);
+            }
+        }
+
+        if (selectionChanged)
+        {
+            if (selectedAddonIds.Count == 0 && IsSelectionMode)
+            {
+                IsSelectionMode = false;
+            }
+            else
+            {
+                NotifySelectionChanged();
+            }
         }
     }
 
@@ -1577,10 +1650,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 {
                     selectedAddonIds.Remove(addonId);
                 }
-                HasSelectedAddons = selectedAddonIds.Count > 0;
-                this.RaisePropertyChanged(nameof(SelectedAddonsCount));
-                this.RaisePropertyChanged(nameof(SelectionActionLabel));
-                this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
+                NotifySelectionChanged();
                 
                 // 選択アイテムが0になったら自動で選択モード解除
                 if (IsSelectionMode && selectedAddonIds.Count == 0)
@@ -1594,23 +1664,25 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 ClearSelection();
                 addon.IsSelected = true;
                 selectedAddonIds.Add(addonId);
-                HasSelectedAddons = true;
-                this.RaisePropertyChanged(nameof(SelectedAddonsCount));
-                this.RaisePropertyChanged(nameof(SelectionActionLabel));
-                this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
+                NotifySelectionChanged();
             }
         }
     }
 
     public void ClearSelection()
     {
-        foreach (var a in FilteredAddons)
+        foreach (var a in AllAddons)
         {
             a.IsSelected = false;
         }
         selectedAddonIds.Clear();
         // 注: SelectedAddonは選択とは独立して管理（右クリックで設定）
-        HasSelectedAddons = false;
+        NotifySelectionChanged();
+    }
+
+    private void NotifySelectionChanged()
+    {
+        HasSelectedAddons = selectedAddonIds.Count > 0;
         this.RaisePropertyChanged(nameof(SelectedAddonsCount));
         this.RaisePropertyChanged(nameof(SelectionActionLabel));
         this.RaisePropertyChanged(nameof(SelectionDeleteLabel));
@@ -1622,6 +1694,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             FilteredAddons.Where(a => a.IsSelected && !a.IsLocal)
         );
     }
+
+    internal string[] GetDraggedAddonIds(AddonItemViewModel grabbedAddon) =>
+        grabbedAddon.IsSelected
+            ? GetSelectedAddons().Select(addon => addon.AddonId).ToArray()
+            : [grabbedAddon.AddonId];
 
     public async Task LoadVisibleAddonDetailsAsync()
     {
@@ -2070,10 +2147,14 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             }
 
             progressDialog?.Close();
-            var successMessage = newAddons.Count == 1
-                ? L.Format("Success.AddedToAssetSingle", selectedAsset.Name)
-                : L.Format("Success.AddedToAssetMultiple", newAddons.Count, selectedAsset.Name);
-            await ShowTransferSuccessDialogAsync(L.Get("Success.Title"), successMessage, selectedAsset);
+            if (showAssetNavigationPromptAfterTransfer)
+            {
+                var successMessage = newAddons.Count == 1
+                    ? L.Format("Success.AddedToAssetSingle", selectedAsset.Name)
+                    : L.Format("Success.AddedToAssetMultiple", newAddons.Count, selectedAsset.Name);
+                await ShowTransferSuccessDialogAsync(L.Get("Success.Title"), successMessage, selectedAsset);
+            }
+
             IsSelectionMode = false;
             await ReloadAddons(rescanWorkshop: false);
         }
@@ -2408,15 +2489,21 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 L.Format("Error.RemoveAddonFailed", ex.Message));
         }
     }
-    private void RefreshRuntimeStates()
-    {
-        var resolvedStates = addonManager.GetResolvedAddonStates();
-        var actualStates = addonManager.CaptureState().States;
-        var hasQueuedRuntimeApply = pendingChangeManager.HasPendingChanges();
+    internal RuntimeStatePresentation CaptureRuntimeStatePresentation() => new(
+        addonManager.GetResolvedAddonStates(),
+        addonManager.CaptureState().States,
+        pendingChangeManager.HasPendingChanges());
 
+    internal sealed record RuntimeStatePresentation(
+        IReadOnlyDictionary<string, ResolvedAddonState> Resolved,
+        IReadOnlyDictionary<string, bool> Actual,
+        bool HasQueuedRuntimeApply);
+
+    private void RefreshRuntimeStates(RuntimeStatePresentation snapshot)
+    {
         foreach (var addon in AllAddons)
         {
-            if (!resolvedStates.TryGetValue(addon.AddonId, out var resolved))
+            if (!snapshot.Resolved.TryGetValue(addon.AddonId, out var resolved))
             {
                 resolved = new ResolvedAddonState(
                     addon.AddonId,
@@ -2431,11 +2518,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             var actualEnabled = false;
             var hasActualState =
                 resolved.IsRuntimeTarget &&
-                actualStates.TryGetValue(addon.AddonId, out actualEnabled);
+                snapshot.Actual.TryGetValue(addon.AddonId, out actualEnabled);
             addon.RefreshRuntimeState(
                 resolved,
                 hasActualState ? actualEnabled : null,
-                hasQueuedRuntimeApply);
+                snapshot.HasQueuedRuntimeApply);
         }
     }
 

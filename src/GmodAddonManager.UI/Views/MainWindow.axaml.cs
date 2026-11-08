@@ -33,6 +33,9 @@ public partial class MainWindow : Window, IDisposable
         _assetPaneOpenTabNavigationMode =
             KeyboardNavigation.GetTabNavigation(AssetPaneContent);
         Activated += OnWindowActivated;
+        Deactivated += OnAddonDragWindowDeactivated;
+        AddHandler(KeyDownEvent, OnAddonDragKeyDown, RoutingStrategies.Tunnel);
+        _addonDragTimer.Tick += OnAddonDragTick;
         SizeChanged += OnWindowSizeChanged;
     }
 
@@ -254,6 +257,16 @@ public partial class MainWindow : Window, IDisposable
         }, RoutingStrategies.Tunnel);
     }
 
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel { IsUpdatingAssetMembership: true })
+        {
+            e.Cancel = true;
+        }
+
+        base.OnClosing(e);
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         _isClosed = true;
@@ -275,6 +288,11 @@ public partial class MainWindow : Window, IDisposable
         _startupCancellation.Dispose();
         _assetPaneHideTimer?.Dispose();
         _assetPaneHideTimer = null;
+        AddonGridControl.CancelAddonGesture();
+        ClearAddonDrag();
+        _addonDragTimer.Tick -= OnAddonDragTick;
+        RemoveHandler(KeyDownEvent, OnAddonDragKeyDown);
+        Deactivated -= OnAddonDragWindowDeactivated;
         GC.SuppressFinalize(this);
     }
 }

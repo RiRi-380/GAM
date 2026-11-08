@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -21,8 +21,12 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     private static readonly TimeSpan PaneCloseVisibilityDelay =
         TimeSpan.FromMilliseconds(120);
 
-    private Point? _dragStartPoint;
-    private bool _isDragging;
+    private Border? _pressedAddonCard;
+    private IPointer? _pressedAddonPointer;
+    private string? _pressedAddonId;
+    private Point _addonPressPoint;
+    private bool _addonPressWithControl;
+    private MainWindow? _addonDragWindow;
     private bool _realizedItemExceptionLogged;
 
     private CancellationTokenSource? _scrollIdleCts;
@@ -186,41 +190,38 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
     private void OnAddonPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Border border ||
-            border.DataContext is not AddonItemViewModel addonVm ||
-            DataContext is not AddonGridViewModel gridVm)
-        {
-            return;
-        }
-
-        // Local addons are surfaced for discovery only. Return before any
-        // selection clearing, selection-mode transition, or drag setup.
-        if (addonVm.IsLocal)
+        if (sender is not Border { DataContext: AddonItemViewModel addon } card ||
+            DataContext is not AddonGridViewModel gridVm || addon.IsLocal)
         {
             return;
         }
 
         var point = e.GetCurrentPoint(this);
-        var isCtrlPressed = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-
-        if (point.Properties.IsLeftButtonPressed)
+        if (point.Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
         {
-            gridVm.SelectAddon(addonVm.AddonId, isCtrlPressed);
-
-            if (!gridVm.IsSelectionMode && gridVm.HasSelectedAddons)
-            {
-                gridVm.IsSelectionMode = true;
-            }
-
-            _dragStartPoint = point.Position;
-            _isDragging = false;
-
-            border.PointerMoved += OnAddonPointerMoved;
-            border.PointerReleased += OnAddonPointerReleased;
+            CancelAddonGesture();
+            _pressedAddonCard = card;
+            _pressedAddonPointer = e.Pointer;
+            _pressedAddonId = addon.AddonId;
+            _addonPressPoint = point.Position;
+            _addonPressWithControl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            card.PointerMoved += OnAddonPointerMoved;
+            card.PointerReleased += OnAddonPointerReleased;
+            card.PointerCaptureLost += OnAddonPointerCaptureLost;
+            e.Pointer.Capture(card);
         }
-        else if (point.Properties.IsRightButtonPressed)
+        else if (point.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
         {
-            gridVm.SelectedAddon = addonVm;
+            gridVm.SelectedAddon = addon;
+        }
+    }
+
+    private void OnAddonGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        // The pointer can grab a partially visible card without scrolling to its edge.
+        if (e.NavigationMethod != NavigationMethod.Pointer && e.Source is Control focused)
+        {
+            focused.BringIntoView();
         }
     }
 
@@ -236,83 +237,131 @@ public sealed partial class AddonGridView : UserControl, IDisposable
             return;
         }
 
-        gridVm.SelectAddon(
-            addonVm.AddonId,
-            e.KeyModifiers.HasFlag(KeyModifiers.Control));
+        SelectAddonFromCard(gridVm, addonVm.AddonId, e.KeyModifiers.HasFlag(KeyModifiers.Control));
+        e.Handled = true;
+    }
 
+    private static void SelectAddonFromCard(AddonGridViewModel gridVm, string addonId, bool withControl)
+    {
+        gridVm.SelectAddon(addonId, withControl);
         if (!gridVm.IsSelectionMode && gridVm.HasSelectedAddons)
         {
             gridVm.IsSelectionMode = true;
         }
-
-        e.Handled = true;
     }
 
-    private async void OnAddonPointerMoved(object? sender, PointerEventArgs e)
+    private void OnAddonPointerMoved(object? sender, PointerEventArgs e)
     {
         try
         {
-            if (sender is not Border border ||
-                border.DataContext is not AddonItemViewModel addonVm ||
+            if (!ReferenceEquals(e.Pointer, _pressedAddonPointer))
+            {
+                return;
+            }
+
+            if (_addonDragWindow is { } activeWindow)
+            {
+                activeWindow.UpdateAddonDrag(e.GetPosition(activeWindow));
+                e.Handled = true;
+                return;
+            }
+
+            var movement = e.GetPosition(this) - _addonPressPoint;
+            if (Math.Abs(movement.X) <= 5 && Math.Abs(movement.Y) <= 5)
+            {
+                return;
+            }
+
+            if (sender is not Border { DataContext: AddonItemViewModel addon } ||
+                !string.Equals(addon.AddonId, _pressedAddonId, StringComparison.Ordinal) ||
                 DataContext is not AddonGridViewModel gridVm ||
-                !_dragStartPoint.HasValue ||
-                _isDragging)
+                TopLevel.GetTopLevel(this) is not MainWindow window)
             {
+                CancelAddonGesture();
                 return;
             }
 
-            if (!gridVm.IsSelectionMode)
+            _addonDragWindow = window;
+            if (!window.BeginAddonDrag(gridVm.GetDraggedAddonIds(addon), e.GetPosition(window)))
             {
+                CancelAddonGesture();
                 return;
             }
 
-            var point = e.GetCurrentPoint(this);
-            var distance = Math.Abs(point.Position.X - _dragStartPoint.Value.X) +
-                           Math.Abs(point.Position.Y - _dragStartPoint.Value.Y);
-
-            if (distance <= 5)
-            {
-                return;
-            }
-
-            _isDragging = true;
-
-            var selectedAddons = gridVm.GetSelectedAddons();
-            if (!selectedAddons.Any(a => a.AddonId == addonVm.AddonId))
-            {
-                gridVm.ClearSelection();
-                gridVm.SelectAddon(addonVm.AddonId);
-                selectedAddons = gridVm.GetSelectedAddons();
-            }
-
-            var dragData = new DataObject();
-            var addonIds = selectedAddons.Select(a => a.AddonId).ToList();
-            dragData.Set("AddonIds", addonIds);
-            dragData.Set("DraggedAddons", selectedAddons);
-
-            _ = await DragDrop.DoDragDrop(e, dragData, DragDropEffects.Copy | DragDropEffects.Move);
-            _isDragging = false;
-            _dragStartPoint = null;
+            e.Handled = true;
         }
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("AddonGridView.OnAddonPointerMoved", ex);
-            _isDragging = false;
-            _dragStartPoint = null;
+            CancelAddonGesture();
         }
     }
 
-    private void OnAddonPointerReleased(object? sender, PointerReleasedEventArgs e)
+    private async void OnAddonPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (sender is not Border border)
+        if (!ReferenceEquals(e.Pointer, _pressedAddonPointer) ||
+            e.InitialPressMouseButton != MouseButton.Left)
         {
             return;
         }
 
-        border.PointerMoved -= OnAddonPointerMoved;
-        border.PointerReleased -= OnAddonPointerReleased;
-        _dragStartPoint = null;
-        _isDragging = false;
+        var dragWindow = _addonDragWindow;
+        var addonId = _pressedAddonId;
+        var withControl = _addonPressWithControl;
+        ResetAddonPress();
+
+        if (dragWindow != null)
+        {
+            e.Handled = true;
+            try
+            {
+                await dragWindow.CompleteAddonDragAsync(e.GetPosition(dragWindow));
+            }
+            catch (Exception ex)
+            {
+                dragWindow.ClearAddonDrag();
+                SafeFileLogger.TryLogException("AddonGridView.OnAddonPointerReleased", ex);
+            }
+        }
+        else if (sender is Border { DataContext: AddonItemViewModel addon } card &&
+                 string.Equals(addon.AddonId, addonId, StringComparison.Ordinal) &&
+                 new Rect(card.Bounds.Size).Contains(e.GetPosition(card)) &&
+                 DataContext is AddonGridViewModel gridVm)
+        {
+            SelectAddonFromCard(gridVm, addon.AddonId, withControl);
+        }
+    }
+
+    private void OnAddonPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
+        CancelAddonGesture();
+
+    internal void CancelAddonGesture()
+    {
+        var dragWindow = _addonDragWindow;
+        ResetAddonPress();
+        dragWindow?.ClearAddonDrag();
+    }
+
+    private void ResetAddonPress()
+    {
+        var card = _pressedAddonCard;
+        var pointer = _pressedAddonPointer;
+        _pressedAddonCard = null;
+        _pressedAddonPointer = null;
+        _pressedAddonId = null;
+        _addonDragWindow = null;
+        if (card == null)
+        {
+            return;
+        }
+
+        card.PointerMoved -= OnAddonPointerMoved;
+        card.PointerReleased -= OnAddonPointerReleased;
+        card.PointerCaptureLost -= OnAddonPointerCaptureLost;
+        if (pointer != null && ReferenceEquals(pointer.Captured, card))
+        {
+            pointer.Capture(null);
+        }
     }
 
     private async void OnAddonDoubleTapped(object? sender, TappedEventArgs e)
@@ -321,7 +370,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         {
             if (sender is Border border && border.DataContext is AddonItemViewModel addonVm)
             {
-                await addonVm.OpenFolderCommand.Execute();
+                await addonVm.OpenWorkshopCommand.Execute();
             }
         }
         catch (Exception ex)
@@ -356,6 +405,11 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     {
         try
         {
+            if (ReferenceEquals(e.Element, _pressedAddonCard))
+            {
+                CancelAddonGesture();
+            }
+
             if (e.Element.DataContext is AddonItemViewModel addonVm)
             {
                 addonVm.ReleaseThumbnailBitmap();
@@ -550,6 +604,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
 
     public void Dispose()
     {
+        CancelAddonGesture();
         if (_itemsRepeater != null)
         {
             DetachRepeaterInteractions(_itemsRepeater);

@@ -2,6 +2,7 @@ using GmodAddonManager.Core.Services;
 using GmodAddonManager.Core.Models;
 using ReactiveUI;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -23,6 +24,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly AddonManager addonManager;
     private readonly GmodProcessWatcher processWatcher;
     private readonly PendingChangeManager pendingChangeManager;
+    private readonly IDialogService undoDialogs;
 
     private string searchText = "";
     private AssetListViewModel assetListViewModel;
@@ -44,11 +46,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public MainWindowViewModel(
         AddonManager addonManager, 
         GmodProcessWatcher processWatcher,
-        PendingChangeManager pendingChangeManager)
+        PendingChangeManager pendingChangeManager,
+        IDialogService? undoDialogs = null)
     {
         this.addonManager = addonManager;
         this.processWatcher = processWatcher;
         this.pendingChangeManager = pendingChangeManager;
+        this.undoDialogs = undoDialogs ?? new DialogService();
 
         AssetItemViewModel.ApplyGlobalSettings(AppSettings.Load());
 
@@ -361,13 +365,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
     public async Task RefreshActualStateFromRuntimeAsync()
     {
-        if (!isInitialized)
+        if (!isInitialized || IsUpdatingAssetMembership)
         {
             return;
         }
 
         await addonManager.RefreshGmodDisabledAddonsFromRuntimeAsync();
-        RefreshGmodDisabledAssetPresentation();
+        if (!IsUpdatingAssetMembership)
+        {
+            RefreshGmodDisabledAssetPresentation();
+        }
     }
 
     public async Task RefreshAddonsAsync(bool rescanWorkshop = true, bool showProgress = false)
@@ -519,6 +526,68 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         addonGridViewModel?.Dispose();
     }
     
+    internal bool IsUpdatingAssetMembership { get; private set; }
+
+    internal async Task AddDroppedAddonsToAssetAsync(AssetItemViewModel destination, string[] addonIds)
+    {
+        var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(asset =>
+            string.Equals(asset.Id, destination.Id, StringComparison.Ordinal));
+        if (IsBusy || AssetListViewModel.IsShareMode ||
+            asset is not { IsSystem: false, IsSmart: false })
+        {
+            return;
+        }
+
+        var droppedIds = addonIds.ToHashSet(StringComparer.Ordinal);
+        var carriedSelection = AddonGridViewModel.GetSelectedAddons()
+            .Any(addon => droppedIds.Contains(addon.AddonId));
+        IsUpdatingAssetMembership = true;
+        try
+        {
+            using var busy = BeginBusy(L.Get("Busy.AddingAddonsToAsset"),
+                L.Format("Busy.Detail.AssetNameWithCount", asset.Name, addonIds.Length));
+            var addedIds = await addonManager.AddAddonsToAssetBatchAsync(asset.Id, addonIds.ToList());
+            if (carriedSelection)
+            {
+                AddonGridViewModel.IsSelectionMode = false;
+            }
+
+            var addedCount = addedIds.Count;
+            var duplicateCount = addonIds.Length - addedCount;
+            if (addedCount > 0)
+            {
+                await RefreshAddonMembershipPresentationAsync(asset.Id, addedIds);
+                UpdateUndoState();
+            }
+
+            StatusBarViewModel.ShowMessage(
+                L.Format(duplicateCount == 0 ? "AddonDrop.Result" : "AddonDrop.ResultWithDuplicates",
+                    asset.Name, addedCount, duplicateCount),
+                addedCount > 0 ? StatusMessageType.Success : StatusMessageType.Info);
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("MainWindowViewModel.AddDroppedAddonsToAssetAsync", ex);
+            StatusBarViewModel.ShowMessage(L.Get("AddonDrop.Failed"), StatusMessageType.Error);
+        }
+        finally
+        {
+            IsUpdatingAssetMembership = false;
+        }
+    }
+
+    private async Task RefreshAddonMembershipPresentationAsync(string assetId, IReadOnlyList<string> affectedIds)
+    {
+        var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(candidate => candidate.Id == assetId);
+        if (asset != null)
+        {
+            AssetListViewModel.RefreshAddonMembership(asset);
+        }
+
+        var snapshot = await Task.Run(AddonGridViewModel.CaptureRuntimeStatePresentation);
+        AddonGridViewModel.RefreshAfterMembershipChange(snapshot, affectedIds);
+    }
+
     private void UpdateUndoState()
     {
         CanUndo = addonManager.GetUndoManager().CanUndo;
@@ -619,8 +688,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
     }
     
-    private async Task UndoLastActionAsync()
+    internal async Task UndoLastActionAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         try
         {
             var undoManager = addonManager.GetUndoManager();
@@ -628,21 +702,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             
             if (lastAction != null)
             {
-                var dialogService = new DialogService();
                 var confirmMessage = BuildUndoConfirmMessage(lastAction);
-                var confirmed = await dialogService.ShowConfirmAsync(L.Get("Confirm.Title"), confirmMessage);
+                var confirmed = await undoDialogs.ShowConfirmAsync(L.Get("Confirm.Title"), confirmMessage);
                 
                 if (confirmed)
                 {
-                    var success = await addonManager.UndoLastActionAsync();
+                    var isAddonAddition = lastAction.Type == UndoActionType.AddonAddedToAsset &&
+                                          lastAction.AssetId != null;
+                    var success = ReferenceEquals(lastAction, undoManager.PeekLastAction()) &&
+                        (isAddonAddition
+                            ? await UndoAddonAdditionAsync(lastAction, lastAction.AssetId!)
+                            : await addonManager.UndoLastActionAsync());
                     if (success)
                     {
-                        await RefreshAddonsAsync(showProgress: false);
-                        await dialogService.ShowInfoAsync(L.Get("Success.Title"), L.Get("Success.UndoComplete"));
+                        if (isAddonAddition)
+                        {
+                            StatusBarViewModel.ShowMessage(L.Get("Success.UndoComplete"), StatusMessageType.Success);
+                        }
+                        else
+                        {
+                            await RefreshAddonsAsync(showProgress: false);
+                            await undoDialogs.ShowInfoAsync(L.Get("Success.Title"), L.Get("Success.UndoComplete"));
+                        }
                     }
                     else
                     {
-                        await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.UndoFailed"));
+                        await undoDialogs.ShowErrorAsync(L.Get("Error.Title"), L.Get("Error.UndoFailed"));
                     }
                 }
             }
@@ -652,10 +737,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("MainWindowViewModel.UndoLastActionAsync", ex);
-            var dialogService = new DialogService();
-            await dialogService.ShowErrorAsync(
+            await undoDialogs.ShowErrorAsync(
                 L.Get("Error.Title"),
                 L.Format("Error.UndoOperationFailed", ex.Message));
+        }
+    }
+
+    private async Task<bool> UndoAddonAdditionAsync(UndoAction action, string assetId)
+    {
+        IsUpdatingAssetMembership = true;
+        try
+        {
+            using var busy = BeginBusy(L.Get("Busy.Undoing"));
+            if (!await Task.Run(addonManager.UndoLastActionAsync))
+            {
+                return false;
+            }
+
+            IReadOnlyList<string> affectedIds = action.AffectedAddonIds is { Count: > 0 } ids
+                ? ids
+                : action.AddonId?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                  ?? Array.Empty<string>();
+            await RefreshAddonMembershipPresentationAsync(assetId, affectedIds);
+            return true;
+        }
+        finally
+        {
+            IsUpdatingAssetMembership = false;
         }
     }
 

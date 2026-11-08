@@ -65,26 +65,21 @@ public sealed class LocalAddonUiContractTests
             "private void OnAddonPointerPressed",
             StringComparison.Ordinal);
         var pointerMovedStart = gridViewCodeBehind.IndexOf(
-            "private async void OnAddonPointerMoved",
+            "private void OnAddonPointerMoved",
             pointerPressedStart,
             StringComparison.Ordinal);
         var localGuard = gridViewCodeBehind.IndexOf(
-            "if (addonVm.IsLocal)",
-            pointerPressedStart,
-            StringComparison.Ordinal);
-        var selection = gridViewCodeBehind.IndexOf(
-            "gridVm.SelectAddon(addonVm.AddonId, isCtrlPressed);",
+            "|| addon.IsLocal)",
             pointerPressedStart,
             StringComparison.Ordinal);
         var dragStart = gridViewCodeBehind.IndexOf(
-            "_dragStartPoint = point.Position;",
+            "_pressedAddonCard = card;",
             pointerPressedStart,
             StringComparison.Ordinal);
 
         Assert.True(pointerPressedStart >= 0);
         Assert.True(pointerMovedStart > pointerPressedStart);
         Assert.InRange(localGuard, pointerPressedStart, pointerMovedStart - 1);
-        Assert.InRange(selection, localGuard + 1, pointerMovedStart - 1);
         Assert.InRange(dragStart, localGuard + 1, pointerMovedStart - 1);
     }
 

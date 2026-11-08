@@ -23,6 +23,8 @@ public partial class AssetListView : UserControl
     private const double InertiaStopThreshold = 0.2;
     private const double MaxInertiaVelocity = 1800;
     private const double ReorderDragThreshold = 7;
+    private const double AddonDropScrollEdge = 36;
+    private const double AddonDropScrollStep = 18;
 
     private ScrollViewer? assetScrollViewer;
     private ScrollViewer? breadcrumbScrollViewer;
@@ -161,6 +163,43 @@ public partial class AssetListView : UserControl
 
         scrollViewer.Offset = new Vector(nextOffset, scrollViewer.Offset.Y);
         e.Handled = true;
+    }
+
+    internal bool ScrollForAddonDrop(Point position) =>
+        ScrollForAddonDrop(assetScrollViewer, position, horizontal: false) ||
+        ScrollForAddonDrop(breadcrumbScrollViewer, position, horizontal: true);
+
+    private bool ScrollForAddonDrop(ScrollViewer? scrollViewer, Point position, bool horizontal)
+    {
+        if (scrollViewer == null || this.TranslatePoint(position, scrollViewer) is not { } local ||
+            !new Rect(scrollViewer.Bounds.Size).Contains(local))
+        {
+            return false;
+        }
+
+        var coordinate = horizontal ? local.X : local.Y;
+        var length = horizontal ? scrollViewer.Bounds.Width : scrollViewer.Bounds.Height;
+        var edge = Math.Min(AddonDropScrollEdge, length / 3);
+        if (edge <= 0 || (coordinate >= edge && coordinate <= length - edge))
+        {
+            return false;
+        }
+
+        var direction = coordinate < edge ? -1 : 1;
+        var edgeDistance = direction < 0 ? coordinate : length - coordinate;
+        var offset = scrollViewer.Offset;
+        var previous = horizontal ? offset.X : offset.Y;
+        var extent = horizontal ? scrollViewer.Extent.Width : scrollViewer.Extent.Height;
+        var viewport = horizontal ? scrollViewer.Viewport.Width : scrollViewer.Viewport.Height;
+        var step = AddonDropScrollStep * (1 - edgeDistance / edge);
+        var next = Math.Clamp(previous + direction * step, 0, Math.Max(0, extent - viewport));
+        if (next == previous)
+        {
+            return false;
+        }
+
+        scrollViewer.Offset = horizontal ? new Vector(next, offset.Y) : new Vector(offset.X, next);
+        return true;
     }
 
     private void OnEntryKeyDown(object? sender, KeyEventArgs e)
@@ -671,7 +710,7 @@ public partial class AssetListView : UserControl
         }
     }
 
-    private void StopInertia()
+    internal void StopInertia()
     {
         if (inertiaTimer != null && inertiaTimer.IsEnabled)
         {

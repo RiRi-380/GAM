@@ -9,6 +9,26 @@ public sealed class AppSettingsStoreTests : IDisposable
         $"gam-app-settings-{Guid.NewGuid():N}");
 
     [Fact]
+    public void AssetNavigationPrompt_DefaultsToOffAndPersistsChanges()
+    {
+        var path = Path.Combine(root, "settings.json");
+        Assert.False(AppSettings.LoadFrom(path).ShowAssetNavigationPromptAfterTransfer);
+
+        Directory.CreateDirectory(root);
+        File.WriteAllText(path, """{"Language":"ja-JP"}""");
+        var settings = AppSettings.LoadFrom(path);
+        Assert.False(settings.ShowAssetNavigationPromptAfterTransfer);
+
+        settings.ShowAssetNavigationPromptAfterTransfer = true;
+        settings.SaveTo(path);
+        Assert.True(AppSettings.LoadFrom(path).ShowAssetNavigationPromptAfterTransfer);
+
+        settings.ShowAssetNavigationPromptAfterTransfer = false;
+        settings.SaveTo(path);
+        Assert.False(AppSettings.LoadFrom(path).ShowAssetNavigationPromptAfterTransfer);
+    }
+
+    [Fact]
     public void SaveTo_SecondSaveAtomicallyRotatesThePreviousValidSettingsToBackup()
     {
         var path = Path.Combine(root, "settings.json");

@@ -31,6 +31,7 @@
                     Classes.selectionMode="{Binding $parent[UserControl].DataContext.IsSelectionMode}"
                     Classes.local="{Binding IsLocal}"
                     Focusable="True"
+                    GotFocus="OnAddonGotFocus"
                     KeyDown="OnAddonKeyDown"
                     PointerPressed="OnAddonPointerPressed"
                     DoubleTapped="OnAddonDoubleTapped">
@@ -446,6 +447,7 @@
                 <ScrollViewer Name="AddonScrollViewer"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto"
+                              BringIntoViewOnFocusChange="False"
                               ClipToBounds="True"
                               Padding="6,6,0,6">
                     <ScrollViewer.Styles>

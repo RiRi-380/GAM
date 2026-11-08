@@ -9990,9 +9990,19 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         public void AddAddonsToAssetBatch(string assetId, List<string> addonIds, AddonState state = AddonState.Enabled, IProgress<(int current, int total)>? progress = null)
         {
+            Task.Run(() => AddAddonsToAssetBatchAsync(assetId, addonIds, state, progress))
+                .GetAwaiter().GetResult();
+        }
+
+        public async Task<IReadOnlyList<string>> AddAddonsToAssetBatchAsync(
+            string assetId,
+            List<string> addonIds,
+            AddonState state = AddonState.Enabled,
+            IProgress<(int current, int total)>? progress = null)
+        {
             if (GmodDisabledAddonReconciliationService.IsProtectedSystemAsset(assetId))
             {
-                return;
+                return Array.Empty<string>();
             }
 
             var asset = configuration.Assets.FirstOrDefault(a => a.Id == assetId);
@@ -10005,18 +10015,18 @@ namespace GmodAddonManager.Core.Services
                 addonIds == null ||
                 addonIds.Count == 0)
             {
-                return;
+                return Array.Empty<string>();
             }
 
+            var existingIds = new HashSet<string>(asset.Addons, StringComparer.Ordinal);
             var addedAddonIds = addonIds
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .Select(id => id.Trim())
-                .Distinct(StringComparer.Ordinal)
-                .Where(id => !asset.Addons.Contains(id))
+                .Where(existingIds.Add)
                 .ToList();
             if (addedAddonIds.Count == 0)
             {
-                return;
+                return Array.Empty<string>();
             }
 
             // Record only IDs whose membership actually changes. Otherwise Undo
@@ -10046,7 +10056,7 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                SaveConfigurationImmediatelySynchronously();
+                await Task.Run(SaveConfigurationImmediatelyAsync);
             }
             catch
             {
@@ -10060,7 +10070,7 @@ namespace GmodAddonManager.Core.Services
 
             try
             {
-                UpdateAddonStates();
+                await Task.Run(EnsureAddonStatesUpdatedAsync);
             }
             catch (Exception ex)
             {
@@ -10070,6 +10080,8 @@ namespace GmodAddonManager.Core.Services
                     "Asset membership was saved; runtime reconciliation was queued",
                     ErrorSeverity.Warning);
             }
+
+            return addedAddonIds;
         }
 
         /// <summary>
@@ -11934,10 +11946,13 @@ namespace GmodAddonManager.Core.Services
         // Initialize WorkshopIconResolver
         private void UpdateAddonStates()
         {
+            Task.Run(EnsureAddonStatesUpdatedAsync).GetAwaiter().GetResult();
+        }
+
+        private async Task EnsureAddonStatesUpdatedAsync()
+        {
             var wasGmodRunning = IsGmodCurrentlyRunning();
-            var applied = Task.Run(() => UpdateAddonStatesAsync())
-                .GetAwaiter()
-                .GetResult();
+            var applied = await UpdateAddonStatesAsync();
             if (!applied && !wasGmodRunning)
             {
                 throw new InvalidOperationException(
