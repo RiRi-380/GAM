@@ -17,6 +17,10 @@ namespace GmodAddonManager.UI.Tests;
 
 public sealed class AddonDragToAssetTests : IDisposable
 {
+    private const string FirstAddonId = "test-addon-a";
+    private const string SecondAddonId = "test-addon-b";
+    private const string ThirdAddonId = "test-addon-c";
+
     private readonly string root = Path.Combine(Path.GetTempPath(), $"gam-addon-drag-{Guid.NewGuid():N}");
 
     [AvaloniaFact]
@@ -29,11 +33,11 @@ public sealed class AddonDragToAssetTests : IDisposable
             var sourceModel = manager.GetConfiguration().Assets.Single(asset => asset.Id == "source");
             var destination = manager.GetConfiguration().Assets.Single(asset => asset.Id == "destination");
 
-            Click(window, AddonPoint(window, "101"));
-            Click(window, AddonPoint(window, "102"));
+            Click(window, AddonPoint(window, FirstAddonId));
+            Click(window, AddonPoint(window, SecondAddonId));
             Assert.Equal(2, grid.SelectedAddonsCount);
 
-            var start = AddonPoint(window, "101");
+            var start = AddonPoint(window, FirstAddonId);
             window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Assert.Equal(2, grid.SelectedAddonsCount);
             var groupHover = Stopwatch.StartNew();
@@ -67,9 +71,9 @@ public sealed class AddonDragToAssetTests : IDisposable
             window.MouseUp(dropPoint, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
 
-            Assert.Equal(["101", "102"], destination.Addons);
+            Assert.Equal([FirstAddonId, SecondAddonId], destination.Addons);
             Assert.Same(cards, grid.FilteredAddons);
-            Assert.Equal(["101", "102", "103"], sourceModel.Addons);
+            Assert.Equal([FirstAddonId, SecondAddonId, ThirdAddonId], sourceModel.Addons);
             Assert.Same(source, list.SelectedAsset);
             Assert.Equal(0, grid.SelectedAddonsCount);
             Assert.False(grid.IsSelectionMode);
@@ -79,32 +83,32 @@ public sealed class AddonDragToAssetTests : IDisposable
 
             var undo = Assert.IsType<UndoAction>(manager.GetUndoManager().PeekLastAction());
             Assert.Equal(UndoActionType.AddonAddedToAsset, undo.Type);
-            Assert.Equal(["102"], undo.AffectedAddonIds);
+            Assert.Equal([SecondAddonId], undo.AffectedAddonIds);
             await main.UndoLastActionAsync();
-            Assert.Equal(["101"], destination.Addons);
-            Assert.Equal(["101", "102", "103"], sourceModel.Addons);
+            Assert.Equal([FirstAddonId], destination.Addons);
+            Assert.Equal([FirstAddonId, SecondAddonId, ThirdAddonId], sourceModel.Addons);
             Assert.Same(source, list.SelectedAsset);
             Assert.Equal("inner", list.CurrentGroupId);
             Assert.Same(cards, grid.FilteredAddons);
             Assert.Equal(1, list.GetAssetById(destination.Id)!.AddonCount);
 
             var destinationCard = list.GetAssetById(destination.Id)!;
-            await main.AddDroppedAddonsToAssetAsync(destinationCard, ["102"]);
+            await main.AddDroppedAddonsToAssetAsync(destinationCard, [SecondAddonId]);
             list.SelectedAsset = destinationCard;
             grid.SetCurrentAsset(destinationCard);
             var destinationCards = grid.FilteredAddons;
             Assert.Equal(2, destinationCards.Count);
-            grid.SelectAddon("101");
+            grid.SelectAddon(FirstAddonId);
             grid.IsSelectionMode = true;
-            grid.SelectAddon("102");
+            grid.SelectAddon(SecondAddonId);
             Assert.Equal(2, grid.SelectedAddonsCount);
 
             await main.UndoLastActionAsync();
             Assert.Same(destinationCard, list.SelectedAsset);
             Assert.Same(destinationCards, grid.FilteredAddons);
-            Assert.Equal("101", Assert.Single(destinationCards).AddonId);
+            Assert.Equal(FirstAddonId, Assert.Single(destinationCards).AddonId);
             Assert.Equal(1, grid.SelectedAddonsCount);
-            Assert.Equal("101", Assert.Single(grid.GetSelectedAddons()).AddonId);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
         });
 
     [AvaloniaFact]
@@ -113,44 +117,44 @@ public sealed class AddonDragToAssetTests : IDisposable
         {
             var grid = main.AddonGridViewModel;
             var target = manager.GetConfiguration().Assets.Single(asset => asset.Id == "root-target");
-            var start = AddonPoint(window, "103");
+            var start = AddonPoint(window, ThirdAddonId);
             var end = EntryPoint(window, target.Id);
             window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, end);
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
-            Assert.Equal(["103"], target.Addons);
+            Assert.Equal([ThirdAddonId], target.Addons);
             Assert.Equal(0, grid.SelectedAddonsCount);
 
-            Click(window, AddonPoint(window, "101"));
-            window.MouseDown(AddonPoint(window, "102"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            Click(window, AddonPoint(window, FirstAddonId));
+            window.MouseDown(AddonPoint(window, SecondAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             end = EntryPoint(window, target.Id);
             Move(window, end);
             Assert.Equal(L.Format("AddonDrop.Destination", target.Name, 1),
                 window.FindControl<TextBlock>("AddonDragText")!.Text);
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
-            Assert.Equal(["103", "102"], target.Addons);
-            Assert.Equal("101", Assert.Single(grid.GetSelectedAddons()).AddonId);
+            Assert.Equal([ThirdAddonId, SecondAddonId], target.Addons);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
 
-            window.MouseDown(AddonPoint(window, "101"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, end);
             window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, string.Empty);
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
-            Assert.Equal(["103", "102"], target.Addons);
-            Assert.Equal("101", Assert.Single(grid.GetSelectedAddons()).AddonId);
+            Assert.Equal([ThirdAddonId, SecondAddonId], target.Addons);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
             Assert.False(window.FindControl<Border>("AddonDragBadge")!.IsVisible);
 
-            window.MouseDown(AddonPoint(window, "101"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, end);
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
-            Assert.Equal(["103", "102", "101"], target.Addons);
+            Assert.Equal([ThirdAddonId, SecondAddonId, FirstAddonId], target.Addons);
             Assert.Empty(grid.GetSelectedAddons());
 
             var lastUndo = manager.GetUndoManager().PeekLastAction();
-            Click(window, AddonPoint(window, "101"));
-            window.MouseDown(AddonPoint(window, "101"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            Click(window, AddonPoint(window, FirstAddonId));
+            window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, end);
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
             Assert.Same(lastUndo, manager.GetUndoManager().PeekLastAction());
@@ -159,7 +163,7 @@ public sealed class AddonDragToAssetTests : IDisposable
             var pane = window.FindControl<AssetListView>("AssetPaneContent")!;
             var scroller = pane.FindControl<ScrollViewer>("AssetScrollViewer")!;
             var edge = scroller.TranslatePoint(new Point(100, scroller.Bounds.Height - 9), window)!.Value;
-            window.MouseDown(AddonPoint(window, "101"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, edge);
             await WaitUntilAsync(() => scroller.Offset.Y > 20 &&
                 scroller.Offset.Y >= scroller.Extent.Height - scroller.Viewport.Height - 12,
@@ -171,43 +175,57 @@ public sealed class AddonDragToAssetTests : IDisposable
             Move(window, lowerTarget);
             window.MouseUp(lowerTarget, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
-            Assert.Equal(["101"], manager.GetConfiguration().Assets.Single(asset => asset.Id == "extra-14").Addons);
+            Assert.Equal([FirstAddonId], manager.GetConfiguration().Assets.Single(asset => asset.Id == "extra-14").Addons);
 
-            Click(window, AddonPoint(window, "101"));
-            window.MouseDown(AddonPoint(window, "101"), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            Click(window, AddonPoint(window, FirstAddonId));
+            window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, lowerTarget);
-            var outside = AddonPoint(window, "103");
+            var outside = AddonPoint(window, ThirdAddonId);
             Move(window, outside);
             window.MouseUp(outside, MouseButton.Left, RawInputModifiers.None);
             Assert.False(window.FindControl<Border>("AddonDragBadge")!.IsVisible);
-            Assert.Equal(["103", "102", "101"], target.Addons);
-            Assert.Equal("101", Assert.Single(grid.GetSelectedAddons()).AddonId);
+            Assert.Equal([ThirdAddonId, SecondAddonId, FirstAddonId], target.Addons);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
         });
 
     [AvaloniaFact]
     public Task DoubleClickDispatchesWorkshopCommandWithoutChangingSingleClickSelection() =>
-        WithWindowAsync(async (window, main, manager) =>
+        WithWindowAsync(async (window, main, _) =>
         {
-            var source = manager.GetConfiguration().Assets.Single(asset => asset.Id == "source");
-            const string id = "workshop-command-test";
-            source.Addons.Add(id);
             var grid = main.AddonGridViewModel;
-            var addon = new AddonItemViewModel(
-                new WorkshopAddon { Id = id, Title = "Workshop command test", NeedsTitleUpdate = false },
-                manager);
-            grid.AllAddons.Add(addon);
-            grid.ApplyFilter();
+            var addon = grid.AllAddons.Single(addon => addon.AddonId == FirstAddonId);
             Assert.False(addon.HasWorkshopId);
             var calls = 0;
             using var subscription = addon.OpenWorkshopCommand.Subscribe(_ => calls++);
 
-            var point = AddonPoint(window, id);
+            var point = AddonPoint(window, FirstAddonId);
             Click(window, point);
-            Assert.Equal(id, Assert.Single(grid.GetSelectedAddons()).AddonId);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
             Assert.Equal(0, calls);
             Click(window, point);
             await WaitUntilAsync(() => calls == 1);
             Assert.Empty(grid.GetSelectedAddons());
+        });
+
+    [AvaloniaFact]
+    public Task RapidClickThenDragDoesNotDispatchTheWorkshopCommand() =>
+        WithWindowAsync(async (window, main, manager) =>
+        {
+            var addon = main.AddonGridViewModel.AllAddons.Single(addon => addon.AddonId == FirstAddonId);
+            var calls = 0;
+            using var subscription = addon.OpenWorkshopCommand.Subscribe(_ => calls++);
+            var start = AddonPoint(window, FirstAddonId);
+            var end = EntryPoint(window, "root-target");
+
+            Click(window, start);
+            window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            Assert.Equal(0, calls);
+            Move(window, end);
+            window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
+            await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
+
+            Assert.Equal(0, calls);
+            Assert.Equal([FirstAddonId], manager.GetConfiguration().Assets.Single(asset => asset.Id == "root-target").Addons);
         });
 
     [AvaloniaFact]
@@ -216,7 +234,7 @@ public sealed class AddonDragToAssetTests : IDisposable
         {
             var pane = window.FindControl<SplitView>("AssetSplitView")!;
             Assert.False(pane.IsPaneOpen);
-            var start = AddonPoint(window, "103");
+            var start = AddonPoint(window, ThirdAddonId);
             window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
             Move(window, start + new Vector(-12, 0));
             Assert.True(pane.IsPaneOpen);
@@ -229,7 +247,7 @@ public sealed class AddonDragToAssetTests : IDisposable
             window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
             await WaitUntilAsync(() => !main.IsUpdatingAssetMembership);
             var target = manager.GetConfiguration().Assets.Single(asset => asset.Id == "root-target");
-            Assert.Equal(["103"], target.Addons);
+            Assert.Equal([ThirdAddonId], target.Addons);
         }, windowWidth: 900);
 
     [AvaloniaFact]
@@ -333,14 +351,15 @@ public sealed class AddonDragToAssetTests : IDisposable
             new AssetGroup("Outer") { Id = "outer", SortOrder = 2 },
             new AssetGroup("Inner") { Id = "inner", ParentGroupId = "outer" }
         ]);
-        var sourceIds = new[] { "101", "102", "103" }
-            .Concat(Enumerable.Range(200, extraSourceAddons).Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+        var sourceIds = new[] { FirstAddonId, SecondAddonId, ThirdAddonId }
+            .Concat(Enumerable.Range(200, extraSourceAddons).Select(id =>
+                "test-addon-" + id.ToString(System.Globalization.CultureInfo.InvariantCulture)))
             .ToList();
         configuration.Assets.AddRange(
         [
             new Asset("Source") { Id = "source", SortOrder = 0, Addons = sourceIds },
             new Asset("Root target") { Id = "root-target", SortOrder = 1 },
-            new Asset("Destination") { Id = "destination", ParentGroupId = "inner", Addons = ["101"] }
+            new Asset("Destination") { Id = "destination", ParentGroupId = "inner", Addons = [FirstAddonId] }
         ]);
         for (var i = 0; i < 15; i++)
         {
@@ -374,6 +393,8 @@ public sealed class AddonDragToAssetTests : IDisposable
                 manager));
         }
 
+        // Headless input can invoke real commands. These cards must never launch a browser.
+        Assert.All(main.AddonGridViewModel.AllAddons, addon => Assert.False(addon.HasWorkshopId));
         main.AddonGridViewModel.SetCurrentAsset(main.AssetListViewModel.SelectedAsset);
         using var window = new MainWindow { WindowState = WindowState.Normal, Width = windowWidth, Height = 800 };
         // Show first to skip real startup scanning and update checks in this isolated test.

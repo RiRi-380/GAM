@@ -26,6 +26,8 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     private string? _pressedAddonId;
     private Point _addonPressPoint;
     private bool _addonPressWithControl;
+    private bool _addonPressIsDoubleClick;
+    private string? _lastClickedAddonId;
     private MainWindow? _addonDragWindow;
     private bool _realizedItemExceptionLogged;
 
@@ -199,12 +201,15 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         var point = e.GetCurrentPoint(this);
         if (point.Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
         {
+            var isDoubleClick = e.ClickCount % 2 == 0 &&
+                                string.Equals(_lastClickedAddonId, addon.AddonId, StringComparison.Ordinal);
             CancelAddonGesture();
             _pressedAddonCard = card;
             _pressedAddonPointer = e.Pointer;
             _pressedAddonId = addon.AddonId;
             _addonPressPoint = point.Position;
             _addonPressWithControl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            _addonPressIsDoubleClick = isDoubleClick;
             card.PointerMoved += OnAddonPointerMoved;
             card.PointerReleased += OnAddonPointerReleased;
             card.PointerCaptureLost += OnAddonPointerCaptureLost;
@@ -212,6 +217,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         }
         else if (point.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
         {
+            _lastClickedAddonId = null;
             gridVm.SelectedAddon = addon;
         }
     }
@@ -308,6 +314,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         var dragWindow = _addonDragWindow;
         var addonId = _pressedAddonId;
         var withControl = _addonPressWithControl;
+        var isDoubleClick = _addonPressIsDoubleClick;
         ResetAddonPress();
 
         if (dragWindow != null)
@@ -329,6 +336,21 @@ public sealed partial class AddonGridView : UserControl, IDisposable
                  DataContext is AddonGridViewModel gridVm)
         {
             SelectAddonFromCard(gridVm, addon.AddonId, withControl);
+            if (!isDoubleClick)
+            {
+                _lastClickedAddonId = addon.AddonId;
+                return;
+            }
+
+            // Avalonia's DoubleTapped fires on the second press, before drag intent is known.
+            try
+            {
+                await addon.OpenWorkshopCommand.Execute();
+            }
+            catch (Exception ex)
+            {
+                SafeFileLogger.TryLogException("AddonGridView.OpenWorkshopAfterClick", ex);
+            }
         }
     }
 
@@ -338,6 +360,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
     internal void CancelAddonGesture()
     {
         var dragWindow = _addonDragWindow;
+        _lastClickedAddonId = null;
         ResetAddonPress();
         dragWindow?.ClearAddonDrag();
     }
@@ -349,6 +372,7 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         _pressedAddonCard = null;
         _pressedAddonPointer = null;
         _pressedAddonId = null;
+        _addonPressIsDoubleClick = false;
         _addonDragWindow = null;
         if (card == null)
         {
@@ -361,21 +385,6 @@ public sealed partial class AddonGridView : UserControl, IDisposable
         if (pointer != null && ReferenceEquals(pointer.Captured, card))
         {
             pointer.Capture(null);
-        }
-    }
-
-    private async void OnAddonDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        try
-        {
-            if (sender is Border border && border.DataContext is AddonItemViewModel addonVm)
-            {
-                await addonVm.OpenWorkshopCommand.Execute();
-            }
-        }
-        catch (Exception ex)
-        {
-            SafeFileLogger.TryLogException("AddonGridView.OnAddonDoubleTapped", ex);
         }
     }
 

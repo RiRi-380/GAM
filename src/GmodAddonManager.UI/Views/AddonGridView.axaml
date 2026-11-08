@@ -33,8 +33,7 @@
                     Focusable="True"
                     GotFocus="OnAddonGotFocus"
                     KeyDown="OnAddonKeyDown"
-                    PointerPressed="OnAddonPointerPressed"
-                    DoubleTapped="OnAddonDoubleTapped">
+                    PointerPressed="OnAddonPointerPressed">
                 
                 <Border.Styles>
                     <Style Selector="Border">
