@@ -36,7 +36,11 @@ public sealed class AddonDragToAssetTests : IDisposable
 
             Click(window, AddonPoint(window, FirstAddonId));
             Click(window, AddonPoint(window, SecondAddonId));
+            grid.FilterText = FirstAddonId;
+            grid.ApplyFilter();
             Assert.Equal(2, grid.SelectedAddonsCount);
+            Assert.Equal(1, grid.HiddenSelectedAddonsCount);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.FilteredAddons).AddonId);
 
             var start = AddonPoint(window, FirstAddonId);
             window.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
@@ -95,6 +99,8 @@ public sealed class AddonDragToAssetTests : IDisposable
             Assert.Same(cards, grid.FilteredAddons);
             Assert.Equal(1, list.GetAssetById(destination.Id)!.AddonCount);
 
+            grid.FilterText = string.Empty;
+            grid.ApplyFilter();
             var destinationCard = list.GetAssetById(destination.Id)!;
             await main.AddDroppedAddonsToAssetAsync(destinationCard, [SecondAddonId]);
             list.SelectedAsset = destinationCard;
@@ -167,8 +173,21 @@ public sealed class AddonDragToAssetTests : IDisposable
             var scroller = pane.FindControl<ScrollViewer>("AssetScrollViewer")!;
             var edge = scroller.TranslatePoint(new Point(2, scroller.Bounds.Height - 9), window)!.Value;
             window.MouseDown(AddonPoint(window, FirstAddonId), MouseButton.Left, RawInputModifiers.LeftMouseButton);
-            Move(window, edge);
-            await WaitUntilAsync(() => scroller.Offset.Y > 20, () => DescribeAssetHover(window, edge));
+
+            // Simulate a visible viewport edge with no pane hit, as can occur
+            // in gaps or transparent padding during a drag.
+            pane.IsHitTestVisible = false;
+            try
+            {
+                Assert.False((window.InputHitTest(edge) as Visual)?.GetSelfAndVisualAncestors().Contains(pane) == true);
+                Move(window, edge);
+                await WaitUntilAsync(() => scroller.Offset.Y > 20, () => DescribeAssetHover(window, edge));
+            }
+            finally
+            {
+                pane.IsHitTestVisible = true;
+            }
+
             edge = scroller.TranslatePoint(new Point(100, scroller.Bounds.Height - 9), window)!.Value;
             Move(window, edge);
             await WaitUntilAsync(() => scroller.Offset.Y > 20 &&
