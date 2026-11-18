@@ -447,6 +447,12 @@ namespace GmodAddonManager.Core.Services
 
                 loaded = JsonConvert.DeserializeObject<PendingChanges>(json) ?? new PendingChanges();
                 loaded.Changes ??= new List<AddonChange>();
+                if (loaded.Changes.RemoveAll(change => change == null) > 0)
+                {
+                    errorHandler?.HandleWarning(
+                        $"Ignored empty pending change entries ({Path.GetFileName(path)}).",
+                        "PendingChangeManager.LoadPendingChanges");
+                }
                 return true;
             }
             catch (Exception ex)

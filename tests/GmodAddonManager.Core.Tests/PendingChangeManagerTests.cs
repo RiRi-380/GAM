@@ -4,6 +4,36 @@ namespace GmodAddonManager.Core.Tests;
 
 public sealed class PendingChangeManagerTests
 {
+    [Fact]
+    public void Startup_NullPendingEntryKeepsValidBackupMarker()
+    {
+        var root = Directory.CreateTempSubdirectory("gam-pending-recovery-");
+        try
+        {
+            var workshop = root.CreateSubdirectory("workshop").FullName;
+            var game = root.CreateSubdirectory("game");
+            game.CreateSubdirectory("garrysmod");
+            var profile = root.CreateSubdirectory("profile").FullName;
+            using var manager = new AddonManager(new AddonManagerOptions
+            {
+                CustomWorkshopPath = workshop,
+                CustomGmodInstallPath = game.FullName,
+                CustomAppDataPath = profile,
+                DisableCacheScan = true
+            });
+            new PendingChangeManager(manager, profile).QueueApplyStates();
+            File.WriteAllText(Path.Combine(profile, "pending.json"), "{\"changes\":[null]}");
+
+            var recovered = new PendingChangeManager(manager, profile);
+
+            Assert.Equal("apply_states", Assert.Single(recovered.GetPendingChanges()).Action);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     [Theory]
     [InlineData("apply_states")]
     [InlineData("APPLY_STATES")]
