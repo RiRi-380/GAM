@@ -1,4 +1,6 @@
 # Quick debug build script for GAM
+param([switch]$NoLaunch)
+
 $ErrorActionPreference = "Stop"
 Push-Location -LiteralPath $PSScriptRoot
 try {
@@ -17,7 +19,9 @@ try {
         throw "The debug executable was not found at $exePath."
     }
 
-    Start-Process -FilePath $exePath
+    if (-not $NoLaunch) {
+        Start-Process -FilePath $exePath
+    }
 }
 finally {
     Pop-Location
