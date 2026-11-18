@@ -48,11 +48,14 @@ namespace GmodAddonManager.Core.Services
                 disabled,
                 NormalizeUtc(completedAtUtc),
                 allowInitialSeed: true);
-            configuration.SubscriptionBaselineInitialized = true;
-            configuration.KnownSubscribedAddonIds = subscribed
-                .OrderBy(id => id, StringComparer.Ordinal)
-                .ToList();
-            configuration.SubscriptionFirstSeenAtUtc.Clear();
+            if (!configuration.SubscriptionBaselineInitialized)
+            {
+                configuration.KnownSubscribedAddonIds = subscribed
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
+                configuration.SubscriptionFirstSeenAtUtc.Clear();
+                configuration.SubscriptionBaselineInitialized = true;
+            }
 
             return new InitialAddonStateImportResult
             {

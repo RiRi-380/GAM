@@ -59,6 +59,27 @@ public sealed class InitialAddonStateImportServiceTests
     }
 
     [Fact]
+    public void Import_PreservesAnExistingSubscriptionBaseline()
+    {
+        var timestamp = new DateTime(2026, 7, 31, 1, 2, 3, DateTimeKind.Utc);
+        var configuration = new Configuration
+        {
+            SubscriptionBaselineInitialized = true,
+            KnownSubscribedAddonIds = ["100"],
+            SubscriptionFirstSeenAtUtc = new() { ["100"] = timestamp }
+        };
+        configuration.CreateDefaultAssets();
+        var subscribe = configuration.Assets.Single(asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Excluded);
+
+        new InitialAddonStateImportService().Import(configuration, ["100", "200"], ["100"], timestamp);
+
+        Assert.Equal(AddonState.Excluded, subscribe.GetWholeState());
+        Assert.Equal(["100"], configuration.KnownSubscribedAddonIds);
+        Assert.Equal(timestamp, configuration.SubscriptionFirstSeenAtUtc["100"]);
+    }
+
+    [Fact]
     public void Import_IsIdempotent()
     {
         var configuration = new Configuration();

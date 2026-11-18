@@ -95,6 +95,35 @@ public sealed class AddonManagerInitializationTests : IDisposable
     }
 
     [Fact]
+    public async Task Initialize_RetriedImportPreservesSubscribeChoiceAndObservedSubscriptionDate()
+    {
+        WriteManifest(("100", true));
+        File.WriteAllText(noMountPath, "incomplete");
+        using (var manager = CreateManager())
+        {
+            await manager.InitializeAsync();
+            Assert.False(manager.GetConfiguration().InitialRuntimeImportCompleted);
+            await manager.ApplyAssetDefaultStateAsync(
+                AssetStateResolver.SubscribeSystemAssetId, AddonState.Disabled);
+        }
+
+        WriteManifest(("100", true), ("200", true));
+        var repaired = BuildNoMount("100", "999");
+        File.WriteAllText(noMountPath, repaired);
+        using var retry = CreateManager();
+        await retry.InitializeAsync();
+
+        var configuration = retry.GetConfiguration();
+        Assert.True(configuration.InitialRuntimeImportCompleted);
+        Assert.Equal(AddonState.Disabled, configuration.Assets.Single(
+            asset => asset.Id == AssetStateResolver.SubscribeSystemAssetId).GetWholeState());
+        Assert.True(configuration.SubscriptionFirstSeenAtUtc.ContainsKey("200"));
+        // The current startup pipeline applies the saved Subscribe state to the new ID only.
+        Assert.Equal(new[] { "100", "200", "999" },
+            PathHealthService.ReadAddonNoMountIds(noMountPath).OrderBy(id => id));
+    }
+
+    [Fact]
     public async Task Initialize_LegacyConfigurationCreatesRawBackupAndDoesNotWriteRuntimeState()
     {
         WriteManifest(("100", true), ("200", true));
