@@ -86,11 +86,11 @@ public partial class SwitchSetsDialog : Window
 
     private void OnCancelRename(object? sender, RoutedEventArgs args) => SetRenameTarget(null);
 
-    private async void OnSave(object? sender, RoutedEventArgs args)
+    private void OnSave(object? sender, RoutedEventArgs args)
     {
         if (manager == null || !SaveButton.IsEnabled) return;
         var name = SetName.Text!.Trim();
-        await RunAsync(async () =>
+        RunInteraction(async () =>
         {
             if (renaming == null) await manager.SaveSwitchSetAsync(name);
             else await manager.RenameSwitchSetAsync(renaming.Id, name);
@@ -99,11 +99,14 @@ public partial class SwitchSetsDialog : Window
         });
     }
 
-    private async void OnApply(object? sender, RoutedEventArgs args)
+    private void OnApply(object? sender, RoutedEventArgs args)
     {
         if (manager == null || sender is not Button { DataContext: SwitchSetRow row }) return;
-        ApplyAttempted = true;
-        if (await RunAsync(() => manager.ApplySwitchSetAsync(row.Set.Id))) Close();
+        RunInteraction(async () =>
+        {
+            ApplyAttempted = true;
+            await manager.ApplySwitchSetAsync(row.Set.Id);
+        }, closeOnSuccess: true);
     }
 
     private void SetDeleteTarget(SwitchSet? set)
@@ -122,11 +125,11 @@ public partial class SwitchSetsDialog : Window
 
     private void OnCancelDelete(object? sender, RoutedEventArgs args) => SetDeleteTarget(null);
 
-    private async void OnDelete(object? sender, RoutedEventArgs args)
+    private void OnDelete(object? sender, RoutedEventArgs args)
     {
         var target = deleting;
         if (manager == null || target == null) return;
-        await RunAsync(async () =>
+        RunInteraction(async () =>
         {
             await manager.DeleteSwitchSetAsync(target.Id);
             SetDeleteTarget(null);
@@ -135,26 +138,29 @@ public partial class SwitchSetsDialog : Window
         });
     }
 
-    private async Task<bool> RunAsync(Func<Task> operation)
+    private async void RunInteraction(Func<Task> operation, bool closeOnSuccess = false)
     {
-        if (busy) return false;
-        busy = true;
-        IsEnabled = false;
+        if (busy) return;
         try
         {
-            await operation();
-            return true;
+            busy = true;
+            try
+            {
+                IsEnabled = false;
+                await operation();
+            }
+            finally
+            {
+                busy = false;
+                IsEnabled = true;
+            }
+
+            if (closeOnSuccess) Close();
         }
         catch (Exception ex)
         {
             SafeFileLogger.TryLogException("SwitchSetsDialog", ex);
             Feedback.Text = L.Get("SwitchSets.Failed");
-            return false;
-        }
-        finally
-        {
-            IsEnabled = true;
-            busy = false;
         }
     }
 
