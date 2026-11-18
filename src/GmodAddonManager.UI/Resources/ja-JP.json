@@ -1,4 +1,9 @@
 {
+  "StartupPathRecovery.LaterHint.Manual": "「あとで」を選ぶと、今回は現在使用中の場所で続行します。次回起動時の設定もそのままです。",
+  "StartupPathRecovery.LaterHint.Incomplete": "必要な場所をすべて確認できていません。「あとで」を選ぶと、今回は現在の設定で起動を試みます。アドオンの一覧や状態の反映を利用できない場合があります。次回起動時は、現在の設定でもう一度場所を確認します。",
+  "StartupPathRecovery.LaterHint.AfterBrowse": "「あとで」を選ぶと、今回は最初に検出した場所（GMod：{0}、Workshop：{1}）を使います。次回起動時は、現在の設定でもう一度場所を確認します。",
+  "StartupPathRecovery.LaterHint.Detected": "「あとで」を選ぶと、今回は上の「検出された場所」を使います。次回起動時は、現在の設定でもう一度場所を確認します。",
+  "StartupPathRecovery.SelectedPaths": "選択した場所",
   "AddonGrid.ActiveFilterCount": "絞り込み {0}件 · 解除",
   "AddonGrid.ClearFilters": "絞り込みをすべて解除",
   "Settings.BuildDetails": "ビルド情報",
@@ -877,7 +882,7 @@
   "StartupPathRecovery.Reason": "理由",
   "StartupPathRecovery.BrowseHint": "違う場合は、Garry's Mod のインストールフォルダ、Steamライブラリフォルダ、または steamapps\\workshop\\content\\4000 を選んでください。",
   "StartupPathRecovery.Browse": "フォルダを選択...",
-  "StartupPathRecovery.UseThis": "この場所を使う",
+  "StartupPathRecovery.UseThis": "この場所を使って保存",
   "StartupPathRecovery.Later": "あとで",
   "StartupPathRecovery.Ready": "この場所をGAMの参照先として使用できます。",
   "StartupPathRecovery.NoCandidate": "使える場所を検出できませんでした。手動でフォルダを選んでください。",

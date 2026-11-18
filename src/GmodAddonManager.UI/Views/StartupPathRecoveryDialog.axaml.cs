@@ -19,6 +19,7 @@ public sealed class StartupPathRecoveryDialogResult
 public partial class StartupPathRecoveryDialog : Window
 {
     private readonly StartupPathRecoveryDecision decision;
+    private readonly bool openedFromSettings;
     private PathOverrideResolution? selectedResolution;
 
     public StartupPathRecoveryDialog()
@@ -26,18 +27,19 @@ public partial class StartupPathRecoveryDialog : Window
     {
     }
 
-    public StartupPathRecoveryDialog(StartupPathRecoveryDecision decision)
+    public StartupPathRecoveryDialog(StartupPathRecoveryDecision decision, bool openedFromSettings = false)
     {
         this.decision = decision ?? throw new ArgumentNullException(nameof(decision));
+        this.openedFromSettings = openedFromSettings;
         InitializeComponent();
         PopulateInitialState();
     }
 
     public StartupPathRecoveryDialogResult Result { get; private set; } = new StartupPathRecoveryDialogResult();
 
-    public static Task<StartupPathRecoveryDialogResult> ShowStandaloneAsync(StartupPathRecoveryDecision decision)
+    public static Task<StartupPathRecoveryDialogResult> ShowStandaloneAsync(StartupPathRecoveryDecision decision, bool openedFromSettings)
     {
-        var dialog = new StartupPathRecoveryDialog(decision);
+        var dialog = new StartupPathRecoveryDialog(decision, openedFromSettings);
         var completion = new TaskCompletionSource<StartupPathRecoveryDialogResult>();
         dialog.Closed += (_, _) => completion.TrySetResult(dialog.Result);
         dialog.Show();
@@ -57,6 +59,7 @@ public partial class StartupPathRecoveryDialog : Window
             ? L.Get("StartupPathRecovery.Ready")
             : L.Get("StartupPathRecovery.NoCandidate");
         UseButton.IsEnabled = decision.HasDetectedCandidate;
+        LaterHintText.Text = GetLaterHint(decision, openedFromSettings);
     }
 
     private async void OnBrowse(object? sender, RoutedEventArgs e)
@@ -83,13 +86,16 @@ public partial class StartupPathRecoveryDialog : Window
             var selectedPath = folders[0].TryGetLocalPath();
             if (!PathOverrideResolver.TryResolveSelectedFolder(
                     selectedPath,
-                    out selectedResolution,
+                    out var resolution,
                     out _))
             {
                 StatusText.Text = L.Get("StartupPathRecovery.InvalidFolder");
                 return;
             }
 
+            selectedResolution = resolution;
+            CandidateHeading.Text = L.Get("StartupPathRecovery.SelectedPaths");
+            LaterHintText.Text = GetLaterHint(decision, openedFromSettings, showingSelectedPaths: true);
             CandidateGmodText.Text = selectedResolution.GmodInstallPath;
             CandidateWorkshopText.Text = selectedResolution.WorkshopRootPath;
             StatusText.Text = L.Get("StartupPathRecovery.ManualReady");
@@ -131,6 +137,25 @@ public partial class StartupPathRecoveryDialog : Window
     {
         Result = new StartupPathRecoveryDialogResult();
         Close();
+    }
+
+    internal static string GetLaterHint(
+        StartupPathRecoveryDecision decision, bool openedFromSettings, bool showingSelectedPaths = false)
+    {
+        if (openedFromSettings)
+        {
+            return L.Get("StartupPathRecovery.LaterHint.Manual");
+        }
+
+        if (!decision.HasDetectedCandidate)
+        {
+            return L.Get("StartupPathRecovery.LaterHint.Incomplete");
+        }
+
+        return showingSelectedPaths
+            ? L.Format("StartupPathRecovery.LaterHint.AfterBrowse",
+                decision.DetectedGmodInstallPath!, decision.DetectedWorkshopRootPath!)
+            : L.Get("StartupPathRecovery.LaterHint.Detected");
     }
 
     private static string EmptyIfNull(string? value)

@@ -36,7 +36,7 @@
 
                 <Border Background="#242424" BorderBrush="#444444" BorderThickness="1" CornerRadius="6" Padding="14">
                     <Grid ColumnDefinitions="112,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{loc:Localize StartupPathRecovery.CandidatePaths}" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock x:Name="CandidateHeading" Grid.Row="0" Grid.ColumnSpan="2" Text="{loc:Localize StartupPathRecovery.CandidatePaths}" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="GMod" Opacity="0.66"/>
                         <TextBlock x:Name="CandidateGmodText" Grid.Row="1" Grid.Column="1" TextWrapping="Wrap" FontFamily="Consolas, monospace"/>
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Workshop" Opacity="0.66" Margin="0,8,0,0"/>
@@ -50,7 +50,10 @@
         </ScrollViewer>
 
         <Grid Grid.Row="2" RowDefinitions="Auto,Auto">
-            <TextBlock x:Name="StatusText" Grid.Row="0" TextWrapping="Wrap" Opacity="0.84" Margin="0,0,0,12"/>
+            <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+                <TextBlock x:Name="StatusText" TextWrapping="Wrap" Opacity="0.84"/>
+                <TextBlock x:Name="LaterHintText" TextWrapping="Wrap"/>
+            </StackPanel>
             <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto">
                 <Button Grid.Column="1" Content="{loc:Localize StartupPathRecovery.Browse}" MinWidth="120" Margin="0,0,10,0" Click="OnBrowse"/>
                 <Button x:Name="UseButton" Grid.Column="2" Content="{loc:Localize StartupPathRecovery.UseThis}" MinWidth="130" Margin="0,0,10,0" Click="OnUse"/>

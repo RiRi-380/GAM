@@ -1,4 +1,9 @@
 {
+  "StartupPathRecovery.LaterHint.Manual": "Later keeps the locations already in use for this session and leaves your settings for the next launch unchanged.",
+  "StartupPathRecovery.LaterHint.Incomplete": "GAM could not verify both locations. Later tries to start this session with your existing settings. Some add-ons or state changes may be unavailable. At the next launch, GAM checks again using your saved settings.",
+  "StartupPathRecovery.LaterHint.AfterBrowse": "Later uses the original detected locations for this session (GMod: {0}, Workshop: {1}). At the next launch, GAM checks again using your saved settings.",
+  "StartupPathRecovery.LaterHint.Detected": "Later uses the detected locations shown above for this session. At the next launch, GAM checks again using your saved settings.",
+  "StartupPathRecovery.SelectedPaths": "Selected location",
   "AddonGrid.ActiveFilterCount": "{0} filters · clear",
   "AddonGrid.ClearFilters": "Clear all filters",
   "Settings.BuildDetails": "Build details",
@@ -878,7 +883,7 @@
   "StartupPathRecovery.Reason": "Reason",
   "StartupPathRecovery.BrowseHint": "If this is not correct, select the Garry's Mod install folder, the Steam library folder, or steamapps\\workshop\\content\\4000.",
   "StartupPathRecovery.Browse": "Choose folder...",
-  "StartupPathRecovery.UseThis": "Use this",
+  "StartupPathRecovery.UseThis": "Use and save",
   "StartupPathRecovery.Later": "Later",
   "StartupPathRecovery.Ready": "GAM can use this location.",
   "StartupPathRecovery.NoCandidate": "No usable location was detected. Choose a folder manually.",

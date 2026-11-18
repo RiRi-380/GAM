@@ -78,13 +78,22 @@ public static class StartupPathRecoveryCoordinator
             return CreateRunResult(decision);
         }
 
-        var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision);
+        var result = await StartupPathRecoveryDialog.ShowStandaloneAsync(decision, forcePrompt);
+        return CompletePrompt(settings, appDataPath, decision, result, forcePrompt);
+    }
+
+    internal static StartupPathRecoveryRunResult CompletePrompt(
+        AppSettings settings,
+        string appDataPath,
+        StartupPathRecoveryDecision decision,
+        StartupPathRecoveryDialogResult result,
+        bool forcePrompt)
+    {
         if (!result.Accepted)
         {
-            // AddonManager would perform the same automatic discovery after a
-            // declined prompt. Reuse the already validated candidates without
-            // persisting them or treating the prompt as accepted.
-            return CreateRunResult(decision);
+            return !forcePrompt && decision.HasDetectedCandidate
+                ? CreateRunResult(decision)
+                : new StartupPathRecoveryRunResult();
         }
 
         settings.CustomGmodInstallPath = result.GmodInstallPath;
@@ -92,7 +101,7 @@ public static class StartupPathRecoveryCoordinator
         settings.ConfirmedGmodInstallPath = result.GmodInstallPath;
         settings.ConfirmedWorkshopPath = result.WorkshopRootPath;
         settings.DismissedPathRecoverySignature = null;
-        settings.Save();
+        settings.SaveTo(Path.Combine(appDataPath, "settings.json"));
         return new StartupPathRecoveryRunResult
         {
             Accepted = true,
