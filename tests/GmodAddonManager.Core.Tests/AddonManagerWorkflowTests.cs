@@ -147,23 +147,32 @@ public sealed partial class AddonManagerWorkflowTests : IDisposable
         Assert.False(manager.GetUndoManager().CanUndo);
     }
 
-    [Fact]
-    public async Task RestoreVersion_UndoRestoresMembershipAndPreviousVersionLabel()
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, 0)]
+    public async Task RestoreVersion_UndoRestoresMembershipAndOnlyAnExistingVersionLabel(
+        bool deletePreviousSnapshot, int expectedVersion)
     {
         using var manager = await CreateInitializedManager();
         AddKnownAddon(manager, "100");
         AddKnownAddon(manager, "200");
         var asset = AddAsset(manager, "Versioned", AddonState.Enabled, "100");
         asset.CurrentVersion = 2;
+        asset.VersionHistory.Add(new AssetVersion(2, ["100"]));
         asset.VersionHistory.Add(new AssetVersion(5, ["200"]));
 
         Assert.True(await manager.RestoreAssetVersionAsync(asset.Id, 5));
         Assert.Equal(["200"], asset.Addons);
         Assert.Equal(5, asset.CurrentVersion);
 
+        if (deletePreviousSnapshot)
+        {
+            Assert.True(await manager.DeleteAssetVersionAsync(asset.Id, 2));
+        }
+
         Assert.True(await manager.UndoLastActionAsync());
         Assert.Equal(["100"], asset.Addons);
-        Assert.Equal(2, asset.CurrentVersion);
+        Assert.Equal(expectedVersion, asset.CurrentVersion);
     }
 
     [Fact]

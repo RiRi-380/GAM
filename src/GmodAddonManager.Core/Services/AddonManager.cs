@@ -12900,10 +12900,11 @@ namespace GmodAddonManager.Core.Services
                                 asset.Addons = action.PreviousMembership
                                     .Distinct(StringComparer.Ordinal)
                                     .ToList();
-                                if (action.PreviousCurrentVersion.HasValue)
+                                if (action.PreviousCurrentVersion is int previousVersion)
                                 {
-                                    asset.CurrentVersion =
-                                        action.PreviousCurrentVersion.Value;
+                                    asset.CurrentVersion = asset.VersionHistory.Any(v => v.Version == previousVersion)
+                                        ? previousVersion
+                                        : 0;
                                 }
                                 actionHandled = true;
                                 requiresRuntimeReconcile = true;
