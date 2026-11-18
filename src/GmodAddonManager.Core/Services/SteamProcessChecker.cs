@@ -50,7 +50,8 @@ namespace GmodAddonManager.Core.Services
             }
             catch
             {
-                return false;
+                // An unavailable process inventory must keep runtime writes deferred.
+                return true;
             }
         }
 

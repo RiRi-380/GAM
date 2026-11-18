@@ -21,7 +21,6 @@ namespace GmodAddonManager.Core.Services
         private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
         private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
         private const uint FILE_READ_ATTRIBUTES = 0x00000080;
-        private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
         private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
         private const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
         private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
@@ -677,6 +676,29 @@ namespace GmodAddonManager.Core.Services
             return false;
         }
 
+        internal static bool? IsSameDirectoryOrAncestor(string ancestorPath, DirectoryInfo directory)
+        {
+            if (!TryGetFileId(ancestorPath, out var ancestor))
+            {
+                return null;
+            }
+
+            for (DirectoryInfo? current = directory; current != null; current = current.Parent)
+            {
+                if (!TryGetFileId(current.FullName, out var candidate))
+                {
+                    return null;
+                }
+                if (ancestor.VolumeSerialNumber == candidate.VolumeSerialNumber &&
+                    ancestor.FileIndexHigh == candidate.FileIndexHigh &&
+                    ancestor.FileIndexLow == candidate.FileIndexLow)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private readonly struct FileId
         {
             public FileId(uint volumeSerialNumber, uint fileIndexHigh, uint fileIndexLow)
@@ -695,18 +717,13 @@ namespace GmodAddonManager.Core.Services
         {
             fileId = default;
 
-            if (!File.Exists(path))
-            {
-                return false;
-            }
-
             IntPtr handle = CreateFile(
                 path,
                 FILE_READ_ATTRIBUTES,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 IntPtr.Zero,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_FLAG_BACKUP_SEMANTICS,
                 IntPtr.Zero);
 
             if (handle.ToInt64() == -1)

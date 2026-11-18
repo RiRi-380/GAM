@@ -5,15 +5,49 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class GmodProcessWatcherTests
 {
     [Theory]
-    [InlineData(@"C:\Games\GarrysMod\hl2.exe", true)]
-    [InlineData(@"C:\Games\GarrysMod\bin\win64\hl2.exe", true)]
-    [InlineData(@"C:\Games\Half-Life 2\hl2.exe", false)]
-    [InlineData(@"C:\Games\GarrysModBackup\hl2.exe", false)]
+    [InlineData("GarrysMod/hl2.exe", true)]
+    [InlineData("GarrysMod/bin/win64/hl2.exe", true)]
+    [InlineData("GarrysModOther/hl2.exe", false)]
+    [InlineData("Half-Life 2/hl2.exe", false)]
     [InlineData(null, true)]
-    public void LegacyProcessMustBelongToTheGmodInstallation(string? executable, bool expected)
+    public void MatchesInstallPath_OnlyDefersForTargetOrUnknownLocation(string? relativePath, bool expected)
     {
-        Assert.Equal(expected, GmodProcessWatcher.IsLegacyGmodExecutable(
-            executable, @"C:\Games\GarrysMod"));
+        var root = Directory.CreateTempSubdirectory("gam-process-path-");
+        try
+        {
+            var install = root.CreateSubdirectory("GarrysMod").FullName;
+            var executable = relativePath == null ? null : Path.Combine(root.FullName, relativePath);
+            if (executable != null)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+            }
+            Assert.Equal(expected, GmodProcessWatcher.IsLegacyGmodExecutable(executable, install));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void MatchesInstallPath_WindowsJunctionAliasStillDefersWrites()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = Directory.CreateTempSubdirectory("gam-process-alias-");
+        var alias = Path.Combine(root.FullName, "selected-install");
+        var junctions = new JunctionService();
+        try
+        {
+            var install = root.CreateSubdirectory("actual-install");
+            var imageDir = install.CreateSubdirectory("bin/win64");
+            junctions.CreateJunction(alias, install.FullName);
+            Assert.True(GmodProcessWatcher.IsLegacyGmodExecutable(Path.Combine(imageDir.FullName, "hl2.exe"), alias));
+        }
+        finally
+        {
+            junctions.RemoveJunction(alias);
+            root.Delete(true);
+        }
     }
 
     [Theory]

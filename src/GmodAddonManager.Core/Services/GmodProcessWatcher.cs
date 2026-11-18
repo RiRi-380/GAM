@@ -357,8 +357,16 @@ namespace GmodAddonManager.Core.Services
 
             var root = Path.GetFullPath(installPath).TrimEnd(
                 Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            return Path.GetFullPath(executablePath).StartsWith(
-                root, StringComparison.OrdinalIgnoreCase);
+            var executable = new FileInfo(executablePath);
+            if (executable.FullName.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // A Steam library reached via a junction or drive alias can have a different root spelling.
+            // An unreadable directory identity cannot prove that the process belongs to another game.
+            return RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+                   (JunctionService.IsSameDirectoryOrAncestor(installPath, executable.Directory!) ?? true);
         }
 
         private static string? GetProcessCommandLine(int processId)
