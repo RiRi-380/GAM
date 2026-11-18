@@ -310,6 +310,7 @@ namespace GmodAddonManager.Core.Services
                 ? new HardAddonModeStrategy()
                 : new SoftAddonModeStrategy();
 
+            var configuredGmodRoot = customGmodInstallPath;
             if (!string.IsNullOrWhiteSpace(customGmodInstallPath) ||
                 !string.IsNullOrWhiteSpace(customWorkshopPath))
             {
@@ -320,6 +321,7 @@ namespace GmodAddonManager.Core.Services
                         out var overrideError))
                 {
                     pathSnapshot = overrideSnapshot;
+                    configuredGmodRoot = overrideSnapshot.GmodInstall?.InstallPath;
                     LogPathSnapshot(pathSnapshot, "Constructor.CustomPathOverride");
                 }
                 else
@@ -414,12 +416,12 @@ namespace GmodAddonManager.Core.Services
             // Detect Gmod root path for settings management (addonnomount.txt)
             try
             {
-                var candidate = !string.IsNullOrWhiteSpace(customGmodInstallPath)
-                    ? customGmodInstallPath
-                    : hasCustomWorkshopPath
-                        ? Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"))
-                        : pathSnapshot?.GmodInstall?.InstallPath;
-                if (string.IsNullOrWhiteSpace(candidate))
+                var candidate = configuredGmodRoot;
+                if (candidate == null && !hasCustomWorkshopPath)
+                {
+                    candidate = pathSnapshot?.GmodInstall?.InstallPath;
+                }
+                if (string.IsNullOrWhiteSpace(candidate) && !hasCustomWorkshopPath)
                 {
                     candidate = Path.GetFullPath(Path.Combine(workshopPath, @"..\..\..\common\GarrysMod"));
                     errorHandler.HandleWarning(
@@ -427,7 +429,7 @@ namespace GmodAddonManager.Core.Services
                         "Constructor");
                 }
 
-                if (Directory.Exists(candidate))
+                if (candidate != null && Directory.Exists(candidate))
                 {
                     gmodRootPath = candidate;
                     gmodAddonStateStore = new GmodAddonStateStore(gmodRootPath);
@@ -10667,6 +10669,7 @@ namespace GmodAddonManager.Core.Services
             return result;
         }
 
+        public string? GmodInstallPath => gmodRootPath;
         public string GetWorkshopPath() => workshopPath;
         public string GetManagerPath() => managerPath;
         

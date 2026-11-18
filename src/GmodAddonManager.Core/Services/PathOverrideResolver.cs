@@ -77,8 +77,18 @@ namespace GmodAddonManager.Core.Services
             snapshot = new PathSnapshot();
             error = string.Empty;
 
-            var normalizedGmod = NormalizeNullablePath(gmodInstallPath);
-            var normalizedWorkshop = NormalizeNullablePath(workshopRootPath);
+            string? normalizedGmod;
+            string? normalizedWorkshop;
+            try
+            {
+                normalizedGmod = NormalizeNullablePath(gmodInstallPath);
+                normalizedWorkshop = NormalizeNullablePath(workshopRootPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is IOException)
+            {
+                error = $"The configured folder path is invalid: {ex.Message}";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(normalizedGmod) && string.IsNullOrWhiteSpace(normalizedWorkshop))
             {
                 error = "No custom GMod or Workshop path is configured.";
@@ -141,8 +151,8 @@ namespace GmodAddonManager.Core.Services
                 return false;
             }
 
-            var manifest = ReadValveKeyValueFile(manifestPath);
-            if (!manifest.TryGetValue("appid", out var appId) ||
+            var manifest = TryReadValveKeyValueFile(manifestPath);
+            if (manifest == null || !manifest.TryGetValue("appid", out var appId) ||
                 !string.Equals(appId, GmodAppId, StringComparison.Ordinal))
             {
                 return false;
@@ -346,7 +356,11 @@ namespace GmodAddonManager.Core.Services
             var installDir = "GarrysMod";
             if (File.Exists(manifestPath))
             {
-                var values = ReadValveKeyValueFile(manifestPath);
+                var values = TryReadValveKeyValueFile(manifestPath);
+                if (values == null)
+                {
+                    return null;
+                }
                 if (values.TryGetValue("installdir", out var value) && !string.IsNullOrWhiteSpace(value))
                 {
                     installDir = value;
@@ -404,6 +418,18 @@ namespace GmodAddonManager.Core.Services
         private static string NormalizePath(string path)
         {
             return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static Dictionary<string, string>? TryReadValveKeyValueFile(string path)
+        {
+            try
+            {
+                return ReadValveKeyValueFile(path);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return null;
+            }
         }
 
         private static Dictionary<string, string> ReadValveKeyValueFile(string path)

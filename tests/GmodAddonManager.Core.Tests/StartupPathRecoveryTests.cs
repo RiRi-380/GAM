@@ -8,6 +8,65 @@ namespace GmodAddonManager.Core.Tests;
 public sealed class StartupPathRecoveryTests
 {
     [Fact]
+    public void PathOverrideResolver_InvalidSavedPathReturnsRecoveryError()
+    {
+        Assert.False(PathOverrideResolver.TryCreateSnapshot("invalid\0path", null, out _, out var error));
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
+
+    [Fact]
+    public void PathOverrideResolver_LockedManifestReturnsRecoveryError()
+    {
+        using var env = new TestSteamLayout();
+        using var locked = File.Open(Path.Combine(env.LibraryPath, "steamapps", "appmanifest_4000.acf"),
+            FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.False(PathOverrideResolver.TryCreateSnapshot(null, env.WorkshopRootPath, out _, out var error));
+        Assert.False(string.IsNullOrWhiteSpace(error));
+        Assert.False(PathOverrideResolver.TryResolveSelectedFolder(env.LibraryPath, out _, out error));
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
+
+    [Fact]
+    public async Task WorkshopOnlyOverride_UsesManifestInstallForRuntimeWrites()
+    {
+        using var layout = new TestSteamLayout("GMod Custom Install");
+        var profile = Directory.CreateTempSubdirectory("gam-workshop-only-");
+        try
+        {
+            var intended = new GmodAddonStateStore(layout.GmodInstallPath);
+            var obsoleteRoot = Path.Combine(layout.LibraryPath, "steamapps", "common", "GarrysMod");
+            var obsolete = new GmodAddonStateStore(obsoleteRoot);
+            intended.WriteDisabledIds(new[] { "888" });
+            obsolete.WriteDisabledIds(new[] { "999" });
+            var unchanged = File.ReadAllBytes(obsolete.NoMountFilePath);
+            using var manager = new AddonManager(new AddonManagerOptions
+            {
+                CustomAppDataPath = profile.FullName,
+                CustomWorkshopPath = layout.WorkshopRootPath,
+                CustomWorkshopCacheFilePaths = [layout.WorkshopManifestPath],
+                DisableCacheScan = true
+            });
+            manager.GmodRunningProvider = () => false;
+            manager.StateMatchTimeout = TimeSpan.Zero;
+            await manager.InitializeAsync();
+            var asset = new Asset("Fixture");
+            asset.AddAddon("123");
+            asset.SetWholeState(AddonState.Excluded);
+            manager.GetConfiguration().Assets.Add(asset);
+
+            Assert.True(await manager.UpdateAddonStatesAsync());
+
+            Assert.Equal(unchanged, File.ReadAllBytes(obsolete.NoMountFilePath));
+            Assert.Equal(new[] { "123", "888" }, intended.ReadSnapshot().DisabledIds);
+            Assert.Equal(layout.GmodInstallPath, manager.GmodInstallPath);
+        }
+        finally
+        {
+            profile.Delete(true);
+        }
+    }
+
+    [Fact]
     public void PathOverrideResolver_AcceptsGmodInstallFolder()
     {
         using var env = new TestSteamLayout();
@@ -530,17 +589,17 @@ public sealed class StartupPathRecoveryTests
     {
         private readonly string rootPath;
 
-        public TestSteamLayout()
+        public TestSteamLayout(string installName = "GarrysMod")
         {
             rootPath = Path.Combine(Path.GetTempPath(), "gam-startup-path-tests-" + Guid.NewGuid().ToString("N"));
             LibraryPath = Path.Combine(rootPath, "SteamLibrary");
-            GmodInstallPath = Path.Combine(LibraryPath, "steamapps", "common", "GarrysMod");
+            GmodInstallPath = Path.Combine(LibraryPath, "steamapps", "common", installName);
             WorkshopRootPath = Path.Combine(LibraryPath, "steamapps", "workshop", "content", "4000");
 
             Directory.CreateDirectory(Path.Combine(GmodInstallPath, "garrysmod", "cfg"));
             Directory.CreateDirectory(WorkshopRootPath);
             Directory.CreateDirectory(Path.Combine(LibraryPath, "steamapps", "workshop"));
-            File.WriteAllText(Path.Combine(LibraryPath, "steamapps", "appmanifest_4000.acf"), BuildAppManifest());
+            File.WriteAllText(Path.Combine(LibraryPath, "steamapps", "appmanifest_4000.acf"), BuildAppManifest(installName));
             WorkshopManifestPath = WorkshopManifestTestData.Write(
                 Path.Combine(LibraryPath, "steamapps", "workshop"),
                 "123");
@@ -576,13 +635,13 @@ public sealed class StartupPathRecoveryTests
             DeleteLayout();
         }
 
-        private static string BuildAppManifest()
+        private static string BuildAppManifest(string installName)
         {
-            return """
+            return $$"""
                    "AppState"
                    {
                        "appid" "4000"
-                       "installdir" "GarrysMod"
+                       "installdir" "{{installName}}"
                    }
                    """;
         }
