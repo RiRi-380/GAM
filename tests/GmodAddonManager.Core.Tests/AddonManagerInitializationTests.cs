@@ -349,8 +349,10 @@ public sealed class AddonManagerInitializationTests : IDisposable
             group => group.Id == "orphaned-group").ParentGroupId);
     }
 
-    [Fact]
-    public async Task Initialize_FutureSchemaFailsClosedWithoutRewritingConfigurationOrRuntimeState()
+    [Theory]
+    [InlineData("schemaVersion")]
+    [InlineData("SchemaVersion")]
+    public async Task Initialize_FutureSchemaFailsClosedWithoutRewritingConfigurationOrRuntimeState(string schemaKey)
     {
         WriteManifest(("100", true));
         var originalNoMount = BuildNoMount("100");
@@ -358,7 +360,7 @@ public sealed class AddonManagerInitializationTests : IDisposable
         var configPath = Path.Combine(appDataPath, "config.json");
         var futureSchemaVersion = Configuration.CurrentSchemaVersion + 1;
         var futureJson =
-            $"{{\"schemaVersion\":{futureSchemaVersion},\"version\":\"{futureSchemaVersion}.0\",\"futureOnly\":{{\"preserve\":true}},\"assets\":[]}}";
+            $"{{\"{schemaKey}\":{futureSchemaVersion},\"version\":\"{futureSchemaVersion}.0\",\"futureOnly\":{{\"preserve\":true}},\"assets\":[]}}";
         File.WriteAllText(configPath, futureJson, new UTF8Encoding(false));
 
         using var manager = CreateManager();

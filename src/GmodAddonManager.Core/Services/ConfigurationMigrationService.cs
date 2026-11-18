@@ -90,7 +90,7 @@ namespace GmodAddonManager.Core.Services
                 return result;
             }
 
-            var rawAssets = (rawConfiguration["assets"] as JArray)?
+            var rawAssets = (GetField(rawConfiguration, "assets") as JArray)?
                 .OfType<JObject>()
                 .ToList() ?? new List<JObject>();
 
@@ -183,8 +183,12 @@ namespace GmodAddonManager.Core.Services
 
         private static int GetSchemaVersion(JObject rawConfiguration)
         {
-            return rawConfiguration.Value<int?>("schemaVersion") ?? 0;
+            return GetField(rawConfiguration, "schemaVersion")?.Value<int?>() ?? 0;
         }
+
+        // Match the property-name handling used when Json.NET loads the typed model.
+        private static JToken? GetField(JObject? value, string name) =>
+            value?.GetValue(name, StringComparison.OrdinalIgnoreCase);
 
         private static void EnsureSupportedSchema(int schemaVersion)
         {
@@ -296,7 +300,7 @@ namespace GmodAddonManager.Core.Services
                 // Schemas before the state-model migration only had an ON/OFF
                 // Subscribe contract. Do not promote legacy compatibility fields
                 // to the new all-excluded state.
-                var rawEnabled = rawAsset.Value<bool?>("enabled");
+                var rawEnabled = GetField(rawAsset, "enabled")?.Value<bool?>();
                 var legacyState = asset.GetWholeState();
                 var wasEnabled = rawEnabled ??
                     (Enum.IsDefined(typeof(AddonState), legacyState) &&
@@ -332,14 +336,14 @@ namespace GmodAddonManager.Core.Services
             asset.IsSystem = false;
             asset.Addons = NormalizeIds(asset.Addons, allowWildcard: false);
 
-            var legacyEnabled = rawAsset?.Value<bool?>("enabled") ?? asset.Enabled;
+            var legacyEnabled = GetField(rawAsset, "enabled")?.Value<bool?>() ?? asset.Enabled;
             var migratedState = AddonState.Disabled;
             var needsReview = false;
 
             if (legacyEnabled)
             {
-                var fallbackState = ParseAddonState(rawAsset?["defaultAddonState"], asset.DefaultAddonState);
-                var rawStates = rawAsset?["addonStates"] as JObject;
+                var fallbackState = ParseAddonState(GetField(rawAsset, "defaultAddonState"), asset.DefaultAddonState);
+                var rawStates = GetField(rawAsset, "addonStates") as JObject;
                 var memberStates = asset.Addons
                     .Select(id => ParseAddonState(rawStates?[id], fallbackState))
                     .Distinct()
@@ -575,15 +579,15 @@ namespace GmodAddonManager.Core.Services
         private static JObject? FindRawAsset(IEnumerable<JObject> rawAssets, Asset asset)
         {
             return rawAssets.FirstOrDefault(raw =>
-                       string.Equals(raw.Value<string>("id"), asset.Id, StringComparison.Ordinal))
+                       string.Equals(GetField(raw, "id")?.Value<string>(), asset.Id, StringComparison.Ordinal))
                    ?? rawAssets.FirstOrDefault(raw =>
-                       string.Equals(raw.Value<string>("name"), asset.Name, StringComparison.Ordinal));
+                       string.Equals(GetField(raw, "name")?.Value<string>(), asset.Name, StringComparison.Ordinal));
         }
 
         private static bool IsSubscribeAsset(Asset asset, JObject? rawAsset)
         {
-            var id = rawAsset?.Value<string>("id") ?? asset.Id;
-            var name = rawAsset?.Value<string>("name") ?? asset.Name;
+            var id = GetField(rawAsset, "id")?.Value<string>() ?? asset.Id;
+            var name = GetField(rawAsset, "name")?.Value<string>() ?? asset.Name;
             return string.Equals(id, SubscribeSystemAssetId, StringComparison.Ordinal) ||
                    (asset.IsSystem &&
                     (string.Equals(name, "Subscribe Asset", StringComparison.OrdinalIgnoreCase) ||
@@ -594,8 +598,8 @@ namespace GmodAddonManager.Core.Services
 
         private static bool IsJunctionAsset(Asset asset, JObject? rawAsset)
         {
-            var id = rawAsset?.Value<string>("id") ?? asset.Id;
-            var name = rawAsset?.Value<string>("name") ?? asset.Name;
+            var id = GetField(rawAsset, "id")?.Value<string>() ?? asset.Id;
+            var name = GetField(rawAsset, "name")?.Value<string>() ?? asset.Name;
             return string.Equals(id, JunctionSystemAssetId, StringComparison.Ordinal) ||
                    (asset.IsSystem &&
                     (string.Equals(name, "Junction", StringComparison.OrdinalIgnoreCase) ||

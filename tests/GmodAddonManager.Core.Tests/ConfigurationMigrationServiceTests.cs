@@ -84,20 +84,23 @@ public sealed class ConfigurationMigrationServiceTests
         Assert.Equal(AddonState.Disabled, subscribe.GetWholeState());
     }
 
-    [Fact]
-    public void Migrate_MixedCustomAssetBecomesDisabledAndNeedsReviewWithoutSplitting()
+    [Theory]
+    [InlineData("assets", "id", "addonStates")]
+    [InlineData("Assets", "Id", "AddonStates")]
+    public void Migrate_MixedCustomAssetBecomesDisabledAndNeedsReviewWithoutSplitting(
+        string assetsKey, string idKey, string statesKey)
     {
         var raw = JObject.Parse(
-            """
+            $$"""
             {
-              "assets": [
+              "{{assetsKey}}": [
                 {
-                  "id": "mixed",
+                  "{{idKey}}": "mixed",
                   "name": "Mixed",
                   "isSystem": false,
                   "enabled": true,
                   "addons": ["100", "200"],
-                  "addonStates": { "100": 0, "200": 2 },
+                  "{{statesKey}}": { "100": 0, "200": 2 },
                   "defaultAddonState": 1
                 }
               ]
