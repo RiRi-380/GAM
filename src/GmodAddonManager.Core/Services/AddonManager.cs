@@ -3768,6 +3768,9 @@ namespace GmodAddonManager.Core.Services
                     if (subscriptionTruthAvailable && !cachedAddonIds.Contains(addonId))
                         continue;
 
+                    if (!AddonPayloadValidator.HasGmaHeader(gmaFile))
+                        continue;
+
                     downloadedAddonIds.Add(addonId);
                         
                     // Check if we already know about this addon

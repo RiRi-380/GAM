@@ -142,6 +142,28 @@ public sealed class AddonManagerEmptyDirectoryTests
     }
 
     [Fact]
+    public async Task Scan_OneByteWorkshopAndCacheArchives_AreHiddenAndPreserved()
+    {
+        using var env = new TestEnvironment();
+        Directory.CreateDirectory(env.AddonDirectoryPath);
+        Directory.CreateDirectory(env.GmodCachePath);
+        var workshopGma = Path.Combine(env.AddonDirectoryPath, env.AddonId + ".gma");
+        var cacheGma = Path.Combine(env.GmodCachePath, "987654321.gma");
+        byte[] partial = [(byte)'G'];
+        File.WriteAllBytes(workshopGma, partial);
+        File.WriteAllBytes(cacheGma, partial);
+        var manifest = env.WriteWorkshopCache((env.AddonId, "Workshop fixture"), ("987654321", "Cache fixture"));
+        using var manager = env.CreateManager([manifest]);
+        await manager.InitializeAsync();
+
+        Assert.Empty(await manager.ScanForNewAddonsAsync());
+        Assert.Empty(await manager.ScanWorkshopFolderAsync());
+        Assert.Equal(2, manager.PendingDownloadCount);
+        Assert.Equal(partial, File.ReadAllBytes(workshopGma));
+        Assert.Equal(partial, File.ReadAllBytes(cacheGma));
+    }
+
+    [Fact]
     public async Task ScanWorkshopFolderAsync_ZeroByteCacheGmaIsHiddenAndPreserved()
     {
         using var env = new TestEnvironment();
@@ -239,7 +261,7 @@ public sealed class AddonManagerEmptyDirectoryTests
                 CustomAppDataPath = AppDataPath,
                 CustomGmodInstallPath = GmodRootPath,
                 DisableMode = DisableMode.Soft,
-                DisableCacheScan = true,
+                CustomGmodCachePath = GmodCachePath,
                 CustomWorkshopCacheFilePaths = workshopCacheFilePaths ?? Array.Empty<string>(),
                 ScanCacheTtl = TimeSpan.Zero
             });
