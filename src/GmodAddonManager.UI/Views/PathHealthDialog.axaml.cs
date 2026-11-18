@@ -60,12 +60,13 @@ public partial class PathHealthDialog : Window
                 return;
             }
 
+            var plan = viewModel.AddonNoMountMigrationPlan;
             var confirmed = await dialogService.ShowConfirmAsync(
                 L.Get("PathHealth.ConfirmTitle"),
-                L.Format("PathHealth.ConfirmAddonNoMountMigration", viewModel.AddonNoMountMigrationCount));
+                L.Format("PathHealth.ConfirmAddonNoMountMigration", plan.ToMigrateIds.Count));
             if (confirmed)
             {
-                await viewModel.MigrateAddonNoMountAsync();
+                await viewModel.MigrateAddonNoMountAsync(plan);
             }
         }
         catch (Exception ex)

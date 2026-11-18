@@ -865,6 +865,8 @@
   "PathHealth.ConfirmMetadataRepair": "Update {0} addon metadata path(s) to the current Workshop root?\nNo files will be deleted.",
   "PathHealth.ConfirmAddonNoMountMigration": "Copy {0} disabled addon ID(s) from the previous addonnomount.txt into the current one?\nThe old file will not be deleted.",
   "PathHealth.ConfirmManagedMigration": "Move {0} GAM-managed data item(s) into the current manager folder?\nJunctions will not be retargeted.",
+  "PathHealth.AddonNoMountMigrationSkipped": "Added {0}, skipped {1}. Close GMod and check both addonnomount files before retrying.",
+  "PathHealth.AddonNoMountPreviewChanged": "The locations or add-ons changed during confirmation. Review the updated list before migrating.",
   "PathHealth.MetadataRepairComplete": "Metadata repair completed. Changed: {0}, skipped: {1}.",
   "PathHealth.AddonNoMountMigrationComplete": "addonnomount migration completed. Added: {0}.",
   "PathHealth.ManagedMigrationComplete": "Managed data migration completed. Moved: {0}, skipped: {1}.",

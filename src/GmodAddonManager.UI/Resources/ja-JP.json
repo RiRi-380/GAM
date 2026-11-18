@@ -864,6 +864,8 @@
   "PathHealth.ConfirmMetadataRepair": "{0}件のアドオンメタデータのパスを、現在のワークショップのルートフォルダーへ更新しますか？\nファイルは削除しません。",
   "PathHealth.ConfirmAddonNoMountMigration": "{0}件の無効化IDを古いaddonnomount.txtから現在のファイルへコピーしますか？\n古いファイルは削除しません。",
   "PathHealth.ConfirmManagedMigration": "{0}件のGAM管理データを現在の管理フォルダーへ移動しますか？\nジャンクションの接続先は変更しません。",
+  "PathHealth.AddonNoMountMigrationSkipped": "追加 {0} 件、見送り {1} 件。GModを終了し、移行元と移行先のaddonnomount.txtを確認してから再試行してください。",
+  "PathHealth.AddonNoMountPreviewChanged": "確認中に移行先・移行元または対象のアドオンが変わりました。更新された一覧を確認してから移行してください。",
   "PathHealth.MetadataRepairComplete": "メタデータの修復が完了しました。変更: {0}件、スキップ: {1}件",
   "PathHealth.AddonNoMountMigrationComplete": "addonnomountの移行が完了しました。追加: {0}件",
   "PathHealth.ManagedMigrationComplete": "GAM管理データの移動が完了しました。移動: {0}件、スキップ: {1}件",

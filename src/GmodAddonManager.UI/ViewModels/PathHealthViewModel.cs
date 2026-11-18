@@ -47,6 +47,7 @@ public sealed class PathHealthViewModel : ViewModelBase
     public string PreviousAddonNoMountPath => report.PreviousSnapshot?.AddonNoMountPath ?? L.Get("PathHealth.None");
     public int IssueCount => report.IssueCount;
     public int MetadataRepairCount => report.MetadataRepairCount;
+    public AddonNoMountMigrationPlan AddonNoMountMigrationPlan => report.AddonNoMountMigrationPlan;
     public int AddonNoMountMigrationCount => report.AddonNoMountMigrationCount;
     public int ManagedMigrationCandidateCount => report.ManagedMigrationCandidateCount;
     public bool CanRepairMetadata => !IsBusy && MetadataRepairCount > 0;
@@ -73,11 +74,21 @@ public sealed class PathHealthViewModel : ViewModelBase
             result => L.Format("PathHealth.MetadataRepairComplete", result.ChangedCount, result.SkippedCount));
     }
 
-    public async Task<PathHealthOperationResult> MigrateAddonNoMountAsync()
+    public async Task<PathHealthOperationResult> MigrateAddonNoMountAsync(AddonNoMountMigrationPlan? approvedPlan = null)
     {
+        var plan = approvedPlan ?? AddonNoMountMigrationPlan;
         return await RunOperationAsync(
-            () => addonManager.MigrateAddonNoMountEntriesAsync(),
-            result => L.Format("PathHealth.AddonNoMountMigrationComplete", result.ChangedCount));
+            () => addonManager.MigrateAddonNoMountEntriesAsync(plan),
+            result =>
+            {
+                if (result.RequiresNewPreview)
+                {
+                    return L.Get("PathHealth.AddonNoMountPreviewChanged");
+                }
+                return result.SkippedCount > 0
+                    ? L.Format("PathHealth.AddonNoMountMigrationSkipped", result.ChangedCount, result.SkippedCount)
+                    : L.Format("PathHealth.AddonNoMountMigrationComplete", result.ChangedCount);
+            });
     }
 
     public async Task<PathHealthOperationResult> MigrateManagedDataAsync()
