@@ -296,7 +296,8 @@ public sealed class StartupFlowContractTests
             "App.axaml.cs");
 
         Assert.Contains("initializedProcessWatcher.IsGmodRunning", source, StringComparison.Ordinal);
-        Assert.Contains("SteamProcessChecker.IsGmodRunning(resolvedGmodInstallPath)", source, StringComparison.Ordinal);
+        Assert.Contains("new GmodProcessWatcher(addonManager.GmodInstallPath)", source, StringComparison.Ordinal);
+        Assert.Contains("SteamProcessChecker.IsGmodRunning(initializedAddonManager.GmodInstallPath)", source, StringComparison.Ordinal);
 
         var providerIndex = source.IndexOf(
             "initializedAddonManager.GmodRunningProvider = () =>",

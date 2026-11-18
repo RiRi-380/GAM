@@ -322,7 +322,7 @@ public sealed partial class App : Application, IDisposable
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"Creating GmodProcessWatcher at: {DateTime.Now}\n");
 #endif
-                processWatcher = new GmodProcessWatcher(resolvedGmodInstallPath);
+                processWatcher = new GmodProcessWatcher(addonManager.GmodInstallPath);
 #if DEBUG
                 File.AppendAllText("app_startup.log", $"GmodProcessWatcher created, calling StartWatching at: {DateTime.Now}\n");
 #endif
@@ -349,7 +349,7 @@ public sealed partial class App : Application, IDisposable
             // watcher's exact gmod/hl2 identity check, including at startup.
             initializedAddonManager.GmodRunningProvider = () =>
                 initializedProcessWatcher.IsGmodRunning ||
-                SteamProcessChecker.IsGmodRunning(resolvedGmodInstallPath);
+                SteamProcessChecker.IsGmodRunning(initializedAddonManager.GmodInstallPath);
 
             try
             {
