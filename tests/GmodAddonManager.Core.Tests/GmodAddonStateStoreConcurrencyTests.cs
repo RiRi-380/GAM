@@ -25,6 +25,18 @@ public sealed class GmodAddonStateStoreConcurrencyTests : IDisposable
     }
 
     [Fact]
+    public void SetEnabled_LeavesExistingSiblingTemporaryFileUntouched()
+    {
+        WriteNoMountFile("100");
+        var sibling = noMountPath + ".tmp";
+        File.WriteAllText(sibling, "unfinished external edit");
+
+        Assert.True(new GmodAddonStateStore(gmodRootPath).SetEnabled("100", enabled: true));
+
+        Assert.Equal("unfinished external edit", File.ReadAllText(sibling));
+    }
+
+    [Fact]
     public void SetEnabled_ExternalChangeBeforeCommit_RereadsAndPreservesUnknownId()
     {
         WriteNoMountFile("100");

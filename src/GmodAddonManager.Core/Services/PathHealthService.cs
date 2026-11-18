@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
 using GmodAddonManager.Core.Models;
 
 namespace GmodAddonManager.Core.Services
@@ -55,6 +53,7 @@ namespace GmodAddonManager.Core.Services
 
     public sealed class PathHealthOperationResult
     {
+        public bool RequiresNewPreview { get; set; }
         public int ChangedCount { get; set; }
         public int MovedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -63,8 +62,6 @@ namespace GmodAddonManager.Core.Services
 
     public static class PathHealthService
     {
-        private static readonly Regex AddonNoMountEntryRegex = new Regex("\"\\d+\"\\s+\"(?<id>\\d+)\"", RegexOptions.Compiled);
-
         public static void UpdatePathState(
             Configuration configuration,
             PathSnapshot currentSnapshot,
@@ -130,7 +127,7 @@ namespace GmodAddonManager.Core.Services
             AddPathDiffIssue(issues, "addonnomount.txt", previousSnapshot?.AddonNoMountPath, currentSnapshot.AddonNoMountPath);
 
             var metadataCandidates = BuildMetadataRepairCandidates(configuration, currentSnapshot);
-            var addonNoMountPlan = BuildAddonNoMountMigrationPlan(configuration, currentSnapshot);
+            var addonNoMountPlan = BuildAddonNoMountMigrationPlan(configuration, currentSnapshot, issues);
             var managedCandidates = BuildManagedMigrationCandidates(
                 configuration,
                 managerPath,
@@ -205,18 +202,23 @@ namespace GmodAddonManager.Core.Services
                 return new PathHealthOperationResult();
             }
 
-            var targetIds = new HashSet<string>(plan.TargetIds, StringComparer.Ordinal);
-            var added = 0;
-            foreach (var id in plan.ToMigrateIds)
+            if (!TryReadNoMountIds(plan.SourcePath!, out var sourceIds))
             {
-                if (targetIds.Add(id))
-                {
-                    added++;
-                }
+                return new PathHealthOperationResult { SkippedCount = plan.ToMigrateIds.Count };
+            }
+            var disabled = plan.ToMigrateIds.Where(sourceIds.Contains)
+                .ToDictionary(id => id, _ => false, StringComparer.Ordinal);
+            var store = new GmodAddonStateStore(new FileInfo(plan.TargetPath));
+            if (!store.SetEnabledBulk(disabled, out var added))
+            {
+                return new PathHealthOperationResult { SkippedCount = plan.ToMigrateIds.Count };
             }
 
-            WriteAddonNoMountIds(plan.TargetPath, targetIds);
-            return new PathHealthOperationResult { ChangedCount = added };
+            return new PathHealthOperationResult
+            {
+                ChangedCount = added,
+                SkippedCount = plan.ToMigrateIds.Count - disabled.Count
+            };
         }
 
         public static PathHealthOperationResult MigrateManagedData(
@@ -331,7 +333,7 @@ namespace GmodAddonManager.Core.Services
             return candidates;
         }
 
-        private static AddonNoMountMigrationPlan BuildAddonNoMountMigrationPlan(Configuration configuration, PathSnapshot currentSnapshot)
+        private static AddonNoMountMigrationPlan BuildAddonNoMountMigrationPlan(Configuration configuration, PathSnapshot currentSnapshot, List<string> issues)
         {
             var targetPath = currentSnapshot.AddonNoMountPath;
             if (string.IsNullOrWhiteSpace(targetPath))
@@ -349,17 +351,26 @@ namespace GmodAddonManager.Core.Services
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .FirstOrDefault(path => !PathsEqual(path, targetPath) && File.Exists(path!));
 
+            if (!TryReadNoMountIds(targetPath, out var targetIds))
+            {
+                issues.Add("Cannot read a valid addonnomount.txt at the current installation.");
+                return new AddonNoMountMigrationPlan { TargetPath = targetPath };
+            }
+
             if (string.IsNullOrWhiteSpace(sourcePath))
             {
                 return new AddonNoMountMigrationPlan
                 {
                     TargetPath = targetPath,
-                    TargetIds = ReadAddonNoMountIds(targetPath).OrderBy(id => id).ToList()
+                    TargetIds = targetIds.OrderBy(id => id).ToList()
                 };
             }
 
-            var sourceIds = ReadAddonNoMountIds(sourcePath);
-            var targetIds = ReadAddonNoMountIds(targetPath);
+            if (!TryReadNoMountIds(sourcePath, out var sourceIds))
+            {
+                issues.Add("Cannot read a valid addonnomount.txt at the previous installation.");
+                return new AddonNoMountMigrationPlan { SourcePath = sourcePath, TargetPath = targetPath };
+            }
             var toMigrate = sourceIds
                 .Where(id => !targetIds.Contains(id))
                 .OrderBy(id => id)
@@ -618,62 +629,36 @@ namespace GmodAddonManager.Core.Services
 
         public static HashSet<string> ReadAddonNoMountIds(string? path)
         {
-            var result = new HashSet<string>(StringComparer.Ordinal);
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            if (string.IsNullOrWhiteSpace(path))
             {
-                return result;
+                return new HashSet<string>(StringComparer.Ordinal);
             }
+            return TryReadNoMountIds(path, out var ids)
+                ? ids : throw new IOException("Could not read a valid addonnomount.txt.");
+        }
 
-            var text = File.ReadAllText(path, Encoding.UTF8);
-            foreach (Match match in AddonNoMountEntryRegex.Matches(text))
+        private static bool TryReadNoMountIds(string path, out HashSet<string> ids)
+        {
+            ids = new HashSet<string>(StringComparer.Ordinal);
+            try
             {
-                var id = match.Groups["id"].Value;
-                if (!string.IsNullOrWhiteSpace(id))
+                var snapshot = new GmodAddonStateStore(new FileInfo(path)).ReadSnapshot();
+                if (!snapshot.IsValidFormat)
                 {
-                    result.Add(id);
+                    return false;
                 }
+                ids.UnionWith(snapshot.DisabledIds);
+                return true;
             }
-
-            return result;
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                return false;
+            }
         }
 
         public static void WriteAddonNoMountIds(string path, IEnumerable<string> ids)
         {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrWhiteSpace(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            var sorted = ids
-                .Where(id => !string.IsNullOrWhiteSpace(id) && long.TryParse(id, out _))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(id => id)
-                .ToList();
-
-            var builder = new StringBuilder();
-            builder.AppendLine("\"addonnomount\"");
-            builder.AppendLine("{");
-            for (var i = 0; i < sorted.Count; i++)
-            {
-                builder.Append("\t\"")
-                    .Append(i + 1)
-                    .Append("\"\t\t\"")
-                    .Append(sorted[i])
-                    .AppendLine("\"");
-            }
-            builder.AppendLine("}");
-
-            var temp = path + ".tmp";
-            File.WriteAllText(temp, builder.ToString(), new UTF8Encoding(false));
-            if (File.Exists(path))
-            {
-                File.Replace(temp, path, null);
-            }
-            else
-            {
-                File.Move(temp, path);
-            }
+            new GmodAddonStateStore(new FileInfo(path)).WriteDisabledIds(ids);
         }
 
         private static bool IsUsableSnapshot(PathSnapshot snapshot)

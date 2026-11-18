@@ -545,10 +545,26 @@ namespace GmodAddonManager.Core.Services
             return result;
         }
 
-        public async Task<PathHealthOperationResult> MigrateAddonNoMountEntriesAsync()
+        public async Task<PathHealthOperationResult> MigrateAddonNoMountEntriesAsync(AddonNoMountMigrationPlan? approvedPlan = null)
         {
-            var report = GetPathHealthReport();
-            var result = PathHealthService.MigrateAddonNoMountEntries(report.AddonNoMountMigrationPlan);
+            var current = GetPathHealthReport().AddonNoMountMigrationPlan;
+            if (approvedPlan != null &&
+                (!PathReferencesEqual(approvedPlan.SourcePath, current.SourcePath) ||
+                 !PathReferencesEqual(approvedPlan.TargetPath, current.TargetPath) ||
+                 !approvedPlan.ToMigrateIds.SequenceEqual(current.ToMigrateIds, StringComparer.Ordinal)))
+            {
+                return new PathHealthOperationResult
+                {
+                    RequiresNewPreview = true,
+                    SkippedCount = approvedPlan.ToMigrateIds.Count
+                };
+            }
+            var plan = approvedPlan ?? current;
+            if (plan.HasWork && IsGmodCurrentlyRunning())
+            {
+                return new PathHealthOperationResult { SkippedCount = plan.ToMigrateIds.Count };
+            }
+            var result = PathHealthService.MigrateAddonNoMountEntries(plan);
             if (result.ChangedCount > 0)
             {
                 await SaveConfigurationImmediatelyAsync();

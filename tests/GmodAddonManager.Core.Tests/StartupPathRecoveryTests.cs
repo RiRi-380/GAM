@@ -376,6 +376,44 @@ public sealed class StartupPathRecoveryTests
     }
 
     [Fact]
+    public async Task NoMountMigration_WhileGameIsRunning_LeavesBothFilesUntouched()
+    {
+        using var oldEnv = new TestSteamLayout();
+        using var currentEnv = new TestSteamLayout();
+        var profile = Directory.CreateTempSubdirectory("gam-live-migration-");
+        try
+        {
+            var previous = oldEnv.CreateSnapshot();
+            var current = currentEnv.CreateSnapshot();
+            PathHealthService.WriteAddonNoMountIds(previous.AddonNoMountPath!, new[] { "123" });
+            PathHealthService.WriteAddonNoMountIds(current.AddonNoMountPath!, new[] { "999" });
+            using var manager = new AddonManager(new AddonManagerOptions
+            {
+                CustomAppDataPath = profile.FullName,
+                CustomGmodInstallPath = currentEnv.GmodInstallPath,
+                CustomWorkshopPath = currentEnv.WorkshopRootPath,
+                CustomWorkshopCacheFilePaths = [currentEnv.WorkshopManifestPath],
+                DisableCacheScan = true
+            });
+            manager.GmodRunningProvider = () => true;
+            await manager.InitializeAsync();
+            manager.GetConfiguration().PathState.PreviousDetectedSnapshot = previous;
+
+            var deferred = await manager.MigrateAddonNoMountEntriesAsync();
+
+            Assert.Equal(1, deferred.SkippedCount);
+            Assert.Equal(new[] { "123" }, PathHealthService.ReadAddonNoMountIds(previous.AddonNoMountPath));
+            Assert.Equal(new[] { "999" }, PathHealthService.ReadAddonNoMountIds(current.AddonNoMountPath));
+            manager.GmodRunningProvider = () => false;
+            Assert.Equal(1, (await manager.MigrateAddonNoMountEntriesAsync()).ChangedCount);
+        }
+        finally
+        {
+            profile.Delete(true);
+        }
+    }
+
+    [Fact]
     public async Task StartupRecoveryFlow_ReusesExistingConfigAndRewritesCurrentNoMountFromRecoveredState()
     {
         using var oldEnv = new TestSteamLayout();

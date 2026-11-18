@@ -28,16 +28,24 @@ namespace GmodAddonManager.Core.Services
         internal Action? BeforeMergeCommitForTesting { get; set; }
         internal Action<int>? DuringStableReadForTesting { get; set; }
 
-        public GmodAddonStateStore(string gmodRootPath)
+        public GmodAddonStateStore(string gmodRootPath) : this(GetNoMountFile(gmodRootPath))
+        {
+        }
+
+        internal GmodAddonStateStore(FileInfo file)
+        {
+            noMountFilePath = file.FullName;
+            pathMutexName = BuildPathMutexName(noMountFilePath);
+        }
+
+        private static FileInfo GetNoMountFile(string gmodRootPath)
         {
             if (string.IsNullOrWhiteSpace(gmodRootPath))
             {
                 throw new ArgumentException("gmodRootPath is null or empty", nameof(gmodRootPath));
             }
 
-            var cfgDir = Path.Combine(gmodRootPath, "garrysmod", "cfg");
-            noMountFilePath = Path.Combine(cfgDir, "addonnomount.txt");
-            pathMutexName = BuildPathMutexName(noMountFilePath);
+            return new FileInfo(Path.Combine(gmodRootPath, "garrysmod", "cfg", "addonnomount.txt"));
         }
 
         public string NoMountFilePath => noMountFilePath;
@@ -56,7 +64,7 @@ namespace GmodAddonManager.Core.Services
                         new Dictionary<string, bool>(StringComparer.Ordinal)
                         {
                             [workshopId] = enabled
-                        }));
+                        }, out _));
             }
         }
 
@@ -64,13 +72,20 @@ namespace GmodAddonManager.Core.Services
         /// Bulk set multiple states atomically. Returns true if all requested states were persisted.
         /// </summary>
         public bool SetEnabledBulk(Dictionary<string, bool> statesToApply)
+            => SetEnabledBulk(statesToApply, out _);
+
+        internal bool SetEnabledBulk(Dictionary<string, bool> statesToApply, out int changedCount)
         {
+            changedCount = 0;
             if (statesToApply == null || statesToApply.Count == 0) return true;
 
             lock (fileLock)
             {
-                return ExecuteWithPathMutexNoLock(
-                    () => TryMergeEnabledStatesNoLock(statesToApply));
+                int changed = 0;
+                var saved = ExecuteWithPathMutexNoLock(
+                    () => TryMergeEnabledStatesNoLock(statesToApply, out changed));
+                changedCount = saved ? changed : 0;
+                return saved;
             }
         }
 
@@ -295,8 +310,9 @@ namespace GmodAddonManager.Core.Services
         }
 
         private bool TryMergeEnabledStatesNoLock(
-            IReadOnlyDictionary<string, bool> statesToApply)
+            IReadOnlyDictionary<string, bool> statesToApply, out int changedCount)
         {
+            changedCount = 0;
             var requestedStates = statesToApply
                 .Where(entry => !string.IsNullOrWhiteSpace(entry.Key))
                 .ToDictionary(
@@ -317,15 +333,12 @@ namespace GmodAddonManager.Core.Services
                     return false;
                 }
 
+                var changed = 0;
                 foreach (var entry in requestedStates)
                 {
-                    if (entry.Value)
+                    if (entry.Value ? disabledIds.Remove(entry.Key) : disabledIds.Add(entry.Key))
                     {
-                        disabledIds.Remove(entry.Key);
-                    }
-                    else
-                    {
-                        disabledIds.Add(entry.Key);
+                        changed++;
                     }
                 }
 
@@ -365,6 +378,7 @@ namespace GmodAddonManager.Core.Services
                     }
                 }
 
+                changedCount = changed;
                 return true;
             }
 
@@ -408,7 +422,7 @@ namespace GmodAddonManager.Core.Services
 
         private bool SaveDisabledIdsNoLock(HashSet<string> disabledIds)
         {
-            var temp = noMountFilePath + ".tmp";
+            var temp = noMountFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
                 var dir = Path.GetDirectoryName(noMountFilePath);

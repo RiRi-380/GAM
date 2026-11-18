@@ -97,6 +97,64 @@ public sealed class PathHealthServiceTests
         Assert.True(ids.SetEquals(new[] { "100", "200", "300" }));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MigrateAddonNoMountEntries_PreservesChangesAfterPreview(bool targetMalformed)
+    {
+        using var env = new TestEnvironment();
+        var oldPath = CreateSnapshot(env.OldGmodPath, env.OldWorkshopRoot).AddonNoMountPath!;
+        var currentSnapshot = CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot);
+        var target = currentSnapshot.AddonNoMountPath!;
+        PathHealthService.WriteAddonNoMountIds(oldPath, new[] { "100" });
+        PathHealthService.WriteAddonNoMountIds(target, new[] { "200" });
+        var config = new Configuration();
+        PathHealthService.UpdatePathState(config, CreateSnapshot(env.OldGmodPath, env.OldWorkshopRoot), env.OldManagerPath, env.OldAddonsPath);
+        var plan = PathHealthService.BuildReport(config, currentSnapshot, env.CurrentManagerPath, env.CurrentAddonsPath).AddonNoMountMigrationPlan;
+
+        if (targetMalformed)
+        {
+            File.WriteAllText(target, "incomplete");
+        }
+        else
+        {
+            PathHealthService.WriteAddonNoMountIds(target, new[] { "300" });
+        }
+
+        var result = PathHealthService.MigrateAddonNoMountEntries(plan);
+
+        if (targetMalformed)
+        {
+            Assert.Equal("incomplete", File.ReadAllText(target));
+            Assert.Equal(1, result.SkippedCount);
+        }
+        else
+        {
+            Assert.True(PathHealthService.ReadAddonNoMountIds(target).SetEquals(new[] { "100", "300" }));
+            Assert.Equal(1, result.ChangedCount);
+        }
+    }
+
+    [Fact]
+    public void MigrateAddonNoMountEntries_SourceLockedAfterPreview_ReportsIssueAndKeepsTarget()
+    {
+        using var env = new TestEnvironment();
+        var old = CreateSnapshot(env.OldGmodPath, env.OldWorkshopRoot);
+        var current = CreateSnapshot(env.CurrentGmodPath, env.CurrentWorkshopRoot);
+        PathHealthService.WriteAddonNoMountIds(old.AddonNoMountPath!, new[] { "100" });
+        PathHealthService.WriteAddonNoMountIds(current.AddonNoMountPath!, new[] { "200" });
+        var config = new Configuration();
+        PathHealthService.UpdatePathState(config, old, env.OldManagerPath, env.OldAddonsPath);
+        var plan = PathHealthService.BuildReport(config, current, env.CurrentManagerPath, env.CurrentAddonsPath).AddonNoMountMigrationPlan;
+
+        using var locked = File.Open(old.AddonNoMountPath!, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var refreshed = PathHealthService.BuildReport(config, current, env.CurrentManagerPath, env.CurrentAddonsPath);
+        Assert.False(refreshed.AddonNoMountMigrationPlan.HasWork);
+        Assert.Contains(refreshed.Issues, issue => issue.Contains("addonnomount", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, PathHealthService.MigrateAddonNoMountEntries(plan).SkippedCount);
+        Assert.Equal(new[] { "200" }, PathHealthService.ReadAddonNoMountIds(current.AddonNoMountPath));
+    }
+
     [Fact]
     public void BuildReport_DoesNotOfferSteamManagedFoldersForCleanup()
     {
