@@ -23,6 +23,9 @@ namespace GmodAddonManager.Core.Models
         [JsonProperty("assets")]
         public List<Asset> Assets { get; set; }
 
+        [JsonProperty("switchSets", NullValueHandling = NullValueHandling.Ignore)]
+        public List<SwitchSet> SwitchSets { get; set; } = new List<SwitchSet>();
+
         [JsonProperty("assetGroups")]
         public List<AssetGroup> AssetGroups { get; set; }
 

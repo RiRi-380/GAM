@@ -109,6 +109,14 @@
                         <TextBlock Text="↩️" FontSize="16"/>
                     </Button>
 
+                    <Button Command="{Binding OpenSwitchSetsCommand}"
+                            IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
+                            ToolTip.Tip="{loc:Localize SwitchSets.Title}"
+                            AutomationProperties.Name="{loc:Localize SwitchSets.Title}"
+                            Width="32" Height="32">
+                        <PathIcon Data="{StaticResource SaveIcon}" Width="16" Height="16"/>
+                    </Button>
+
                     <Button Command="{Binding AllOffCommand}"
                             IsEnabled="{Binding AssetListViewModel.IsAssetMutationEnabled}"
                             ToolTip.Tip="{loc:Localize MainWindow.AllOffTooltip}"

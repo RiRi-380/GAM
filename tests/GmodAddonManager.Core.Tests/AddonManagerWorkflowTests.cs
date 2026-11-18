@@ -5,7 +5,7 @@ using System.Reflection;
 
 namespace GmodAddonManager.Core.Tests;
 
-public sealed class AddonManagerWorkflowTests : IDisposable
+public sealed partial class AddonManagerWorkflowTests : IDisposable
 {
     private readonly string rootPath;
     private readonly string workshopPath;

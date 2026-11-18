@@ -80,6 +80,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         UndoCommand = ReactiveCommand.CreateFromTask(UndoLastActionAsync);
         AllOffCommand = ReactiveCommand.CreateFromTask(AllOffAsync);
         OpenSettingsCommand = ReactiveCommand.CreateFromTask(OpenSettingsAsync);
+        OpenSwitchSetsCommand = ReactiveCommand.CreateFromTask(OpenSwitchSetsAsync);
         ResetManagerCommand = ReactiveCommand.CreateFromTask(ResetManagerAsync);
 
         // 讀懃ｴ｢讖溯・縺ｮ螳溯｣・
@@ -306,6 +307,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> UndoCommand { get; }
     public ReactiveCommand<Unit, Unit> AllOffCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenSwitchSetsCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetManagerCommand { get; }
     
     public bool CanUndo
@@ -814,6 +816,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
                 return L.Format("Confirm.Undo.AssetStateUnknown", assetName);
             }
+            case UndoActionType.AssetStatesChanged:
+                return L.Format("Confirm.Undo.AssetStatesChanged", action.PreviousAssetStates?.Count ?? 0);
             case UndoActionType.AddonStateChanged:
             {
                 var affectedCount = GetAffectedAddonCount(action);
@@ -886,6 +890,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             AddonState.Excluded => L.Get("AssetList.Excluded") ?? "Excluded",
             _ => state.ToString()
         };
+    }
+
+    private async Task OpenSwitchSetsAsync()
+    {
+        if (!isInitialized || IsBusy || !AssetListViewModel.IsAssetMutationEnabled ||
+            Avalonia.Application.Current?.ApplicationLifetime is not
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+        {
+            return;
+        }
+
+        var dialog = new SwitchSetsDialog(addonManager);
+        await dialog.ShowDialog(owner);
+        if (dialog.ApplyAttempted)
+        {
+            await RefreshAddonsAsync(rescanWorkshop: false);
+            UpdateUndoState();
+        }
     }
 
     private async Task AllOffAsync()

@@ -34,7 +34,8 @@ namespace GmodAddonManager.Core.Models
         GamBundleImported,
         AssetGroupDepthLimitChanged,
         AssetMemoChanged,
-        AssetGroupMemoChanged
+        AssetGroupMemoChanged,
+        AssetStatesChanged
     }
 
     /// <summary>

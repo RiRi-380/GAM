@@ -6572,6 +6572,8 @@ namespace GmodAddonManager.Core.Services
                             "initialRuntimeImportCompleted",
                             StringComparison.OrdinalIgnoreCase) == null;
 
+                    var rawSwitchSets = jsonObj.GetValue("switchSets", StringComparison.OrdinalIgnoreCase);
+                    var missingSwitchSets = rawSwitchSets == null || rawSwitchSets.Type == JTokenType.Null;
                     var configurationNeedsSave = false;
                     string? currentSchemaSnapshotBeforeNormalization = null;
                     if (configurationMigrationService.RequiresMigration(jsonObj))
@@ -6623,7 +6625,7 @@ namespace GmodAddonManager.Core.Services
                         // evidence; the next ordinary load persists the same
                         // idempotent current-schema repairs.
                         configurationNeedsSave = missingInitialRuntimeImportMarker ||
-                            (currentSchemaWasNormalized &&
+                            ((currentSchemaWasNormalized || missingSwitchSets) &&
                              !recoveredConfigurationFromBackup);
                     }
 
@@ -6659,6 +6661,12 @@ namespace GmodAddonManager.Core.Services
                     {
                         MissingMemberHandling = MissingMemberHandling.Ignore
                     }) ?? throw new InvalidOperationException("Configuration deserialized to null.");
+                if (value.SwitchSets.Any(set => set == null) ||
+                    value.SwitchSets.Select(set => set.Id).Distinct(StringComparer.Ordinal).Count() != value.SwitchSets.Count ||
+                    value.SwitchSets.Select(set => set.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != value.SwitchSets.Count)
+                {
+                    throw new JsonSerializationException("Switch sets contain an empty entry or duplicate ID or name.");
+                }
                 return (json, raw, value);
             }
             catch (UnsupportedConfigurationSchemaException)
@@ -6890,6 +6898,7 @@ namespace GmodAddonManager.Core.Services
                             LastUpdated = now,
                             Assets = configuration.Assets.ToList(),
                             AssetGroups = configuration.AssetGroups.ToList(),
+                            SwitchSets = configuration.SwitchSets.ToList(),
                             MaxNestedGroupDepth = configuration.MaxNestedGroupDepth,
                             AddonMetadata = addonMetadataSnapshot,
                             JunctionHistory = junctionHistorySnapshot,
@@ -12824,6 +12833,7 @@ namespace GmodAddonManager.Core.Services
                         }
                         break;
 
+                    case UndoActionType.AssetStatesChanged:
                     case UndoActionType.AllOff:
                         if (action.PreviousAssetStates != null)
                         {
@@ -13307,6 +13317,7 @@ namespace GmodAddonManager.Core.Services
 
             var originalAssets = configuration.Assets;
             var originalAssetGroups = configuration.AssetGroups;
+            var originalSwitchSets = configuration.SwitchSets;
             var existingSubscribeAsset = configuration.Assets
                 .FirstOrDefault(asset => asset.Id == SubscribeSystemAssetId);
             var originalSubscribeName = existingSubscribeAsset?.Name;
@@ -13384,6 +13395,7 @@ namespace GmodAddonManager.Core.Services
                 gmodDisabledAsset
             };
             configuration.AssetGroups = new List<AssetGroup>();
+            configuration.SwitchSets = new List<SwitchSet>();
             configuration.InitialRuntimeImportCompleted = true;
             configuration.InitialRuntimeImportCompletedAtUtc = DateTime.UtcNow;
             configuration.GamAppliedRuntimeBaselineInitialized = false;
@@ -13425,6 +13437,7 @@ namespace GmodAddonManager.Core.Services
             {
                 configuration.Assets = originalAssets;
                 configuration.AssetGroups = originalAssetGroups;
+                configuration.SwitchSets = originalSwitchSets;
                 if (existingSubscribeAsset != null)
                 {
                     existingSubscribeAsset.Name = originalSubscribeName!;
