@@ -9,6 +9,19 @@ public sealed class AppSettingsStoreTests : IDisposable
         $"gam-app-settings-{Guid.NewGuid():N}");
 
     [Fact]
+    public void BulkPreviewDefaultsToOffForExistingProfilesAndPersistsOptIn()
+    {
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "settings.json");
+        File.WriteAllText(path, "{}");
+        var settings = AppSettings.LoadFrom(path);
+        Assert.False(settings.PreviewBulkChanges);
+        settings.PreviewBulkChanges = true;
+        settings.SaveTo(path);
+        Assert.True(AppSettings.LoadFrom(path).PreviewBulkChanges);
+    }
+
+    [Fact]
     public void AssetNavigationPrompt_DefaultsToOffAndPersistsChanges()
     {
         var path = Path.Combine(root, "settings.json");

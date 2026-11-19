@@ -8120,21 +8120,8 @@ namespace GmodAddonManager.Core.Services
             return asset;
         }
 
-        public async Task ApplyAssetGroupStateAsync(
-            string groupId,
-            AddonState state)
-        {
-            var rollback = CloneConfiguration(configuration);
-            var undoAction = assetGroupService.ApplyGroupState(
-                configuration,
-                groupId,
-                state);
-            await CommitAssetGroupMutationAsync(
-                undoAction,
-                rollback,
-                requiresRuntimeReconcile: undoAction != null,
-                "Asset Group state change");
-        }
+        public Task ApplyAssetGroupStateAsync(string groupId, AddonState state) =>
+            TryApplyAssetGroupStateAsync(groupId, state, expected: null);
 
         public async Task SetAssetGroupFavoriteAsync(
             string groupId,
@@ -9586,75 +9573,7 @@ namespace GmodAddonManager.Core.Services
             return true;
         }
 
-        public async Task SetAllOffAsync()
-        {
-            var previousStates = configuration.Assets.ToDictionary(
-                asset => asset.Id,
-                asset => asset.GetWholeState(),
-                StringComparer.Ordinal);
-            var changed = false;
-
-            foreach (var asset in configuration.Assets)
-            {
-                if (asset.Id == SubscribeSystemAssetId)
-                {
-                    if (asset.GetWholeState() != AddonState.Disabled)
-                    {
-                        asset.SetWholeState(AddonState.Disabled);
-                        changed = true;
-                    }
-                    continue;
-                }
-
-                if (!asset.IsSystem && asset.GetWholeState() == AddonState.Enabled)
-                {
-                    asset.SetWholeState(AddonState.Disabled);
-                    changed = true;
-                }
-            }
-
-            if (!changed)
-            {
-                return;
-            }
-
-            var undoAction = new UndoAction(
-                UndoActionType.AllOff,
-                "Turned all addon sources off")
-            {
-                PreviousAssetStates = previousStates
-            };
-            undoManager.RecordAction(undoAction);
-
-            try
-            {
-                await SaveConfigurationImmediatelyAsync();
-            }
-            catch
-            {
-                foreach (var previous in previousStates)
-                {
-                    configuration.Assets
-                        .FirstOrDefault(asset => asset.Id == previous.Key)
-                        ?.SetWholeState(previous.Value);
-                }
-                undoManager.RemoveAction(undoAction);
-                throw;
-            }
-
-            try
-            {
-                await UpdateAddonStatesAsync();
-            }
-            catch (Exception ex)
-            {
-                QueueRuntimeApplyOrRemember("SetAllAddonsOffAsync");
-                errorHandler.HandleError(
-                    ex,
-                    "All-off was saved; runtime reconciliation was queued",
-                    ErrorSeverity.Warning);
-            }
-        }
+        public Task SetAllOffAsync() => TrySetAllOffAsync(expected: null);
 
         public async Task<AssetVersion> CreateAssetVersionAsync(string assetId, string? note = null)
         {

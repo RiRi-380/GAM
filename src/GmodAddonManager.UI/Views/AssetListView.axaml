@@ -102,6 +102,11 @@
                            Orientation="Horizontal"
                            HorizontalAlignment="Right"
                            VerticalAlignment="Center">
+                    <Button Command="{Binding BulkEditCommand}"
+                            IsVisible="{Binding IsAtRoot}"
+                            IsEnabled="{Binding IsAssetMutationEnabled}"
+                            Content="{loc:Localize Bulk.Title}"
+                            Margin="0,0,8,0"/>
                     <Button Command="{Binding ImportGamAssetCommand}"
                             IsVisible="{Binding IsAtRoot}"
                             IsEnabled="{Binding IsAssetMutationEnabled}"

@@ -453,6 +453,111 @@ public sealed class AssetGroupManagerIntegrationTests : IDisposable
                 "forbidden"));
     }
 
+    [Fact]
+    public async Task NestedGroupPreviewRejectsEqualCountsForDifferentAddonIdsThenMatchesApplyAndUndo()
+    {
+        WorkshopManifestTestData.Write(rootPath, "101", "202", "303");
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var config = manager.GetConfiguration();
+        var subscribe = config.Assets.Single(asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Disabled);
+        var child = new Asset("Excluded") { State = AddonState.Excluded, Addons = ["101", "303"] };
+        var outside = new Asset("Other source") { Addons = ["101", "202", "303"] };
+        var veto = new Asset("Outside exclusion") { State = AddonState.Excluded, Addons = ["303"] };
+        config.Assets.AddRange([child, outside, veto]);
+        var nested = await manager.CreateAssetGroupAsync("Nested", [child.Id]);
+        var root = await manager.CreateAssetGroupAsync("Root", null, [], [nested.Id]);
+        var preview = manager.PreviewAssetGroupState(root.Id, AddonState.Disabled);
+        Assert.Equal((1, 1, 2, (int?)1, (int?)0),
+            (preview.Assets, preview.ExclusionsToNeutral, preview.GroupDefaults, preview.On, preview.Off));
+        child.Addons = ["202", "303"];
+        Assert.False(await manager.TryApplyAssetGroupStateAsync(root.Id, AddonState.Disabled, preview));
+        Assert.Equal(AddonState.Excluded, child.State);
+        var updated = manager.PreviewAssetGroupState(root.Id, AddonState.Disabled);
+        Assert.Equal(preview.On, updated.On);
+        Assert.True(await manager.TryApplyAssetGroupStateAsync(root.Id, AddonState.Disabled, updated));
+        Assert.True(manager.GetFinalAddonStates()["202"]);
+        Assert.False(manager.GetFinalAddonStates()["303"]);
+        Assert.Equal(AddonState.Disabled, nested.DefaultChildState);
+        Assert.True(await manager.UndoLastActionAsync());
+        Assert.Equal(AddonState.Excluded, child.State);
+        Assert.False(manager.GetFinalAddonStates()["202"]);
+    }
+
+    [Fact]
+    public async Task BatchPreviewPreservesProtectedAssetsAndDefersToSubscribeExclusion()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var config = manager.GetConfiguration();
+        var subscribe = config.Assets.Single(asset => asset.Id == SystemAssetDefinitions.SubscribeId);
+        subscribe.SetWholeState(AddonState.Excluded);
+        var asset = new Asset("Custom") { State = AddonState.Disabled, Addons = [TestAddonId] };
+        config.Assets.Add(asset);
+        var targets = new Dictionary<string, AddonState>
+        {
+            [asset.Id] = AddonState.Enabled,
+            [SystemAssetDefinitions.GmodDisabledId] = AddonState.Enabled,
+            ["removed"] = AddonState.Enabled
+        };
+        var preview = manager.PreviewAssetStates(targets);
+        Assert.Equal((1, (int?)0, (int?)0), (preview.Assets, preview.On, preview.Off));
+        Assert.True(await manager.TryApplyAssetStatesAsync(targets, preview));
+        Assert.False(manager.GetFinalAddonStates()[TestAddonId]);
+        Assert.True(await manager.UndoLastActionAsync());
+        Assert.Equal(AddonState.Disabled, asset.State);
+
+        File.Delete(manifestPath);
+        var unknown = manager.PreviewAssetStates(targets);
+        Assert.Null(unknown.On);
+        Assert.Null(unknown.Off);
+        Assert.False(await manager.TryApplyAssetStatesAsync(targets, preview));
+        Assert.Equal(AddonState.Disabled, asset.State);
+    }
+
+    [Fact]
+    public async Task AllOffPreviewCountsSubscribeNeutralizationAndGuardsAgainstNewTargets()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var config = manager.GetConfiguration();
+        config.Assets.Single(a => a.Id == SystemAssetDefinitions.SubscribeId).SetWholeState(AddonState.Excluded);
+        var kept = new Asset("Keep excluded") { State = AddonState.Excluded, Addons = [TestAddonId] };
+        config.Assets.Add(kept);
+        var preview = manager.PreviewAllOff();
+        Assert.Equal((1, 1), (preview.Assets, preview.ExclusionsToNeutral));
+        var added = new Asset("New enabled source");
+        config.Assets.Add(added);
+        Assert.False(await manager.TrySetAllOffAsync(preview));
+        Assert.Equal(AddonState.Enabled, added.State);
+        Assert.True(await manager.TrySetAllOffAsync(manager.PreviewAllOff()));
+        Assert.Equal(AddonState.Excluded, kept.State);
+        Assert.Equal(AddonState.Disabled, added.State);
+        Assert.Equal(UndoActionType.AllOff, manager.GetUndoManager().PeekLastAction()!.Type);
+    }
+
+    [Fact]
+    public async Task BulkStateSaveFailureRestoresAllTargetsWithoutUndo()
+    {
+        using var manager = CreateManager();
+        await manager.InitializeAsync();
+        var asset = await manager.CreateAssetAsync("Custom");
+        manager.GetUndoManager().Clear();
+        var blocked = BlockConfigurationSave(manager);
+        try
+        {
+            var targets = new Dictionary<string, AddonState> { [asset.Id] = AddonState.Excluded };
+            await Assert.ThrowsAnyAsync<Exception>(() => manager.ApplyAssetStatesAsync(targets));
+            Assert.Equal(AddonState.Enabled, asset.State);
+            Assert.False(manager.GetUndoManager().CanUndo);
+        }
+        finally
+        {
+            await UnblockConfigurationSaveAsync(manager, blocked);
+        }
+    }
+
     private AddonManager CreateManager()
     {
         return new AddonManager(new AddonManagerOptions

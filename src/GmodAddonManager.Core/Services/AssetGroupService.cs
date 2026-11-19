@@ -326,6 +326,22 @@ namespace GmodAddonManager.Core.Services
             };
         }
 
+        internal static (List<Asset> Children, List<AssetGroup> Groups) GetStateScope(
+            Configuration configuration, string groupId)
+        {
+            var descendantGroups = GetGroupSubtree(configuration, groupId).ToList();
+            var descendantGroupIds = new HashSet<string>(
+                descendantGroups.Select(candidate => candidate.Id),
+                StringComparer.Ordinal);
+            var children = configuration.Assets
+                .Where(asset =>
+                    !asset.IsSystem &&
+                    !string.IsNullOrWhiteSpace(asset.ParentGroupId) &&
+                    descendantGroupIds.Contains(asset.ParentGroupId))
+                .ToList();
+            return (children, descendantGroups);
+        }
+
         public UndoAction? ApplyGroupState(
             Configuration configuration,
             string groupId,
@@ -336,17 +352,8 @@ namespace GmodAddonManager.Core.Services
                 throw new ArgumentOutOfRangeException(nameof(state));
             }
 
-            var group = GetGroup(configuration, groupId);
-            var descendantGroups = GetGroupSubtree(configuration, group.Id).ToList();
-            var descendantGroupIds = new HashSet<string>(
-                descendantGroups.Select(candidate => candidate.Id),
-                StringComparer.Ordinal);
-            var children = configuration.Assets
-                .Where(asset =>
-                    !asset.IsSystem &&
-                    !string.IsNullOrWhiteSpace(asset.ParentGroupId) &&
-                    descendantGroupIds.Contains(asset.ParentGroupId))
-                .ToList();
+            var (children, descendantGroups) = GetStateScope(configuration, groupId);
+            var group = descendantGroups[0];
             var previousStates = children.ToDictionary(
                 child => child.Id,
                 child => child.GetWholeState(),

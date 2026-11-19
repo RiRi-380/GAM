@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:GmodAddonManager.UI.Localization"
+        x:Class="GmodAddonManager.UI.Views.BulkAssetStateDialog"
+        Title="{loc:Localize Bulk.Title}" Width="470" Height="480"
+        MinWidth="360" MinHeight="300" WindowStartupLocation="CenterOwner">
+    <Grid Margin="18" RowDefinitions="Auto,*,Auto,Auto,Auto">
+        <TextBlock Text="{loc:Localize Bulk.Empty}" TextWrapping="Wrap"/>
+        <ScrollViewer Grid.Row="1" Margin="0,8">
+            <StackPanel Name="AssetChoices"/>
+        </ScrollViewer>
+        <TextBlock Grid.Row="2" Name="SelectionState" Margin="0,4" TextWrapping="Wrap"/>
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,*" Margin="0,4,0,12">
+            <TextBlock VerticalAlignment="Center" Text="{loc:Localize Bulk.Target}"/>
+            <ComboBox Name="TargetState" Grid.Column="1" Margin="8,0,0,0"
+                      HorizontalAlignment="Stretch" SelectedIndex="1">
+                <ComboBoxItem Content="{loc:Localize AssetList.Enabled}"/>
+                <ComboBoxItem Content="{loc:Localize AssetList.Disabled}"/>
+                <ComboBoxItem Content="{loc:Localize AssetList.Excluded}"/>
+            </ComboBox>
+        </Grid>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button Content="{loc:Localize Dialog.Cancel}" Click="OnCancel" IsCancel="True"/>
+            <Button Name="ApplyButton" IsEnabled="False" Classes="accent" Click="OnApply"/>
+        </StackPanel>
+    </Grid>
+</Window>

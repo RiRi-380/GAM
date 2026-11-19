@@ -79,6 +79,7 @@ public partial class SettingsDialog : Window
 
         BackgroundTitleUpdatesCheckBox.IsChecked = currentSettings.EnableBackgroundTitleUpdates;
         BackgroundAddonPreloadCheckBox.IsChecked = currentSettings.EnableBackgroundAddonPreload;
+        PreviewBulkChangesCheckBox.IsChecked = currentSettings.PreviewBulkChanges;
         ShowAssetNavigationPromptAfterTransferCheckBox.IsChecked = currentSettings.ShowAssetNavigationPromptAfterTransfer;
         LocalAddonDiscoveryExperimentalCheckBox.IsChecked =
             currentSettings.EnableLocalAddonDiscoveryExperimental;
@@ -165,6 +166,7 @@ public partial class SettingsDialog : Window
 
             currentSettings.EnableBackgroundTitleUpdates = BackgroundTitleUpdatesCheckBox.IsChecked ?? false;
             currentSettings.EnableBackgroundAddonPreload = BackgroundAddonPreloadCheckBox.IsChecked ?? false;
+            currentSettings.PreviewBulkChanges = PreviewBulkChangesCheckBox.IsChecked == true;
             currentSettings.ShowAssetNavigationPromptAfterTransfer =
                 ShowAssetNavigationPromptAfterTransferCheckBox.IsChecked == true;
             currentSettings.EnableLocalAddonDiscoveryExperimental =

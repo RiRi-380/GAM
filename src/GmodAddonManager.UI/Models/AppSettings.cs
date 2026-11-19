@@ -13,6 +13,7 @@ namespace GmodAddonManager.UI.Models
         public bool EnableBackgroundTitleUpdates { get; set; } = false;
         public bool EnableBackgroundAddonPreload { get; set; } = false;
         public bool ShowAssetNavigationPromptAfterTransfer { get; set; } = false;
+        public bool PreviewBulkChanges { get; set; }
         public bool EnableLocalAddonDiscoveryExperimental { get; set; } = false;
         /// <summary>
         /// Enables the experimental membership History UI. Version data remains

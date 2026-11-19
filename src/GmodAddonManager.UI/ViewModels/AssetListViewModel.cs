@@ -76,6 +76,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
             includeMemosInShare = false;
         }
 
+        BulkEditCommand = ReactiveCommand.CreateFromTask(BulkEditAsync);
         CreateAssetCommand = ReactiveCommand.CreateFromTask(CreateAssetAsync);
         ImportGamAssetCommand = ReactiveCommand.CreateFromTask(ImportGamAssetAsync);
         RefreshCommand = ReactiveCommand.Create(LoadAssets);
@@ -249,6 +250,7 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         shareSelectionItems;
     public ObservableCollection<AssetBreadcrumbItemViewModel> Breadcrumbs => breadcrumbs;
 
+    public ReactiveCommand<Unit, Unit> BulkEditCommand { get; }
     public ReactiveCommand<Unit, Unit> CreateAssetCommand { get; }
     public ReactiveCommand<Unit, Unit> ImportGamAssetCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -611,6 +613,30 @@ public sealed class AssetListViewModel : ViewModelBase, IDisposable
         }
 
         SelectedAsset = selection;
+    }
+
+    private async Task BulkEditAsync()
+    {
+        var window = GetMainWindow();
+        if (window == null || !IsAssetMutationEnabled) return;
+        try
+        {
+            var enabled = AppSettings.Load().PreviewBulkChanges;
+            var picker = new BulkAssetStateDialog(addonManager.GetConfiguration().Assets, enabled);
+            var states = await picker.ShowDialog<Dictionary<string, AddonState>?>(window);
+            if (states == null || !await BulkStateConfirmation.RunAsync(enabled, L.Get("Bulk.Title"),
+                () => addonManager.PreviewAssetStates(states),
+                preview => addonManager.TryApplyAssetStatesAsync(states, preview), dialogService)) return;
+
+            LoadAssets();
+            if (window.DataContext is MainWindowViewModel main)
+                await main.AddonGridViewModel.LoadAddonsAsync();
+        }
+        catch (Exception ex)
+        {
+            SafeFileLogger.TryLogException("AssetListViewModel.BulkEdit", ex);
+            await dialogService.ShowErrorAsync(L.Get("Error.Title"), L.Get("Bulk.Failed"));
+        }
     }
 
     private async Task CreateAssetAsync()

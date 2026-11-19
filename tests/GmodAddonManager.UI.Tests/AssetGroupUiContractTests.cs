@@ -1098,6 +1098,40 @@ public sealed class AssetGroupUiContractTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task BulkPreviewCancelledBeforeApplyAndDisabledSettingSkipsPreview()
+    {
+        var workshop = Directory.CreateDirectory(Path.Combine(rootPath, "workshop")).FullName;
+        var game = Directory.CreateDirectory(Path.Combine(rootPath, "game")).FullName;
+        using var manager = new AddonManager(new AddonManagerOptions
+        {
+            CustomWorkshopPath = workshop,
+            CustomAppDataPath = Path.Combine(rootPath, "profile"),
+            CustomGmodInstallPath = game,
+            CustomWorkshopCacheFilePaths = [],
+            DisableCacheScan = true
+        });
+        await manager.InitializeAsync();
+        var asset = new Asset("Custom");
+        manager.GetConfiguration().Assets.Add(asset);
+        var states = new Dictionary<string, AddonState> { [asset.Id] = AddonState.Disabled };
+        var dialogs = new RecordingDialogService(false);
+
+        Assert.False(await BulkStateConfirmation.RunAsync(true, "Bulk edit",
+            () => manager.PreviewAssetStates(states),
+            preview => manager.TryApplyAssetStatesAsync(states, preview), dialogs));
+        Assert.Equal(AddonState.Enabled, asset.State);
+        Assert.Equal(1, dialogs.ConfirmCallCount);
+        Assert.True(await BulkStateConfirmation.RunAsync(false, "Bulk edit",
+            () => throw new InvalidOperationException("Preview should be skipped"),
+            preview =>
+            {
+                Assert.Null(preview);
+                return Task.FromResult(true);
+            }, dialogs));
+        Assert.Equal(1, dialogs.ConfirmCallCount);
+    }
+
     private async Task<AddonManager> CreateManagerAsync()
     {
         var workshopPath = Path.Combine(rootPath, "workshop", "content", "4000");

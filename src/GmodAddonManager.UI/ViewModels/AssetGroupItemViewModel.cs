@@ -3,6 +3,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using GmodAddonManager.Core.Models;
 using GmodAddonManager.Core.Services;
+using GmodAddonManager.UI.Models;
 using GmodAddonManager.UI.Services;
 using GmodAddonManager.UI.Views;
 using ReactiveUI;
@@ -220,7 +221,10 @@ public sealed class AssetGroupItemViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            await addonManager.ApplyAssetGroupStateAsync(Id, state);
+            if (!await BulkStateConfirmation.RunAsync(AppSettings.Load().PreviewBulkChanges,
+                L.Format("Bulk.GroupTitle", Name, L.Get($"AssetList.{state}")),
+                () => addonManager.PreviewAssetGroupState(Id, state),
+                preview => addonManager.TryApplyAssetGroupStateAsync(Id, state, preview), dialogService)) return;
             ViewModelLocator.AssetListViewModel?.LoadAssets();
         }
         catch (Exception ex)

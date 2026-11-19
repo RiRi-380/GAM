@@ -918,13 +918,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
                 : null;
-            using var progressDialog = ProgressDialogService.Show(
-                mainWindow,
-                L.Get("MainWindow.AllOff"),
-                L.Get("Busy.UpdatingAddonStates"));
-            progressDialog?.SetIndeterminate();
+            async Task<bool> ApplyAsync(AssetStateChangePreview? preview)
+            {
+                using var progressDialog = ProgressDialogService.Show(
+                    mainWindow, L.Get("MainWindow.AllOff"), L.Get("Busy.UpdatingAddonStates"));
+                progressDialog?.SetIndeterminate();
+                return await addonManager.TrySetAllOffAsync(preview);
+            }
 
-            await addonManager.SetAllOffAsync();
+            if (!await BulkStateConfirmation.RunAsync(AppSettings.Load().PreviewBulkChanges,
+                L.Get("MainWindow.AllOff"), addonManager.PreviewAllOff, ApplyAsync, undoDialogs))
+            {
+                return;
+            }
             AssetListViewModel.LoadAssets();
             await AddonGridViewModel.LoadAddonsAsync();
             UpdateUndoState();
