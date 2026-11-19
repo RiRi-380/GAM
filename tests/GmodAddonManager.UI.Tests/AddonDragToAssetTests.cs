@@ -120,6 +120,64 @@ public sealed class AddonDragToAssetTests : IDisposable
             Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
         });
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task DebouncedSearchWhileMembershipUndoIsSavingKeepsCommittedCardsAndSelection(bool hideRemovedAddon) =>
+        WithWindowAsync(async (_, main, manager) =>
+        {
+            var grid = main.AddonGridViewModel;
+            var list = main.AssetListViewModel;
+            var destination = list.GetAssetById("destination")!;
+            var model = manager.GetConfiguration().Assets.Single(asset => asset.Id == destination.Id);
+            await main.AddDroppedAddonsToAssetAsync(destination, [SecondAddonId]);
+            list.SelectedAsset = destination;
+            grid.SetCurrentAsset(destination);
+            grid.IsSelectionMode = true;
+            grid.SelectAddon(FirstAddonId);
+            grid.SelectAddon(SecondAddonId);
+            var cards = grid.FilteredAddons;
+            var saveGate = (SemaphoreSlim)typeof(AddonManager)
+                .GetField("_configurationSaveGate", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(manager)!;
+
+            await saveGate.WaitAsync();
+            var undo = main.UndoLastActionAsync();
+            try
+            {
+                await WaitUntilAsync(() => !model.Addons.Contains(SecondAddonId));
+                var rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                grid.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(grid.HasActiveFilters)) rendered.TrySetResult();
+                };
+                // Keep the last committed membership until the save succeeds. An actual
+                // search change may hide a selected member during that interval.
+                grid.FilterText = hideRemovedAddon ? FirstAddonId : "test-addon";
+                await rendered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (hideRemovedAddon)
+                {
+                    cards = grid.FilteredAddons;
+                    Assert.Equal(FirstAddonId, Assert.Single(cards).AddonId);
+                }
+                else
+                {
+                    Assert.Same(cards, grid.FilteredAddons);
+                    Assert.Equal(2, cards.Count);
+                }
+                Assert.Equal(2, grid.SelectedAddonsCount);
+            }
+            finally
+            {
+                saveGate.Release();
+                await undo;
+            }
+
+            Assert.Same(cards, grid.FilteredAddons);
+            Assert.Equal(FirstAddonId, Assert.Single(cards).AddonId);
+            Assert.Equal(FirstAddonId, Assert.Single(grid.GetSelectedAddons()).AddonId);
+        });
+
     [AvaloniaFact]
     public Task DragOneWithoutSelectionAndCancelAtAnEdgeOrWithEscape() =>
         WithWindowAsync(async (window, main, manager) =>

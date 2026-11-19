@@ -554,6 +554,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         var droppedIds = addonIds.ToHashSet(StringComparer.Ordinal);
         var carriedSelection = AddonGridViewModel.GetSelectedAddons()
             .Any(addon => droppedIds.Contains(addon.AddonId));
+        AddonGridViewModel.BeginMembershipChange(asset.Id);
         IsUpdatingAssetMembership = true;
         try
         {
@@ -585,20 +586,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
         finally
         {
+            AddonGridViewModel.EndMembershipChange();
             IsUpdatingAssetMembership = false;
         }
     }
 
     private async Task RefreshAddonMembershipPresentationAsync(string assetId, IReadOnlyList<string> affectedIds)
     {
-        var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(candidate => candidate.Id == assetId);
-        if (asset != null)
-        {
-            AssetListViewModel.RefreshAddonMembership(asset);
-        }
-
         var snapshot = await Task.Run(AddonGridViewModel.CaptureRuntimeStatePresentation);
-        AddonGridViewModel.RefreshAfterMembershipChange(snapshot, affectedIds);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(candidate => candidate.Id == assetId);
+            if (asset != null)
+            {
+                AssetListViewModel.RefreshAddonMembership(asset);
+            }
+            AddonGridViewModel.RefreshAfterMembershipChange(snapshot, affectedIds);
+        });
     }
 
     private void UpdateUndoState()
@@ -757,6 +761,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
     private async Task<bool> UndoAddonAdditionAsync(UndoAction action, string assetId)
     {
+        AddonGridViewModel.BeginMembershipChange(assetId);
         IsUpdatingAssetMembership = true;
         try
         {
@@ -775,6 +780,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
         finally
         {
+            AddonGridViewModel.EndMembershipChange();
             IsUpdatingAssetMembership = false;
         }
     }

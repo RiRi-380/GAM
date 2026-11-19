@@ -44,6 +44,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private string filterText = "";
     private bool isLoading;
     private AssetItemViewModel? currentAsset;
+    private (string AssetId, HashSet<string> Members)? pendingMembership;
     
     private bool showOnlyAssetAddons;
     private bool isMultiSelectEnabled;
@@ -1388,14 +1389,62 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
     private void ApplyPresentationFilter() =>
         ApplyFilter(runtimeSnapshot: null, changedMembershipIds: null, refreshRuntime: false);
 
-    internal void RefreshAfterMembershipChange(RuntimeStatePresentation runtimeSnapshot, IReadOnlyList<string> affectedIds) =>
-        ApplyFilter(runtimeSnapshot, affectedIds.ToHashSet(StringComparer.Ordinal));
+    // Core mutates membership before its asynchronous save can commit or roll back.
+    // Search and sort redraws keep using the last presented membership in the meantime.
+    private IReadOnlyCollection<string> GetPresentedMembers(AssetItemViewModel asset) =>
+        pendingMembership is { } pending && pending.AssetId == asset.Id ? pending.Members : asset.GetAddonIds();
+
+    internal void BeginMembershipChange(string assetId)
+    {
+        var asset = addonManager.GetConfiguration().Assets.FirstOrDefault(asset => asset.Id == assetId);
+        pendingMembership = (assetId, asset?.Addons.ToHashSet(StringComparer.Ordinal) ?? new(StringComparer.Ordinal));
+    }
+
+    internal void EndMembershipChange() => pendingMembership = null;
+
+    internal void RefreshAfterMembershipChange(RuntimeStatePresentation runtimeSnapshot, IReadOnlyList<string> affectedIds)
+    {
+        var changedIds = affectedIds.ToHashSet(StringComparer.Ordinal);
+        var editingCurrentAsset = pendingMembership?.AssetId == CurrentAsset?.Id && CurrentAsset != null;
+        EndMembershipChange();
+        if (editingCurrentAsset && ShowOnlyAssetAddons && selectedAddonIds.Overlaps(changedIds))
+        {
+            var members = CurrentAsset!.GetAddonIds().ToHashSet(StringComparer.Ordinal);
+            var selectionChanged = false;
+            foreach (var addon in AllAddons)
+            {
+                if (changedIds.Contains(addon.AddonId) && !members.Contains(addon.AddonId) &&
+                    selectedAddonIds.Remove(addon.AddonId))
+                {
+                    addon.IsSelected = false;
+                    selectionChanged = true;
+                }
+            }
+            if (selectionChanged)
+            {
+                if (selectedAddonIds.Count == 0 && IsSelectionMode)
+                    IsSelectionMode = false;
+                else
+                    NotifySelectionChanged();
+            }
+        }
+        ApplyFilter(runtimeSnapshot, changedIds);
+    }
 
     private void ApplyFilter(
         RuntimeStatePresentation? runtimeSnapshot,
         IReadOnlySet<string>? changedMembershipIds,
         bool refreshRuntime = true)
     {
+        if (disposed) return;
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            // Compute on the dispatcher too. A delayed redraw must not publish a
+            // result calculated for an older search, Asset or membership snapshot.
+            Dispatcher.UIThread.Post(() => ApplyFilter(runtimeSnapshot, changedMembershipIds, refreshRuntime));
+            return;
+        }
+
         try
         {
             if (changedMembershipIds == null)
@@ -1433,7 +1482,7 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                     IReadOnlyCollection<string> assetAddonIds =
                         CurrentAsset.Id == "subscribe-system-asset"
                             ? Array.Empty<string>()
-                            : CurrentAsset.GetAddonIds();
+                            : GetPresentedMembers(CurrentAsset);
                     query = query.Where(addon => MatchesAssetMembership(
                         CurrentAsset.Id,
                         assetAddonIds,
@@ -1484,39 +1533,25 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
                 .Select(addon => viewModelsById[addon.Id])
                 .ToList();
             
-            // UIスレッドで実行されていることを確認
-            void UpdateFilteredView()
+            baseFilteredCount = baseResults.Count;
+            if (changedMembershipIds != null)
             {
-                baseFilteredCount = baseResults.Count;
-                if (changedMembershipIds != null)
-                {
-                    UpdateFilteredAddonsInPlace(results);
-                }
-                else
-                {
-                    if (!FilteredAddons.SequenceEqual(results))
-                    {
-                        FilteredAddons = new ObservableCollection<AddonItemViewModel>(results);
-                    }
-                    _ = LoadVisibleAddonDetailsAsync();
-                }
-
-                // アドオン数表示を更新
-                this.RaisePropertyChanged(nameof(FilteredAddonsCount));
-                this.RaisePropertyChanged(nameof(AddonCountDisplay));
-                this.RaisePropertyChanged(nameof(HasActiveFilters));
-                this.RaisePropertyChanged(nameof(ActiveFilterText));
-                NotifyHiddenSelectionChanged();
-            }
-
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-            {
-                UpdateFilteredView();
+                UpdateFilteredAddonsInPlace(results);
             }
             else
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFilteredView);
+                if (!FilteredAddons.SequenceEqual(results))
+                {
+                    FilteredAddons = new ObservableCollection<AddonItemViewModel>(results);
+                }
+                _ = LoadVisibleAddonDetailsAsync();
             }
+
+            this.RaisePropertyChanged(nameof(FilteredAddonsCount));
+            this.RaisePropertyChanged(nameof(AddonCountDisplay));
+            this.RaisePropertyChanged(nameof(HasActiveFilters));
+            this.RaisePropertyChanged(nameof(ActiveFilterText));
+            NotifyHiddenSelectionChanged();
         }
         catch (Exception ex)
         {
@@ -1533,18 +1568,11 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
 
         // Keep realized cards and the scroll anchor for members that remain visible.
         var remaining = results.ToHashSet();
-        var selectionChanged = false;
         for (var i = FilteredAddons.Count - 1; i >= 0; i--)
         {
             var addon = FilteredAddons[i];
             if (!remaining.Contains(addon))
             {
-                if (selectedAddonIds.Remove(addon.AddonId))
-                {
-                    addon.IsSelected = false;
-                    selectionChanged = true;
-                }
-
                 FilteredAddons.RemoveAt(i);
             }
         }
@@ -1568,17 +1596,6 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
             }
         }
 
-        if (selectionChanged)
-        {
-            if (selectedAddonIds.Count == 0 && IsSelectionMode)
-            {
-                IsSelectionMode = false;
-            }
-            else
-            {
-                NotifySelectionChanged();
-            }
-        }
     }
 
     private static HashSet<string> GetSelectedFilterKeys(IEnumerable<FilterOptionViewModel> options)
