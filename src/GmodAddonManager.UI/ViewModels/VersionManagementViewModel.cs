@@ -469,10 +469,12 @@ public sealed class VersionManagementViewModel : ViewModelBase
                 IsAvailable = false
             };
 
-        if (!addonViewModelCache.TryGetValue(addonId, out var addonViewModel))
+        if (!addonViewModelCache.TryGetValue(addonId, out var addonViewModel) ||
+            !string.Equals(addonViewModel.FolderPath, addon.FolderPath, StringComparison.Ordinal))
         {
+            addonViewModel?.Dispose();
             addonViewModel = new AddonItemViewModel(addon, addonManager);
-            addonViewModelCache.Add(addonId, addonViewModel);
+            addonViewModelCache[addonId] = addonViewModel;
         }
         else
         {
@@ -694,9 +696,7 @@ public sealed class VersionAddonItemViewModel : ViewModelBase
     public string AddonId => AddonItemViewModel.AddonId;
 
     public string Title => AddonItemViewModel.Title;
-    public string FileSizeText => AddonItemViewModel.FileSize > 0
-        ? AddonItemViewModel.FileSizeText
-        : L.Get("Common.Unknown");
+    public string FileSizeText => AddonItemViewModel.FileSizeText;
 
     public AddonDiffStatus Status { get; }
 

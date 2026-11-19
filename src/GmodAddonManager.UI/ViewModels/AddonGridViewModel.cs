@@ -1321,7 +1321,8 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         currentSubscribedAddonIds = inventory.SubscribedAddonIds;
         foreach (var addon in inventory.Addons)
         {
-            if (existingViewModels.TryGetValue(addon.Id, out var existingVm))
+            if (existingViewModels.TryGetValue(addon.Id, out var existingVm) &&
+                string.Equals(existingVm.FolderPath, addon.FolderPath, StringComparison.Ordinal))
             {
                 reusedAddonIds.Add(addon.Id);
                 existingVm.UpdateFromWorkshopAddon(addon);
@@ -1345,6 +1346,10 @@ public sealed class AddonGridViewModel : ViewModelBase, IDisposable
         }
 
         AllAddons = newAllAddons;
+        if (SelectedAddon is { } previous && !reusedAddonIds.Contains(previous.AddonId))
+        {
+            SelectedAddon = newAllAddons.FirstOrDefault(addon => addon.AddonId == previous.AddonId);
+        }
         selectedAddonIds.IntersectWith(AllAddons.Where(addon => !addon.IsLocal).Select(addon => addon.AddonId));
         foreach (var addon in AllAddons)
         {

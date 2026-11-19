@@ -26,6 +26,88 @@ public sealed class AddonItemViewModelStateDisplayTests : IDisposable
         LocalizationManager.Instance.ChangeLanguage("en-US");
     }
 
+    [Theory]
+    [InlineData(0L, 1704067200L, null, "2024/01/01 00:00")]
+    [InlineData(1704067200L, 0L, "2024/01/01 00:00", null)]
+    [InlineData(long.MaxValue, 1704067200L, null, "2024/01/01 00:00")]
+    public async Task WorkshopDetailsUseOnlyValidTimestamps(
+        long created, long updated, string? expectedCreated, string? expectedUpdated)
+    {
+        using var manager = await CreateManagerAsync();
+        using var item = CreateAddonViewModel(manager);
+        var details = new WorkshopItemDetails { TimeCreated = created, TimeUpdated = updated };
+        const BindingFlags instance = BindingFlags.NonPublic | BindingFlags.Instance;
+        // Supply the service's memory cache directly. No Web or Steam lookup is needed.
+        typeof(SteamWorkshopService).GetMethod("SetCachedDetails", instance)!
+            .Invoke(manager.GetSteamWorkshopService(), [item.AddonId, details, TimeSpan.FromHours(1)]);
+        var load = typeof(AddonItemViewModel).GetMethod("LoadWorkshopDetailsAsync", instance)!;
+        await (Task)load.Invoke(item, [false])!;
+
+        Assert.Equal(expectedCreated, item.TimeCreatedText);
+        Assert.Equal(expectedUpdated, item.TimeUpdatedText);
+    }
+
+    [Fact]
+    public async Task HistoryRefreshUsesCurrentFileLocationSizeAndMembership()
+    {
+        using var manager = await CreateManagerAsync();
+        const string id = "fixture-history";
+        var asset = new Asset
+        {
+            Id = "test-asset",
+            CurrentVersion = 1,
+            VersionHistory = [new AssetVersion { Version = 1, AddonIds = [id] }]
+        };
+        manager.GetConfiguration().Assets.Add(asset);
+        var history = new VersionManagementViewModel(asset, manager);
+        try
+        {
+            var initialTitle = Assert.Single(history.SelectedVersionAddons).Title;
+            var path = Path.Combine(rootPath, "asset.gma");
+            File.WriteAllBytes(path, [1, 2, 3]);
+            var metadata = new WorkshopAddon(id, path) { Size = 3, Title = "Fixture" };
+            manager.GetAllAddons()[id] = metadata;
+            history.ShowDiff = false;
+            var restored = Assert.Single(history.SelectedVersionAddons).AddonItemViewModel;
+            var restoredPath = restored.FolderPath;
+            var restoredSize = restored.FileSizeText;
+
+            metadata.Size = 5;
+            File.WriteAllBytes(path, [1, 2, 3, 4, 5]);
+            history.ShowDiff = true;
+            var updatedSize = Assert.Single(history.SelectedVersionAddons).AddonItemViewModel.FileSizeText;
+            manager.GetAllAddons().Remove(id);
+            history.ShowDiff = false;
+            var unavailable = Assert.Single(history.SelectedVersionAddons);
+            Assert.Multiple(
+                () => Assert.DoesNotContain("Deleted", initialTitle),
+                () => Assert.Equal(path, restoredPath),
+                () => Assert.Equal("3 B", restoredSize),
+                () => Assert.Equal("5 B", updatedSize),
+                () => Assert.Equal("Unknown", unavailable.AddonItemViewModel.FileSizeText),
+                () => Assert.DoesNotContain("Deleted", unavailable.Title));
+        }
+        finally
+        {
+            history.Release();
+        }
+    }
+
+    [Fact]
+    public async Task MissingFileMetadataShowsUnknownAndMeasuredEmptyFileShowsZero()
+    {
+        using var manager = await CreateManagerAsync();
+        using var missing = new AddonItemViewModel(new WorkshopAddon("fixture-missing", ""), manager);
+        Assert.Equal("Unknown", missing.LastModifiedText);
+        Assert.Equal("Unknown", missing.FileSizeText);
+
+        var path = Path.Combine(rootPath, "empty.gma");
+        File.WriteAllBytes(path, []);
+        using var empty = new AddonItemViewModel(new WorkshopAddon("fixture-empty", path), manager);
+        Assert.Equal("0 B", empty.FileSizeText);
+        Assert.NotEqual("Unknown", empty.LastModifiedText);
+    }
+
     [Fact]
     public async Task ActualAndDesiredStatesRemainDistinctWhileRuntimeApplyIsPending()
     {

@@ -91,32 +91,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         title = ResolveDisplayTitle(addon);
         FolderPath = addon.FolderPath;
         
-        // ファイル情報の初期化
-        if (addon.Size > 0)
-        {
-            FileSize = addon.Size;
-            isFileSizeCalculated = true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(FolderPath))
-        {
-            if (Directory.Exists(FolderPath))
-            {
-                var dirInfo = new DirectoryInfo(FolderPath);
-                LastModified = dirInfo.LastWriteTime;
-            }
-            else if (File.Exists(FolderPath))
-            {
-                var fileInfo = new FileInfo(FolderPath);
-                LastModified = fileInfo.LastWriteTime;
-                if (!isFileSizeCalculated)
-                {
-                    FileSize = fileInfo.Length;
-                    addon.Size = fileInfo.Length;
-                    isFileSizeCalculated = true;
-                }
-            }
-        }
+        RefreshFileMetadata(addon);
 
         // コマンドの初期化
         LoadDetailsCommand = ReactiveCommand.CreateFromTask(LoadDetailsAsync);
@@ -218,12 +193,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
         
         // 内部のaddonオブジェクトを更新
-        addon.Size = workshopAddon.Size;
-        if (FileSize != workshopAddon.Size)
-        {
-            FileSize = workshopAddon.Size;
-        }
-        isFileSizeCalculated = workshopAddon.Size > 0;
+        RefreshFileMetadata(workshopAddon);
         addon.LastUpdated = workshopAddon.LastUpdated;
         addon.FirstSeenSubscribedAtUtc = workshopAddon.FirstSeenSubscribedAtUtc;
         addon.WorkshopUpdatedAtUtc = workshopAddon.WorkshopUpdatedAtUtc;
@@ -371,7 +341,7 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         private set => SetAndRaise(ref isThumbnailLoading, value);
     }
 
-    public string FileSizeText => FormatFileSize(FileSize);
+    public string FileSizeText => isFileSizeCalculated ? FormatFileSize(FileSize) : L.Get("Common.Unknown");
     public string LastModifiedText => LastModified == default
         ? L.Get("Common.Unknown")
         : LastModified.ToString("yyyy/MM/dd HH:mm");
@@ -981,18 +951,12 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
             
             if (details != null)
             {
-                TimeCreated = DateTimeOffset.FromUnixTimeSeconds(details.TimeCreated).DateTime;
-                TimeUpdated = DateTimeOffset.FromUnixTimeSeconds(details.TimeUpdated).DateTime;
-                if (details.TimeUpdated > 0)
+                TimeCreated = GetWorkshopDateUtc(details.TimeCreated);
+                TimeUpdated = GetWorkshopDateUtc(details.TimeUpdated);
+                if (TimeUpdated is { } updatedAtUtc && addon.WorkshopUpdatedAtUtc != updatedAtUtc)
                 {
-                    var updatedAtUtc = DateTimeOffset
-                        .FromUnixTimeSeconds(details.TimeUpdated)
-                        .UtcDateTime;
-                    if (addon.WorkshopUpdatedAtUtc != updatedAtUtc)
-                    {
-                        addon.WorkshopUpdatedAtUtc = updatedAtUtc;
-                        NotifySortSourceChanged();
-                    }
+                    addon.WorkshopUpdatedAtUtc = updatedAtUtc;
+                    NotifySortSourceChanged();
                 }
                 this.RaisePropertyChanged(nameof(TimeCreated));
                 this.RaisePropertyChanged(nameof(TimeUpdated));
@@ -1006,6 +970,11 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
     
+    private static DateTime? GetWorkshopDateUtc(long timestamp) =>
+        timestamp > 0 && timestamp <= DateTimeOffset.MaxValue.ToUnixTimeSeconds()
+            ? DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime
+            : null;
+
     private void LoadFileTree()
     {
         try
@@ -1131,58 +1100,69 @@ public sealed class AddonItemViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private void RefreshFileMetadata(WorkshopAddon current)
+    {
+        var size = current.Size;
+        isFileSizeCalculated = size > 0;
+        LastModified = default;
+        if (!string.IsNullOrWhiteSpace(current.FolderPath))
+        {
+            try
+            {
+                var file = new FileInfo(current.FolderPath);
+                if (file.Exists)
+                {
+                    LastModified = file.LastWriteTime;
+                    if (!isFileSizeCalculated)
+                    {
+                        size = file.Length;
+                        isFileSizeCalculated = true;
+                    }
+                }
+                else
+                {
+                    var directory = new DirectoryInfo(current.FolderPath);
+                    if (directory.Exists) LastModified = directory.LastWriteTime;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                SafeFileLogger.TryLogException($"AddonItemViewModel.RefreshFileMetadata(AddonId={AddonId})", ex);
+            }
+        }
+        addon.Size = size;
+        FileSize = size;
+    }
+
     private void CalculateFileSize()
     {
-        if (isFileSizeCalculated)
+        if (isFileSizeCalculated || string.IsNullOrWhiteSpace(FolderPath))
         {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(FolderPath))
-        {
-            FileSize = addon.Size > 0 ? addon.Size : 0;
-            isFileSizeCalculated = true;
-            CommitCalculatedFileSize();
-            return;
-        }
-
-        if (File.Exists(FolderPath))
-        {
-            FileSize = new FileInfo(FolderPath).Length;
-            isFileSizeCalculated = true;
-            CommitCalculatedFileSize();
-            return;
-        }
-
-        if (!Directory.Exists(FolderPath))
-        {
-            FileSize = addon.Size > 0 ? addon.Size : 0;
-            isFileSizeCalculated = true;
-            CommitCalculatedFileSize();
             return;
         }
 
         try
         {
-            long totalSize = 0;
-            var dirInfo = new DirectoryInfo(FolderPath);
-            
-            foreach (var file in dirInfo.GetFiles("*", SearchOption.AllDirectories))
+            if (File.Exists(FolderPath))
             {
-                totalSize += file.Length;
+                FileSize = new FileInfo(FolderPath).Length;
             }
-            
-            FileSize = totalSize;
-        }
-        catch (Exception ex)
-        {
-            // logger.LogError($"Failed to calculate file size for {AddonId}", ex); // Removed logging
-            FileSize = addon.Size > 0 ? addon.Size : 0;
-        }
-        finally
-        {
+            else if (Directory.Exists(FolderPath))
+            {
+                FileSize = new DirectoryInfo(FolderPath)
+                    .EnumerateFiles("*", SearchOption.AllDirectories)
+                    .Sum(file => file.Length);
+            }
+            else
+            {
+                return;
+            }
             isFileSizeCalculated = true;
             CommitCalculatedFileSize();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SafeFileLogger.TryLogException($"AddonItemViewModel.CalculateFileSize(AddonId={AddonId})", ex);
         }
     }
 
