@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="using:GmodAddonManager.UI.Controls"
         xmlns:loc="using:GmodAddonManager.UI.Localization"
         mc:Ignorable="d"
         d:DesignWidth="600"
@@ -109,6 +110,7 @@
                                    FontSize="12"
                                    Opacity="0.8"
                                    TextWrapping="Wrap"/>
+                        <controls:MissingSubscriptionIdsButton x:Name="CopyIdsButton" HorizontalAlignment="Left"/>
                         <Button x:Name="CopyMissingUrlsButton"
                                 Content="{loc:Localize GamAssetFile.CopyMissingUrls}"
                                 HorizontalAlignment="Left"

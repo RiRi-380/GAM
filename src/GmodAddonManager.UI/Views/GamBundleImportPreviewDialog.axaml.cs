@@ -60,6 +60,7 @@ public partial class GamBundleImportPreviewDialog : Window
             : L.Get("GamAssetFile.SubscriptionStatusUnknown");
         BundleContentsTree.ItemsSource = BuildContents(preview.Content.Bundle!);
         MissingIdsSection.IsVisible = preview.SubscriptionStatusKnown && preview.MissingSubscriptionAddonIds.Count > 0;
+        if (preview.SubscriptionStatusKnown) CopyIdsButton.SetIds(preview.MissingSubscriptionAddonIds);
         MissingIdsTextBlock.Text = string.Join(", ", preview.MissingSubscriptionAddonIds);
 
         var requiresDepthIncrease =

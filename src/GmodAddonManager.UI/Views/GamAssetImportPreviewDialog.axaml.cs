@@ -55,6 +55,10 @@ public partial class GamAssetImportPreviewDialog : Window
             : L.Format(
                 "GamAssetFile.MissingCount",
                 preview.MissingSubscriptionAddonIds.Count);
+        if (!preview.IsSmart && preview.SubscriptionStatusKnown)
+        {
+            CopyIdsButton.SetIds(preview.MissingSubscriptionAddonIds);
+        }
         CopyMissingUrlsButton.IsVisible =
             !preview.IsSmart &&
             preview.MissingSubscriptionAddonIds.Count > 0;
