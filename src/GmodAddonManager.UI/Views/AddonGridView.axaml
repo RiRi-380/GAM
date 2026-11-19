@@ -153,9 +153,12 @@
                                 <TextBlock Text="{Binding ActualStateText}" FontSize="10" Foreground="White"/>
                             </Border>
                             <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                    Background="#1F5D96" CornerRadius="4" Padding="5,2"
+                                    Width="18" Height="18" Margin="0,0,4,4" CornerRadius="9"
+                                    Background="#202F42" BorderBrush="{Binding BorderColor}" BorderThickness="1"
                                     IsVisible="{Binding IsSelected}" IsHitTestVisible="False">
-                                <TextBlock Text="✓" FontWeight="Bold" Foreground="White"/>
+                                <Path Data="{StaticResource CheckIcon}" Stroke="#B7D8FF"
+                                      StrokeThickness="1.5" StrokeJoin="Round"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                         </Grid>
                     </Border>

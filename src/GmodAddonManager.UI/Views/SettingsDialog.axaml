@@ -50,13 +50,13 @@
         </StackPanel>
         
         <!-- 設定コンテンツ -->
-        <ScrollViewer>
-            <StackPanel Spacing="30">
+        <ScrollViewer Name="SettingsScrollViewer">
+            <StackPanel Name="SettingsSections" Spacing="30">
                 <!-- 言語設定 -->
-                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                <Border Name="LanguageSection" Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Name="LanguageSection" Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.LanguageHeader}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.LanguageDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -77,10 +77,10 @@
                 </Border>
                 
                 <!-- 詳細設定 -->
-                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                <Border Name="AdvancedSection" Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Name="AdvancedSection" Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.AdvancedHeader}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.AdvancedDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -194,10 +194,10 @@
                 </Border>
                 
                 <!-- ログ設定 -->
-                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
+                <Border Name="TroubleshootingSection" Background="#1F1F1F" CornerRadius="8" Padding="25">
                     <StackPanel Spacing="15">
                         <StackPanel Spacing="5">
-                            <TextBlock Name="TroubleshootingSection" Text="{loc:Localize Settings.Troubleshooting}" FontSize="18" FontWeight="Bold"/>
+                            <TextBlock Text="{loc:Localize Settings.Troubleshooting}" FontSize="18" FontWeight="Bold"/>
                             <TextBlock Text="{loc:Localize Settings.LogDescription}"
                                        Opacity="0.7"
                                        FontSize="12"
@@ -230,79 +230,82 @@
                     </StackPanel>
                 </Border>
                 
-                <!-- アップデート設定 -->
-                <Border Background="#1F1F1F" CornerRadius="8" Padding="25">
-                    <StackPanel Spacing="15">
-                        <StackPanel Spacing="5">
-                            <TextBlock Name="UpdateSection" Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
-                            <TextBlock Text="{loc:Localize Settings.UpdateDescription}"
-                                       Opacity="0.7"
-                                       FontSize="12"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
-
-                        <Button Click="OnCheckForUpdate" Width="200" HorizontalAlignment="Left">
-                            <StackPanel Orientation="Horizontal" Spacing="5">
-                                <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
-                                <TextBlock Text="{loc:Localize Settings.CheckForUpdate}"/>
+                <!-- Leave enough content after the last jump target to align it at the top. -->
+                <StackPanel Spacing="30" MinHeight="{Binding #SettingsScrollViewer.Viewport.Height}">
+                    <!-- アップデート設定 -->
+                    <Border Name="UpdateSection" Background="#1F1F1F" CornerRadius="8" Padding="25">
+                        <StackPanel Spacing="15">
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="{loc:Localize Settings.UpdateHeader}" FontSize="18" FontWeight="Bold"/>
+                                <TextBlock Text="{loc:Localize Settings.UpdateDescription}"
+                                           Opacity="0.7"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"/>
                             </StackPanel>
-                        </Button>
-                    </StackPanel>
-                </Border>
 
-                <!-- 危険な操作 -->
-                <Border Background="#2A1515" BorderBrush="#CC0000" BorderThickness="1" CornerRadius="8" Padding="25">
-                    <StackPanel Spacing="15">
-                        <StackPanel Spacing="5">
-                            <TextBlock Text="{loc:Localize Settings.DangerZoneHeader}" FontSize="18" FontWeight="Bold" Foreground="#FF4444"/>
-                            <TextBlock Text="{loc:Localize Settings.DangerZoneDescription}"
-                                       Opacity="0.7"
-                                       FontSize="12"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
-                        
-                        <Border Background="#1F0A0A" CornerRadius="4" Padding="15">
-                            <StackPanel Spacing="10">
-                                <StackPanel Orientation="Horizontal" Spacing="10">
-                                    <PathIcon Data="{StaticResource WarningIcon}" Width="20" Height="20" Foreground="#FF4444"/>
-                                    <TextBlock Name="ResetManagerTitleText"
-                                               Text="{loc:Localize Settings.ResetManagerTitle}"
-                                               FontWeight="Bold"
-                                               FontSize="14"
-                                               Foreground="#FF4444"/>
+                            <Button Click="OnCheckForUpdate" Width="200" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <PathIcon Data="{StaticResource RefreshIcon}" Width="16" Height="16"/>
+                                    <TextBlock Text="{loc:Localize Settings.CheckForUpdate}"/>
                                 </StackPanel>
-                                <TextBlock x:Name="ResetManagerDescriptionText"
-                                           Text="{loc:Localize Settings.ResetManagerDescriptionSoft}"
-                                           TextWrapping="Wrap" 
-                                           Opacity="0.8"
-                                           FontSize="12"/>
-                                <TextBlock Text="{loc:Localize Settings.ResetManagerWarning}" 
-                                           TextWrapping="Wrap" 
-                                           Foreground="#FF9999"
-                                           FontSize="11"
-                                           FontStyle="Italic"/>
-                                <Button Name="ResetManagerButton"
-                                        Click="OnResetManager"
-                                        Background="#CC0000"
-                                        Foreground="White"
-                                        Width="200"
-                                        HorizontalAlignment="Left"
-                                        Margin="0,10,0,0">
-                                    <Button.Styles>
-                                        <Style Selector="Button:pointerover">
-                                            <Setter Property="Background" Value="#EE0000"/>
-                                        </Style>
-                                    </Button.Styles>
-                                    <StackPanel Orientation="Horizontal" Spacing="5">
-                                        <PathIcon Data="{StaticResource DeleteIcon}" Width="16" Height="16"/>
-                                        <TextBlock Name="ResetManagerButtonText"
-                                                   Text="{loc:Localize Settings.ResetManagerButton}"/>
-                                    </StackPanel>
-                                </Button>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 危険な操作 -->
+                    <Border Background="#2A1515" BorderBrush="#CC0000" BorderThickness="1" CornerRadius="8" Padding="25">
+                        <StackPanel Spacing="15">
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="{loc:Localize Settings.DangerZoneHeader}" FontSize="18" FontWeight="Bold" Foreground="#FF4444"/>
+                                <TextBlock Text="{loc:Localize Settings.DangerZoneDescription}"
+                                           Opacity="0.7"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"/>
                             </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </Border>
+
+                            <Border Background="#1F0A0A" CornerRadius="4" Padding="15">
+                                <StackPanel Spacing="10">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <PathIcon Data="{StaticResource WarningIcon}" Width="20" Height="20" Foreground="#FF4444"/>
+                                        <TextBlock Name="ResetManagerTitleText"
+                                                   Text="{loc:Localize Settings.ResetManagerTitle}"
+                                                   FontWeight="Bold"
+                                                   FontSize="14"
+                                                   Foreground="#FF4444"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="ResetManagerDescriptionText"
+                                               Text="{loc:Localize Settings.ResetManagerDescriptionSoft}"
+                                               TextWrapping="Wrap"
+                                               Opacity="0.8"
+                                               FontSize="12"/>
+                                    <TextBlock Text="{loc:Localize Settings.ResetManagerWarning}"
+                                               TextWrapping="Wrap"
+                                               Foreground="#FF9999"
+                                               FontSize="11"
+                                               FontStyle="Italic"/>
+                                    <Button Name="ResetManagerButton"
+                                            Click="OnResetManager"
+                                            Background="#CC0000"
+                                            Foreground="White"
+                                            Width="200"
+                                            HorizontalAlignment="Left"
+                                            Margin="0,10,0,0">
+                                        <Button.Styles>
+                                            <Style Selector="Button:pointerover">
+                                                <Setter Property="Background" Value="#EE0000"/>
+                                            </Style>
+                                        </Button.Styles>
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <PathIcon Data="{StaticResource DeleteIcon}" Width="16" Height="16"/>
+                                            <TextBlock Name="ResetManagerButtonText"
+                                                       Text="{loc:Localize Settings.ResetManagerButton}"/>
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

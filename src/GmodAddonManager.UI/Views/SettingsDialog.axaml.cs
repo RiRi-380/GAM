@@ -318,9 +318,10 @@ public partial class SettingsDialog : Window
 
     private void OnJumpToSettingsSection(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string sectionName })
+        if (sender is Button { Tag: string sectionName } &&
+            this.FindControl<Border>(sectionName)?.TranslatePoint(default, SettingsSections) is Point sectionTop)
         {
-            this.FindControl<TextBlock>(sectionName)?.BringIntoView();
+            SettingsScrollViewer.Offset = SettingsScrollViewer.Offset.WithY(sectionTop.Y);
         }
     }
 
