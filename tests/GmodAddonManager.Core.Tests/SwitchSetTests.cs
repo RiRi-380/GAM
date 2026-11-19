@@ -147,6 +147,99 @@ public sealed partial class AddonManagerWorkflowTests
         Assert.Equal(["100"], copy.Addons);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SwitchSets_UndoWaitsForInFlightApplyAndHonorsConfirmedIdentity(bool undoPreviouslyConfirmedAction)
+    {
+        using var manager = await CreateInitializedManager();
+        var scene = AddAsset(manager, "Scene", AddonState.Excluded, "100");
+        var target = await manager.SaveSwitchSetAsync("Exclude");
+        scene.SetWholeState(AddonState.Enabled);
+        await manager.SaveConfigurationImmediatelyAsync();
+        manager.GetUndoManager().Clear();
+        var previous = await manager.CreateAssetAsync("Other asset");
+        var confirmed = Assert.IsType<UndoAction>(manager.GetUndoManager().PeekLastAction());
+        var saveGate = (SemaphoreSlim)typeof(AddonManager)
+            .GetField("_configurationSaveGate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(manager)!;
+
+        await saveGate.WaitAsync();
+        Task apply;
+        Task<bool> undo;
+        try
+        {
+            apply = manager.ApplySwitchSetAsync(target.Id);
+            Assert.Equal(AddonState.Excluded, scene.GetWholeState());
+            undo = undoPreviouslyConfirmedAction
+                ? manager.UndoLastActionAsync(confirmed)
+                : manager.UndoLastActionAsync();
+        }
+        finally
+        {
+            saveGate.Release();
+        }
+
+        await apply.WaitAsync(TimeSpan.FromSeconds(10));
+        var undone = await undo.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(!undoPreviouslyConfirmedAction, undone);
+        Assert.Contains(previous, manager.GetConfiguration().Assets);
+        if (undoPreviouslyConfirmedAction)
+        {
+            Assert.Equal(AddonState.Excluded, scene.GetWholeState());
+            Assert.Equal(UndoActionType.AssetStatesChanged, manager.GetUndoManager().PeekLastAction()!.Type);
+        }
+        else
+        {
+            Assert.Equal(AddonState.Enabled, scene.GetWholeState());
+            Assert.Same(confirmed, manager.GetUndoManager().PeekLastAction());
+            Assert.DoesNotContain("\"100\"", File.ReadAllText(noMountPath));
+        }
+    }
+
+    [Fact]
+    public async Task SwitchSets_FailedApplyAndUndoKeepAssetStatesAndHistoryAtLastSuccessfulSave()
+    {
+        using var manager = await CreateInitializedManager();
+        var scene = AddAsset(manager, "Scene", AddonState.Excluded, "100");
+        var set = await manager.SaveSwitchSetAsync("Exclude");
+        scene.SetWholeState(AddonState.Enabled);
+        await manager.UpdateAddonStatesAsync();
+        manager.GetUndoManager().Clear();
+        var runtime = File.ReadAllBytes(noMountPath);
+        var path = BlockConfigurationSave(manager);
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => manager.ApplySwitchSetAsync(set.Id));
+            Assert.Equal(AddonState.Enabled, scene.GetWholeState());
+            Assert.False(manager.GetUndoManager().CanUndo);
+            Assert.Equal(runtime, File.ReadAllBytes(noMountPath));
+        }
+        finally
+        {
+            await UnblockConfigurationSaveAsync(manager, path);
+        }
+
+        await manager.ApplySwitchSetAsync(set.Id);
+        var undo = Assert.Single(manager.GetUndoManager().GetHistory(10));
+        runtime = File.ReadAllBytes(noMountPath);
+        path = BlockConfigurationSave(manager);
+        try
+        {
+            Assert.False(await manager.UndoLastActionAsync());
+            Assert.Equal(AddonState.Excluded, scene.GetWholeState());
+            Assert.Equal(undo.Id, manager.GetUndoManager().PeekLastAction()!.Id);
+            Assert.Equal(runtime, File.ReadAllBytes(noMountPath));
+        }
+        finally
+        {
+            await UnblockConfigurationSaveAsync(manager, path);
+        }
+
+        Assert.True(await manager.UndoLastActionAsync());
+        Assert.Equal(AddonState.Enabled, scene.GetWholeState());
+    }
+
     [Fact]
     public async Task SwitchSets_PersistenceErrorsPreserveSavedDefinitionAndResetClearsIt()
     {

@@ -722,10 +722,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                 {
                     var isAddonAddition = lastAction.Type == UndoActionType.AddonAddedToAsset &&
                                           lastAction.AssetId != null;
-                    var success = ReferenceEquals(lastAction, undoManager.PeekLastAction()) &&
-                        (isAddonAddition
-                            ? await UndoAddonAdditionAsync(lastAction, lastAction.AssetId!)
-                            : await addonManager.UndoLastActionAsync());
+                    var success = isAddonAddition
+                        ? await UndoAddonAdditionAsync(lastAction, lastAction.AssetId!)
+                        : await addonManager.UndoLastActionAsync(lastAction);
                     if (success)
                     {
                         if (isAddonAddition)
@@ -762,7 +761,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         try
         {
             using var busy = BeginBusy(L.Get("Busy.Undoing"));
-            if (!await Task.Run(addonManager.UndoLastActionAsync))
+            if (!await Task.Run(() => addonManager.UndoLastActionAsync(action)))
             {
                 return false;
             }

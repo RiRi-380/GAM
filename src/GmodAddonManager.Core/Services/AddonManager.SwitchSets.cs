@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using GmodAddonManager.Core.Models;
 
@@ -9,8 +8,6 @@ namespace GmodAddonManager.Core.Services
 {
     public partial class AddonManager
     {
-        private readonly SemaphoreSlim switchSetGate = new SemaphoreSlim(1, 1);
-
         private IEnumerable<Asset> SwitchableAssets =>
             configuration.Assets.Where(asset => !asset.IsSystem || asset.Id == SubscribeSystemAssetId);
 
@@ -51,18 +48,13 @@ namespace GmodAddonManager.Core.Services
             });
         }
 
-        public async Task ApplySwitchSetAsync(string id)
+        public Task ApplySwitchSetAsync(string id)
         {
-            await switchSetGate.WaitAsync();
-            try
-            {
-                var set = configuration.SwitchSets[FindSwitchSetIndex(configuration.SwitchSets, id)];
-                await ApplyAssetStatesAsync(set.AssetStates, reconcileUnchanged: true);
-            }
-            finally
-            {
-                switchSetGate.Release();
-            }
+            return ApplyBatchAsync(
+                () => configuration.SwitchSets[FindSwitchSetIndex(configuration.SwitchSets, id)].AssetStates,
+                expected: null,
+                UndoActionType.AssetStatesChanged,
+                reconcileUnchanged: true);
         }
 
         public (int Enabled, int Disabled, int Excluded, int NewAssets, int RemovedAssets) GetSwitchSetChanges(SwitchSet set)
@@ -102,7 +94,7 @@ namespace GmodAddonManager.Core.Services
 
         private async Task<SwitchSet> EditSwitchSetsAsync(Func<List<SwitchSet>, SwitchSet> edit)
         {
-            await switchSetGate.WaitAsync();
+            await assetStatesGate.WaitAsync();
             try
             {
                 var previous = configuration.SwitchSets;
@@ -122,7 +114,7 @@ namespace GmodAddonManager.Core.Services
             }
             finally
             {
-                switchSetGate.Release();
+                assetStatesGate.Release();
             }
         }
     }

@@ -12233,7 +12233,28 @@ namespace GmodAddonManager.Core.Services
         
         /// <summary>
         // Initialize WorkshopIconResolver
-        public async Task<bool> UndoLastActionAsync()
+        public Task<bool> UndoLastActionAsync() => UndoLastActionAsync(expectedAction: null);
+
+        public async Task<bool> UndoLastActionAsync(UndoAction? expectedAction)
+        {
+            await assetStatesGate.WaitAsync();
+            try
+            {
+                // A batch records its Undo only after its first durable save. A dialog
+                // can also have confirmed a different action while waiting for that save.
+                if (expectedAction != null && !ReferenceEquals(undoManager.PeekLastAction(), expectedAction))
+                {
+                    return false;
+                }
+                return await UndoLastActionCoreAsync();
+            }
+            finally
+            {
+                assetStatesGate.Release();
+            }
+        }
+
+        private async Task<bool> UndoLastActionCoreAsync()
         {
             var action = undoManager.PopLastAction();
             if (action == null) return false;
