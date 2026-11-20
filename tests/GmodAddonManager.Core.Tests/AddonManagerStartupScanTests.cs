@@ -62,7 +62,7 @@ public sealed class AddonManagerStartupScanTests : IDisposable
     }
 
     [Fact]
-    public async Task BulkInvalidFoldersProduceOneAggregateInfoEntry()
+    public async Task MixedPayloadsKeepValidAddonsAndSummarizeInvalidFoldersOnce()
     {
         var workshopPath = Path.Combine(rootPath, "steamapps", "workshop", "content", "4000");
         var appDataPath = Path.Combine(rootPath, "appdata");
@@ -79,7 +79,12 @@ public sealed class AddonManagerStartupScanTests : IDisposable
             File.WriteAllText(Path.Combine(directory, ".gam_disabled"), string.Empty);
         }
 
-        var manifestPath = WorkshopManifestTestData.Write(rootPath);
+        var validPayload = Path.Combine(workshopPath, "1999", "lua", "payload.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(validPayload)!);
+        File.WriteAllBytes(validPayload, new byte[64]);
+        Directory.CreateDirectory(Path.Combine(workshopPath, "not-a-workshop-id"));
+
+        var manifestPath = WorkshopManifestTestData.Write(rootPath, "1999");
         var errorHandler = new CapturingErrorHandler();
         using var manager = new AddonManager(new AddonManagerOptions
         {
@@ -96,7 +101,9 @@ public sealed class AddonManagerStartupScanTests : IDisposable
 
         var addons = await manager.ScanWorkshopFolderAsync();
 
-        Assert.Empty(addons);
+        var addon = Assert.Single(addons);
+        Assert.Equal("1999", addon.Id);
+        Assert.Equal(64, addon.Size);
         var scanMessages = errorHandler.InfoEntries
             .Where(entry => entry.Context == "ScanWorkshopFolderSoftAsync")
             .ToList();

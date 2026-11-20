@@ -2264,28 +2264,34 @@ namespace GmodAddonManager.Core.Services
 
             if (Directory.Exists(workshopPath))
             {
-                var workshopDirs = GetVisibleWorkshopDirectoriesOrEmpty("ScanWorkshopFolderSoftAsync");
-                var validWorkshopDirectories = new List<(string AddonId, string Directory)>();
-
-                foreach (var directory in workshopDirs)
-                {
-                    var addonId = Path.GetFileName(directory);
-                    if (!long.TryParse(addonId, out _))
+                var workshopDirectories = GetVisibleWorkshopDirectoriesOrEmpty("ScanWorkshopFolderSoftAsync")
+                    .Select(directory => (AddonId: Path.GetFileName(directory), Directory: directory))
+                    .Where(entry => long.TryParse(entry.AddonId, out _))
+                    .ToArray();
+                var hasPayload = new bool[workshopDirectories.Length];
+                Parallel.For(0, workshopDirectories.Length,
+                    new ParallelOptions { MaxDegreeOfParallelism = _maxParallelWorkshopScans },
+                    index =>
                     {
-                        continue;
-                    }
-
-                    if (!DirectoryHasAddonPayload(
-                            directory,
+                        hasPayload[index] = DirectoryHasAddonPayload(
+                            workshopDirectories[index].Directory,
                             "ScanWorkshopFolderSoftAsync",
-                            logInvalidPayload: false))
+                            logInvalidPayload: false);
+                    });
+
+                // Preserve the enumeration order and update shared scan state on the caller.
+                var validWorkshopDirectories = new List<(string AddonId, string Directory)>();
+                for (var index = 0; index < workshopDirectories.Length; index++)
+                {
+                    var entry = workshopDirectories[index];
+                    if (!hasPayload[index])
                     {
-                        invalidWorkshopIds.Add(addonId);
+                        invalidWorkshopIds.Add(entry.AddonId);
                         continue;
                     }
 
-                    processedIds.Add(addonId);
-                    validWorkshopDirectories.Add((addonId, directory));
+                    processedIds.Add(entry.AddonId);
+                    validWorkshopDirectories.Add(entry);
                 }
 
                 using var scanSemaphore = new SemaphoreSlim(_maxParallelWorkshopScans);
