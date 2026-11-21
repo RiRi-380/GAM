@@ -1,7 +1,7 @@
 # Build a local GAM release using the same packaging contract as GitHub Actions.
 [CmdletBinding()]
 param(
-    [string]$Version = "v2.2.2",
+    [string]$Version = "v2.3.0",
     [ValidateSet("prompt", "run", "skip")]
     [string]$RunMode = "prompt",
     [string]$DotNetPath = "dotnet"

@@ -350,13 +350,13 @@ public sealed partial class ReleaseHardeningContractTests
         var informationalVersion = props.Descendants("InformationalVersion").Single().Value;
         var localBuild = ReadRepositoryFile("build-release.ps1");
 
-        Assert.Equal("2.2.2", version);
-        Assert.Equal("2.2.2.0", fileVersion);
-        Assert.Equal("2.2.2.0", assemblyVersion);
-        Assert.Equal("v2.2.2", informationalVersion);
-        Assert.Contains("[string]$Version = \"v2.2.2\"", localBuild, StringComparison.Ordinal);
+        Assert.Equal("2.3.0", version);
+        Assert.Equal("2.3.0.0", fileVersion);
+        Assert.Equal("2.3.0.0", assemblyVersion);
+        Assert.Equal("v2.3.0", informationalVersion);
+        Assert.Contains("[string]$Version = \"v2.3.0\"", localBuild, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(RepositoryRoot, "SECURITY.md")));
-        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.2.2.md")));
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, "docs", "releases", "v2.3.0.md")));
     }
 
     private static string NormalizeNewlines(string value) =>
