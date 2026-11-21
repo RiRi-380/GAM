@@ -728,7 +728,7 @@
   "SwitchSets.SaveName": "Save name",
   "SwitchSets.Name": "Set name",
   "SwitchSets.Duplicate": "A set with this name already exists.",
-  "SwitchSets.Changes": "Assets changing to ON: {0}, neutral: {1}, excluded: {2}.",
+  "SwitchSets.Changes": "Assets changing to enabled: {0}, disabled: {1}, excluded: {2}.",
   "SwitchSets.Missing": "New assets kept as they are: {0}. Deleted assets skipped: {1}.",
   "SwitchSets.ConfirmDelete": "Delete “{0}”? Your current asset states will stay as they are.",
   "SwitchSets.Failed": "GAM could not complete this operation. See the log for details.",

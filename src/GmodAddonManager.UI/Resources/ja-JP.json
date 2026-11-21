@@ -727,7 +727,7 @@
   "SwitchSets.SaveName": "名前を保存",
   "SwitchSets.Name": "セット名",
   "SwitchSets.Duplicate": "同じ名前のセットがあります。",
-  "SwitchSets.Changes": "変わるアセット：有効へ{0}件、中立へ{1}件、除外へ{2}件。",
+  "SwitchSets.Changes": "変わるアセット：有効へ{0}件、無効へ{1}件、除外へ{2}件。",
   "SwitchSets.Missing": "追加後のため現状維持 {0}件、削除済みのためスキップ {1}件。",
   "SwitchSets.ConfirmDelete": "「{0}」を削除しますか？ 現在のアセットの状態は維持されます。",
   "SwitchSets.Failed": "操作を完了できませんでした。詳しくはログをご確認ください。",
